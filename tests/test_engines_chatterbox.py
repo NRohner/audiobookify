@@ -1,4 +1,4 @@
-import shutil
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -24,6 +24,44 @@ def test_chatterbox_engine_declares_cloning_support():
     engine = ChatterboxEngine()
     assert engine.supports_cloning is True
     assert engine.name == "chatterbox"
+
+
+def _patch_from_pretrained(monkeypatch, side_effect):
+    """Replace ChatterboxTTS.from_pretrained with a recording stub. No weights needed."""
+    import chatterbox.tts
+
+    mock = MagicMock(side_effect=side_effect)
+    monkeypatch.setattr(chatterbox.tts.ChatterboxTTS, "from_pretrained", mock)
+    return mock
+
+
+def test_chatterbox_engine_falls_back_to_cpu_when_the_requested_device_fails(monkeypatch):
+    sentinel_model = object()
+
+    def loader(device):
+        if device != "cpu":
+            raise RuntimeError(f"no {device} backend here")
+        return sentinel_model
+
+    mock = _patch_from_pretrained(monkeypatch, loader)
+
+    engine = ChatterboxEngine()
+    engine.load("mps")  # must not raise
+
+    assert engine.device == "cpu"
+    assert engine.model is sentinel_model
+    assert mock.call_count == 2
+    assert [c.kwargs["device"] for c in mock.call_args_list] == ["mps", "cpu"]
+
+
+def test_chatterbox_engine_reraises_when_cpu_itself_fails(monkeypatch):
+    mock = _patch_from_pretrained(monkeypatch, RuntimeError("cpu load failed"))
+
+    engine = ChatterboxEngine()
+    with pytest.raises(RuntimeError, match="cpu load failed"):
+        engine.load("cpu")
+
+    assert mock.call_count == 1  # no second attempt, no infinite fallback loop
 
 
 @pytest.mark.integration
