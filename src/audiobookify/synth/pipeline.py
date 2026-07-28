@@ -7,13 +7,13 @@ from ..postprocess.audio import concatenate_chunks, export_chapter_mp3
 
 
 def generate_book(book: Book, engine, db: Database, voice_params: dict, device: str = "auto") -> List[Chapter]:
-    engine.load(device)
-    profile_handle = engine.clone_profile(
-        voice_params.get("reference_audio"), voice_params.get("reference_text"), voice_params
-    )
-
     results = []
     try:
+        engine.load(device)
+        profile_handle = engine.clone_profile(
+            voice_params.get("reference_audio"), voice_params.get("reference_text"), voice_params
+        )
+
         for chapter in db.list_chapters(book.id):
             if chapter.status == ChapterStatus.DONE:
                 results.append(chapter)

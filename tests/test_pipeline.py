@@ -58,11 +58,22 @@ def test_generate_book_resumes_after_a_failed_chapter(tmp_path):
     assert chapters[1].status == ChapterStatus.FAILED
     assert chapters[2].status == ChapterStatus.DONE
 
-    second_run_engine = FakeEngine()
+    class CountingEngine(FakeEngine):
+        def __init__(self):
+            super().__init__()
+            self.call_count = 0
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            self.call_count += 1
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    second_run_engine = CountingEngine()
     generate_book(book, second_run_engine, db, {"voice_name": "fake"})
 
     chapters = db.list_chapters(book.id)
     assert [c.status for c in chapters] == [ChapterStatus.DONE] * 3
-    # only chapter 2's single chunk needed re-synthesizing on the second run
-    assert second_run_engine.call_count if hasattr(second_run_engine, "call_count") else True
+    # only chapter 2's single chunk ("Body of chapter two.", well under the
+    # 300-char max_chunk_chars) needed re-synthesizing on the second run;
+    # chapters 1 and 3 were already DONE and must be skipped, not redone.
+    assert second_run_engine.call_count == 1
     db.close()
