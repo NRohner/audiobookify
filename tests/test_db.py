@@ -1,3 +1,5 @@
+import pytest
+
 from audiobookify.db import Database
 from audiobookify.models import SourceFormat, ChapterStatus
 from audiobookify.ingest.base import RawChapter
@@ -47,4 +49,18 @@ def test_find_book_by_source(tmp_path):
     assert found is not None
     assert found.title == "Test Book"
     assert db.find_book_by_source("/nope.epub") is None
+    db.close()
+
+
+def test_get_chapter_raises_keyerror_for_missing_id(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    with pytest.raises(KeyError, match="no chapter with id 999"):
+        db.get_chapter(999)
+    db.close()
+
+
+def test_update_chapter_status_raises_keyerror_for_missing_id(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    with pytest.raises(KeyError, match="no chapter with id 999"):
+        db.update_chapter_status(999, ChapterStatus.DONE)
     db.close()

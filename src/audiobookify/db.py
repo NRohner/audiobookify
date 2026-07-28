@@ -91,17 +91,21 @@ class Database:
 
     def get_chapter(self, chapter_id: int) -> Chapter:
         row = self.conn.execute("SELECT * FROM chapters WHERE id = ?", (chapter_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"no chapter with id {chapter_id}")
         return _row_to_chapter(row)
 
     def update_chapter_status(self, chapter_id: int, status: ChapterStatus,
                                output_mp3_path: Optional[str] = None,
                                duration: Optional[float] = None,
                                error: Optional[str] = None) -> None:
-        self.conn.execute(
+        cur = self.conn.execute(
             "UPDATE chapters SET status = ?, output_mp3_path = COALESCE(?, output_mp3_path), "
             "duration = COALESCE(?, duration), error = ? WHERE id = ?",
             (status.value, output_mp3_path, duration, error, chapter_id),
         )
+        if cur.rowcount == 0:
+            raise KeyError(f"no chapter with id {chapter_id}")
         self.conn.commit()
 
     def close(self) -> None:
