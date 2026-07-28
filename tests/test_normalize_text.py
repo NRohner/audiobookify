@@ -24,3 +24,13 @@ def test_chunk_text_respects_max_chars():
 def test_chunk_text_does_not_split_a_single_short_paragraph():
     chunks = chunk_text("Just one short sentence.", max_chars=300)
     assert chunks == ["Just one short sentence."]
+
+
+def test_expand_numbers_leaves_hyphenated_identifiers_alone():
+    """Ensure numbers adjacent to hyphens in identifiers are not expanded."""
+    assert normalize_text("She had COVID-19 last year.") == "She had COVID-19 last year."
+
+
+def test_expand_numbers_still_expands_plain_numbers_near_hyphens():
+    """Confirm number expansion still works after hyphen fix."""
+    assert normalize_text("Room 7 - the attic.") == "Room seven - the attic."
