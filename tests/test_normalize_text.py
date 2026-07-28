@@ -34,3 +34,10 @@ def test_expand_numbers_leaves_hyphenated_identifiers_alone():
 def test_expand_numbers_still_expands_plain_numbers_near_hyphens():
     """Confirm number expansion still works after hyphen fix."""
     assert normalize_text("Room 7 - the attic.") == "Room seven - the attic."
+
+
+def test_expand_numbers_expands_hyphenated_number_modifiers():
+    """Ensure hyphenated number modifiers like '5-year-old' are expanded correctly."""
+    assert normalize_text("She met a 5-year-old girl.") == "She met a five-year-old girl."
+    assert normalize_text("A 10-minute break.") == "A ten-minute break."
+    assert normalize_text("A 3-day trip.") == "A three-day trip."

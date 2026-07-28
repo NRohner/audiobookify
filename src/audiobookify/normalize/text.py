@@ -7,7 +7,7 @@ ABBREVIATIONS = {
     "Prof.": "Professor", "St.": "Saint", "vs.": "versus", "etc.": "et cetera",
 }
 
-_NUMBER_RE = re.compile(r'(?<!-)\b\d[\d,]*(?:\.\d+)?\b(?!-)')
+_NUMBER_RE = re.compile(r'(?<!-)\b\d[\d,]*(?:\.\d+)?\b')
 _SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z0-9"\'])')
 
 
