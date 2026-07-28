@@ -213,8 +213,17 @@ Persist to a local database (SQLite is plenty). Store audio and model cache unde
 - **GPU/accel:** PyTorch with CUDA (Windows) and MPS (Mac); auto-detect with CPU fallback.
 - **UI — pick one:**
   - **Desktop-native feel:** a Tauri or Electron shell over the Python core, or a Python-native GUI. Good if you want a real installable app.
-  - **Local web UI:** FastAPI + a simple React/Svelte front-end served at `localhost`. Fastest to build; still fully local. Good default for v1.
+  - **Local web UI:** FastAPI + a **React** front-end served at `localhost`. Fastest to build; still fully local. Good default for v1.
 - **Packaging:** aim for a one-command setup per OS; document model download + first-run weight caching. Handle the Apple Silicon device/MPS quirks in setup.
+- **Build/run — single Makefile:** the whole project is driven by one `Makefile` at the repo root so common actions are one command each. Required targets:
+  - `make setup` — create the Python venv, install backend deps, install front-end (`npm install`), and check for `ffmpeg`.
+  - `make build` — build the React front-end (production bundle) and prepare any packaged assets.
+  - `make up` — start everything for normal use: launch the FastAPI backend and serve the front-end, on `localhost`. This is the primary "get it running" command.
+  - `make dev` — run in development mode (backend with autoreload + React dev server with hot reload).
+  - `make down` — stop running processes.
+  - `make clean` — remove build artifacts, caches, and generated output (leave downloaded model weights intact).
+  - `make models` — download/verify the local model weights (TTS engine, Whisper, phoneme recognizer) into the local cache.
+  - Keep targets cross-platform (macOS + Windows). On Windows, assume `make` is available via a documented path (e.g., through Git Bash, WSL, or `choco install make`), or provide an equivalent script wrapper the Makefile shells out to. Document this in the README.
 
 Keep the **core pipeline UI-agnostic** (a library + CLI) so the GUI is a thin layer. A working CLI (`generate --input book.epub --voice myvoice --out ./audiobook/`) is a great first milestone and makes the whole thing testable without UI.
 
