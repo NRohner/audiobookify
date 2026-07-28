@@ -1,4 +1,5 @@
 import argparse
+import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -36,7 +37,11 @@ def main(argv: Optional[List[str]] = None) -> None:
         db = Database(args.db)
         book = db.find_book_by_source(args.input)
         if book is None:
-            parsed, source_format = _ingest(args.input, args.heading_level)
+            try:
+                parsed, source_format = _ingest(args.input, args.heading_level)
+            except ValueError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                sys.exit(1)
             book = db.create_book(
                 title=parsed.title, author=parsed.author, source_path=args.input,
                 source_format=source_format, output_dir=args.out,

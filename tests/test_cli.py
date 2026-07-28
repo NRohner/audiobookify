@@ -42,3 +42,18 @@ def test_generate_command_is_resumable_across_invocations(tmp_path, monkeypatch,
     second_mtime = (out_dir / "01 - Chapter One.mp3").stat().st_mtime
 
     assert first_mtime == second_mtime  # already-DONE chapter was not regenerated
+
+
+def test_generate_command_rejects_unsupported_format(tmp_path, capsys):
+    txt_path = tmp_path / "book.txt"
+    txt_path.write_text("This is a text file.", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["generate", "--input", str(txt_path), "--out", str(out_dir), "--db", str(db_path)])
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "unsupported input format" in captured.err
+    assert ".txt" in captured.err
