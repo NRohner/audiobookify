@@ -41,3 +41,27 @@ def test_expand_numbers_expands_hyphenated_number_modifiers():
     assert normalize_text("She met a 5-year-old girl.") == "She met a five-year-old girl."
     assert normalize_text("A 10-minute break.") == "A ten-minute break."
     assert normalize_text("A 3-day trip.") == "A three-day trip."
+
+
+def test_expand_numbers_leaves_numeric_ranges_intact():
+    """A digit-hyphen-digit range is atomic: neither side may be half-expanded."""
+    assert normalize_text("See pages 12-34.") == "See pages 12-34."
+    assert normalize_text("They won 3-2.") == "They won 3-2."
+    assert normalize_text("Chapters 1-3 cover it.") == "Chapters 1-3 cover it."
+    # a range next to an ordinary number: only the ordinary number expands
+    assert normalize_text("Read 12-34 then take 5 minutes.") == "Read 12-34 then take five minutes."
+
+
+def test_chunk_text_hard_splits_a_long_unpunctuated_run():
+    """A single 'sentence' longer than max_chars must be split on word boundaries."""
+    text = " ".join(["word"] * 200)  # 999 chars, no sentence-ending punctuation at all
+    chunks = chunk_text(text, max_chars=100)
+    assert len(chunks) > 1
+    assert all(len(c) <= 100 for c in chunks)
+    assert " ".join(chunks) == text  # nothing lost, nothing split mid-word
+
+
+def test_chunk_text_splits_a_sentence_that_starts_with_a_number():
+    """Number expansion must not destroy the sentence boundary before it."""
+    chunks = chunk_text("Six went home. 7 more came.", max_chars=20)
+    assert chunks == ["Six went home.", "seven more came."]
