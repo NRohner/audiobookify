@@ -14,6 +14,13 @@ _NUMBER = r'\d[\d,]*(?:\.\d+)?'
 # keeps hyphen-suffixed identifiers ("COVID-19") out of the match entirely.
 _NUMBER_RE = re.compile(rf'(?<!-)\b{_NUMBER}(?:-{_NUMBER})*\b')
 _SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z0-9"\'])')
+# Matches a trailing hyphen-digit right after a would-be match, e.g. the "-34"
+# in "12-34b" or the "-90" in "1980-90s". When the range's right operand is
+# glued to a following word character (no closing \b), _NUMBER_RE above can't
+# match the range as a whole, backtracks to zero range iterations, and matches
+# only the left operand. This is used in the repl() callback below to detect
+# that case and suppress expansion of the stranded left operand too.
+_FOLLOWED_BY_RANGE_RE = re.compile(r'-\d')
 
 
 def expand_abbreviations(text: str) -> str:
@@ -27,6 +34,12 @@ def expand_numbers(text: str) -> str:
         raw = match.group(0)
         if "-" in raw:
             return raw  # numeric range ("12-34", "3-2"): leave both operands alone
+        if _FOLLOWED_BY_RANGE_RE.match(match.string, match.end()):
+            # The right operand of a range is glued to a trailing word character
+            # ("12-34b", "1980-90s", "3-2a"), so _NUMBER_RE only matched the left
+            # operand ("12", "1980", "3"). Leave it alone rather than half-expand
+            # what is really still a range.
+            return raw
         raw = raw.replace(",", "")
         try:
             return num2words(float(raw)) if "." in raw else num2words(int(raw))

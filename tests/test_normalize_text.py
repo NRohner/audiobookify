@@ -52,6 +52,15 @@ def test_expand_numbers_leaves_numeric_ranges_intact():
     assert normalize_text("Read 12-34 then take 5 minutes.") == "Read 12-34 then take five minutes."
 
 
+def test_expand_numbers_leaves_numeric_ranges_intact_when_followed_by_a_word_char():
+    """A range whose right operand is glued to a trailing word char ("12-34b") can't
+    close its \\b, so _NUMBER_RE falls back to matching only the left operand. That
+    left operand must not be half-expanded either."""
+    assert normalize_text("See pages 12-34b for details.") == "See pages 12-34b for details."
+    assert normalize_text("The 1980-90s recession.") == "The 1980-90s recession."
+    assert normalize_text("Table 3-2a shows it.") == "Table 3-2a shows it."
+
+
 def test_chunk_text_hard_splits_a_long_unpunctuated_run():
     """A single 'sentence' longer than max_chars must be split on word boundaries."""
     text = " ".join(["word"] * 200)  # 999 chars, no sentence-ending punctuation at all
