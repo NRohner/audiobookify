@@ -36,7 +36,10 @@ def _quiet_frame_fraction(mono: np.ndarray, sample_rate: int) -> float:
 
 
 def validate_reference_audio(path: str) -> ReferenceAudioInfo:
-    data, sample_rate = sf.read(path, always_2d=True, dtype="float32")
+    try:
+        data, sample_rate = sf.read(path, always_2d=True, dtype="float32")
+    except (RuntimeError, OSError) as exc:
+        raise ValueError(f"could not read reference audio '{path}': {exc}") from exc
     channels = data.shape[1]
     duration_seconds = len(data) / sample_rate
 

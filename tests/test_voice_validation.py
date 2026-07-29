@@ -44,6 +44,13 @@ def test_validate_reference_audio_raises_for_too_short_clip(tmp_path):
         validate_reference_audio(str(path))
 
 
+def test_validate_reference_audio_raises_for_unreadable_file(tmp_path):
+    path = tmp_path / "does-not-exist.wav"
+
+    with pytest.raises(ValueError, match="could not read"):
+        validate_reference_audio(str(path))
+
+
 def test_validate_reference_audio_warns_when_shorter_than_recommended(tmp_path):
     path = tmp_path / "short.wav"
     _write_wav(path, _clean_tone(5.0), 22050)
