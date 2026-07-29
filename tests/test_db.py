@@ -64,3 +64,46 @@ def test_update_chapter_status_raises_keyerror_for_missing_id(tmp_path):
     with pytest.raises(KeyError, match="no chapter with id 999"):
         db.update_chapter_status(999, ChapterStatus.DONE)
     db.close()
+
+
+def test_create_and_find_voice_profile_by_name(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    profile = db.create_voice_profile(
+        name="narrator-1", engine="chatterbox", reference_audio_path="/refs/clip.wav",
+        reference_transcript="Hello there.", exaggeration=0.6, cfg_weight=0.4, temperature=0.75,
+    )
+    assert profile.id is not None
+    assert profile.name == "narrator-1"
+
+    found = db.find_voice_profile_by_name("narrator-1")
+    assert found is not None
+    assert found.reference_audio_path == "/refs/clip.wav"
+    assert found.reference_transcript == "Hello there."
+    assert found.exaggeration == 0.6
+    assert found.cfg_weight == 0.4
+    assert found.temperature == 0.75
+    assert db.find_voice_profile_by_name("nope") is None
+    db.close()
+
+
+def test_list_voice_profiles_returns_all_in_creation_order(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    db.create_voice_profile(name="a", engine="chatterbox", reference_audio_path="/a.wav",
+                             reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8)
+    db.create_voice_profile(name="b", engine="chatterbox", reference_audio_path="/b.wav",
+                             reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8)
+
+    profiles = db.list_voice_profiles()
+    assert [p.name for p in profiles] == ["a", "b"]
+    db.close()
+
+
+def test_create_voice_profile_rejects_duplicate_name(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    db.create_voice_profile(name="dup", engine="chatterbox", reference_audio_path="/a.wav",
+                             reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8)
+
+    with pytest.raises(ValueError, match="dup"):
+        db.create_voice_profile(name="dup", engine="chatterbox", reference_audio_path="/b.wav",
+                                 reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8)
+    db.close()

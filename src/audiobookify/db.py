@@ -2,7 +2,7 @@ import sqlite3
 import time
 from typing import List, Optional
 
-from .models import Book, Chapter, ChapterStatus, SourceFormat
+from .models import Book, Chapter, ChapterStatus, SourceFormat, VoiceProfile
 from .ingest.base import RawChapter
 
 SCHEMA = """
@@ -29,6 +29,18 @@ CREATE TABLE IF NOT EXISTS chapters (
     error TEXT,
     UNIQUE(book_id, order_index)
 );
+
+CREATE TABLE IF NOT EXISTS voice_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    engine TEXT NOT NULL,
+    reference_audio_path TEXT NOT NULL,
+    reference_transcript TEXT,
+    exaggeration REAL NOT NULL,
+    cfg_weight REAL NOT NULL,
+    temperature REAL NOT NULL,
+    created_at REAL NOT NULL
+);
 """
 
 
@@ -46,6 +58,16 @@ def _row_to_chapter(row: sqlite3.Row) -> Chapter:
         id=row["id"], book_id=row["book_id"], order_index=row["order_index"],
         title=row["title"], text=row["text"], status=ChapterStatus(row["status"]),
         output_mp3_path=row["output_mp3_path"], duration=row["duration"], error=row["error"],
+    )
+
+
+def _row_to_voice_profile(row: sqlite3.Row) -> VoiceProfile:
+    return VoiceProfile(
+        id=row["id"], name=row["name"], engine=row["engine"],
+        reference_audio_path=row["reference_audio_path"],
+        reference_transcript=row["reference_transcript"],
+        exaggeration=row["exaggeration"], cfg_weight=row["cfg_weight"],
+        temperature=row["temperature"], created_at=row["created_at"],
     )
 
 
@@ -110,3 +132,26 @@ class Database:
 
     def close(self) -> None:
         self.conn.close()
+
+    def create_voice_profile(self, name: str, engine: str, reference_audio_path: str,
+                              reference_transcript: Optional[str], exaggeration: float,
+                              cfg_weight: float, temperature: float) -> VoiceProfile:
+        try:
+            self.conn.execute(
+                "INSERT INTO voice_profiles (name, engine, reference_audio_path, reference_transcript, "
+                "exaggeration, cfg_weight, temperature, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (name, engine, reference_audio_path, reference_transcript, exaggeration, cfg_weight,
+                 temperature, time.time()),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError(f"a voice profile named '{name}' already exists")
+        self.conn.commit()
+        return self.find_voice_profile_by_name(name)
+
+    def find_voice_profile_by_name(self, name: str) -> Optional[VoiceProfile]:
+        row = self.conn.execute("SELECT * FROM voice_profiles WHERE name = ?", (name,)).fetchone()
+        return _row_to_voice_profile(row) if row else None
+
+    def list_voice_profiles(self) -> List[VoiceProfile]:
+        rows = self.conn.execute("SELECT * FROM voice_profiles ORDER BY id").fetchall()
+        return [_row_to_voice_profile(row) for row in rows]

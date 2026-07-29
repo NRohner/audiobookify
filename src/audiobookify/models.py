@@ -39,3 +39,16 @@ class Book:
     created_at: float
     voice_profile_id: Optional[int] = None
     chapters: list = field(default_factory=list)
+
+
+@dataclass
+class VoiceProfile:
+    id: int
+    name: str
+    engine: str
+    reference_audio_path: str
+    reference_transcript: Optional[str]
+    exaggeration: float
+    cfg_weight: float
+    temperature: float
+    created_at: float
