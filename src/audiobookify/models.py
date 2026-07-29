@@ -52,3 +52,15 @@ class VoiceProfile:
     cfg_weight: float
     temperature: float
     created_at: float
+
+
+@dataclass
+class LexiconEntry:
+    id: int
+    term: str
+    override_value: str
+    source: str
+    scope: str
+    book_id: int
+    notes: Optional[str]
+    created_at: float

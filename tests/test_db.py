@@ -139,3 +139,106 @@ def test_get_voice_profile_by_id(tmp_path):
     assert found.name == "narrator-1"
     assert db.get_voice_profile_by_id(999999) is None
     db.close()
+
+
+def test_create_and_find_global_lexicon_entry(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    entry = db.create_lexicon_entry(term="Cadeyrn", override_value="KAH-dern", scope="global")
+
+    assert entry.id is not None
+    assert entry.book_id == 0
+
+    found = db.find_lexicon_entry("Cadeyrn")
+    assert found is not None
+    assert found.override_value == "KAH-dern"
+    assert found.scope == "global"
+    assert found.source == "manual"
+    db.close()
+
+
+def test_create_and_find_book_scoped_lexicon_entry(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="Test Book", author=None, source_path="/books/test.md",
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    entry = db.create_lexicon_entry(
+        term="Cadeyrn", override_value="kah-DAIRN", scope="book", book_id=book.id, notes="book-specific take"
+    )
+
+    assert entry.book_id == book.id
+
+    found = db.find_lexicon_entry("Cadeyrn", book_id=book.id)
+    assert found is not None
+    assert found.override_value == "kah-DAIRN"
+    assert found.notes == "book-specific take"
+
+    # the global lookup (book_id=0, the default) must not see the book-scoped entry
+    assert db.find_lexicon_entry("Cadeyrn") is None
+    db.close()
+
+
+def test_create_lexicon_entry_rejects_duplicate_term_in_same_scope(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    db.create_lexicon_entry(term="Cadeyrn", override_value="KAH-dern", scope="global")
+
+    with pytest.raises(ValueError, match="Cadeyrn"):
+        db.create_lexicon_entry(term="Cadeyrn", override_value="something-else", scope="global")
+    db.close()
+
+
+def test_create_lexicon_entry_allows_same_term_at_different_scopes(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="Test Book", author=None, source_path="/books/test.md",
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    db.create_lexicon_entry(term="Cadeyrn", override_value="KAH-dern", scope="global")
+    # must not raise - book-scoped override of a globally-defined term is legitimate
+    db.create_lexicon_entry(term="Cadeyrn", override_value="kah-DAIRN", scope="book", book_id=book.id)
+    db.close()
+
+
+def test_list_lexicon_entries_without_book_id_returns_global_only(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="Test Book", author=None, source_path="/books/test.md",
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    db.create_lexicon_entry(term="Global One", override_value="g-one", scope="global")
+    db.create_lexicon_entry(term="Book One", override_value="b-one", scope="book", book_id=book.id)
+
+    entries = db.list_lexicon_entries()
+    assert [e.term for e in entries] == ["Global One"]
+    db.close()
+
+
+def test_list_lexicon_entries_with_book_id_returns_book_scoped_first_then_global(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="Test Book", author=None, source_path="/books/test.md",
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    db.create_lexicon_entry(term="Global One", override_value="g-one", scope="global")
+    db.create_lexicon_entry(term="Book One", override_value="b-one", scope="book", book_id=book.id)
+
+    entries = db.list_lexicon_entries(book_id=book.id)
+    assert [e.term for e in entries] == ["Book One", "Global One"]
+    db.close()
+
+
+def test_delete_lexicon_entry_removes_it(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    db.create_lexicon_entry(term="Cadeyrn", override_value="KAH-dern", scope="global")
+
+    db.delete_lexicon_entry("Cadeyrn")
+
+    assert db.find_lexicon_entry("Cadeyrn") is None
+    db.close()
+
+
+def test_delete_lexicon_entry_raises_keyerror_for_missing_entry(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    with pytest.raises(KeyError, match="Cadeyrn"):
+        db.delete_lexicon_entry("Cadeyrn")
+    db.close()

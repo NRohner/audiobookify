@@ -2,7 +2,7 @@ import sqlite3
 import time
 from typing import List, Optional
 
-from .models import Book, Chapter, ChapterStatus, SourceFormat, VoiceProfile
+from .models import Book, Chapter, ChapterStatus, LexiconEntry, SourceFormat, VoiceProfile
 from .ingest.base import RawChapter
 
 SCHEMA = """
@@ -41,6 +41,18 @@ CREATE TABLE IF NOT EXISTS voice_profiles (
     temperature REAL NOT NULL,
     created_at REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS lexicon_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    term TEXT NOT NULL COLLATE NOCASE,
+    override_value TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    scope TEXT NOT NULL,
+    book_id INTEGER NOT NULL DEFAULT 0,
+    notes TEXT,
+    created_at REAL NOT NULL,
+    UNIQUE(book_id, term)
+);
 """
 
 
@@ -68,6 +80,14 @@ def _row_to_voice_profile(row: sqlite3.Row) -> VoiceProfile:
         reference_transcript=row["reference_transcript"],
         exaggeration=row["exaggeration"], cfg_weight=row["cfg_weight"],
         temperature=row["temperature"], created_at=row["created_at"],
+    )
+
+
+def _row_to_lexicon_entry(row: sqlite3.Row) -> LexiconEntry:
+    return LexiconEntry(
+        id=row["id"], term=row["term"], override_value=row["override_value"],
+        source=row["source"], scope=row["scope"], book_id=row["book_id"],
+        notes=row["notes"], created_at=row["created_at"],
     )
 
 
@@ -168,3 +188,44 @@ class Database:
             "SELECT * FROM voice_profiles WHERE id = ?", (voice_profile_id,)
         ).fetchone()
         return _row_to_voice_profile(row) if row else None
+
+    def create_lexicon_entry(self, term: str, override_value: str, scope: str,
+                              book_id: int = 0, notes: Optional[str] = None,
+                              source: str = "manual") -> LexiconEntry:
+        try:
+            self.conn.execute(
+                "INSERT INTO lexicon_entries (term, override_value, source, scope, book_id, notes, "
+                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (term, override_value, source, scope, book_id, notes, time.time()),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError(f"a lexicon entry for '{term}' already exists in this scope")
+        self.conn.commit()
+        return self.find_lexicon_entry(term, book_id=book_id)
+
+    def find_lexicon_entry(self, term: str, book_id: int = 0) -> Optional[LexiconEntry]:
+        row = self.conn.execute(
+            "SELECT * FROM lexicon_entries WHERE term = ? AND book_id = ?", (term, book_id)
+        ).fetchone()
+        return _row_to_lexicon_entry(row) if row else None
+
+    def list_lexicon_entries(self, book_id: Optional[int] = None) -> List[LexiconEntry]:
+        if book_id is None:
+            rows = self.conn.execute(
+                "SELECT * FROM lexicon_entries WHERE book_id = 0 ORDER BY id"
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM lexicon_entries WHERE book_id = ? OR book_id = 0 "
+                "ORDER BY (book_id = 0), id",
+                (book_id,),
+            ).fetchall()
+        return [_row_to_lexicon_entry(row) for row in rows]
+
+    def delete_lexicon_entry(self, term: str, book_id: int = 0) -> None:
+        cur = self.conn.execute(
+            "DELETE FROM lexicon_entries WHERE term = ? AND book_id = ?", (term, book_id)
+        )
+        if cur.rowcount == 0:
+            raise KeyError(f"no lexicon entry for '{term}' in this scope")
+        self.conn.commit()
