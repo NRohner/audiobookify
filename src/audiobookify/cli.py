@@ -13,6 +13,7 @@ from .lexicon.substitution import apply_lexicon
 from .models import ChapterStatus
 from .phoneme.respelling import phonemes_to_respelling
 from .phoneme.wav2vec2 import Wav2Vec2PhonemeExtractor
+from . import worker
 from .synth.pipeline import generate_book
 from .voice.validation import params_from_profile, validate_reference_audio
 
@@ -434,6 +435,17 @@ def _handle_lexicon_preview(args) -> None:
     print(f"Wrote preview to {out_path}")
 
 
+def _handle_worker(args) -> None:
+    db = Database(args.db)
+    engine = ChatterboxEngine()
+    engine.load(args.device)
+    try:
+        worker.run_forever(db, engine, poll_interval=args.poll_interval)
+    finally:
+        engine.teardown()
+        db.close()
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(prog="audiobookify")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -526,6 +538,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     lexicon_preview_parser.add_argument("--device", default="auto")
     lexicon_preview_parser.add_argument("--db", default="audiobookify.db")
 
+    worker_parser = subparsers.add_parser("worker", help="Run the background generation worker")
+    worker_parser.add_argument("--device", default="auto")
+    worker_parser.add_argument("--poll-interval", type=float, default=2.0)
+    worker_parser.add_argument("--db", default="audiobookify.db")
+
     args = parser.parse_args(argv)
 
     if args.command == "generate":
@@ -550,6 +567,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             _handle_lexicon_edit(args)
         elif args.lexicon_command == "preview":
             _handle_lexicon_preview(args)
+    elif args.command == "worker":
+        _handle_worker(args)
 
 
 if __name__ == "__main__":

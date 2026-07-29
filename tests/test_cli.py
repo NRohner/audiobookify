@@ -1246,3 +1246,22 @@ def test_lexicon_add_from_audio_rejects_empty_audio_file(tmp_path, monkeypatch, 
 
     assert exc_info.value.code == 1
     assert "contains no audio" in capsys.readouterr().err
+
+
+def test_worker_command_loads_engine_once_and_runs_forever(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+    calls = []
+
+    def fake_run_forever(db, engine, poll_interval):
+        calls.append((db, engine, poll_interval))
+
+    monkeypatch.setattr(cli.worker, "run_forever", fake_run_forever)
+
+    db_path = tmp_path / "test.db"
+    cli.main(["worker", "--db", str(db_path), "--poll-interval", "5"])
+
+    assert len(calls) == 1
+    db, engine, poll_interval = calls[0]
+    assert isinstance(engine, FakeEngine)
+    assert engine.device == "auto"
+    assert poll_interval == 5.0
