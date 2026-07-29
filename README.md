@@ -20,7 +20,25 @@ Fully local EPUB/Markdown → audiobook (MP3 per chapter) converter. See `projec
 - `--device`: `auto` (default), `cuda`, `mps`, or `cpu`. Auto-detects CUDA → MPS → CPU; falls back to CPU if Chatterbox fails to load on the detected accelerator (this is expected on some Apple Silicon MPS builds — see `project-spec.md` §2).
 - `--db`: path to the SQLite job database (default `audiobookify.db` in the current directory). Re-running `generate` against the same `--input`/`--db` resumes: already-completed chapters are skipped. The voice used on a book's first `generate` call is locked in for that book — a later call naming a different (or no) `--voice-profile` prints a warning and keeps using the original voice, so chapters within one book never mix voices silently.
 
-The pronunciation lexicon and the GUI are not yet implemented — see `project-spec.md` §9 for the milestone roadmap.
+The GUI is not yet implemented — see `project-spec.md` §9 for the milestone roadmap.
+
+## Pronunciation lexicon (M2)
+
+Register a respelling for any term (a name, an invented word, jargon) so it's read correctly. Entries are global (apply to every book) by default, or scoped to one book with `--book`:
+
+```bash
+.venv/bin/audiobookify lexicon add --term "Cadeyrn" --respell "KAH-dern"
+.venv/bin/audiobookify lexicon list
+.venv/bin/audiobookify lexicon preview --term "Cadeyrn"
+.venv/bin/audiobookify lexicon remove --term "Cadeyrn"
+```
+
+- `lexicon add`: substitution is whole-word, case-insensitive, and supports multi-word terms (`--term "New York"`). `--book <path>` scopes the entry to one already-registered book (run `generate` on it at least once first) instead of applying it everywhere; the same term can have both a global and a book-specific entry — the book-specific one wins for that book. Respellings should stick to plain letters/hyphens: the term is substituted before the normal number/abbreviation expansion runs, so a respelling containing digits or a period could be altered by that later step.
+- `lexicon list` / `lexicon remove --term NAME`: pass `--book <path>` to see or remove a book-scoped entry instead of a global one.
+- `lexicon preview --term NAME`: synthesizes a short carrier sentence (or `--sentence "..."`) with the term's override applied, optionally in a saved `--voice-profile`, and writes a WAV file (same convention as `voice preview` — no auto-playback).
+- `generate` applies every applicable lexicon entry (global + that book's own) automatically — no flag needed.
+
+Only respelling overrides are supported in M2 — IPA/ARPAbet phoneme overrides are deferred until an engine that can actually consume them is added (the installed Chatterbox engine cannot).
 
 ## Voice cloning (M1)
 
