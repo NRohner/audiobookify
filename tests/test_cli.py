@@ -600,3 +600,129 @@ def test_generate_command_reports_missing_reference_audio(tmp_path, monkeypatch,
     captured = capsys.readouterr()
     assert "reference audio" in captured.err
     assert "missing" in captured.err
+
+
+def test_lexicon_add_creates_global_entry(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "KAH-dern", "--db", str(db_path)])
+
+    captured = capsys.readouterr()
+    assert "Added pronunciation for 'Cadeyrn'" in captured.out
+
+    db = Database(str(db_path))
+    entry = db.find_lexicon_entry("Cadeyrn")
+    assert entry is not None
+    assert entry.override_value == "KAH-dern"
+    assert entry.scope == "global"
+    db.close()
+
+
+def test_lexicon_add_creates_book_scoped_entry(tmp_path, monkeypatch):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not installed")
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    db_path = tmp_path / "test.db"
+
+    cli.main(["generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path)])
+
+    cli.main([
+        "lexicon", "add", "--term", "Cadeyrn", "--respell", "kah-DAIRN",
+        "--book", str(md_path), "--db", str(db_path),
+    ])
+
+    db = Database(str(db_path))
+    book = db.find_book_by_source(str(md_path.resolve()))
+    entry = db.find_lexicon_entry("Cadeyrn", book_id=book.id)
+    assert entry is not None
+    assert entry.override_value == "kah-DAIRN"
+    assert entry.scope == "book"
+    db.close()
+
+
+def test_lexicon_add_reports_unknown_book(tmp_path, capsys):
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([
+            "lexicon", "add", "--term", "Cadeyrn", "--respell", "KAH-dern",
+            "--book", str(md_path), "--db", str(db_path),
+        ])
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "no book found" in captured.err
+    assert "generate" in captured.err
+
+
+def test_lexicon_add_rejects_empty_term(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["lexicon", "add", "--term", "  ", "--respell", "KAH-dern", "--db", str(db_path)])
+
+    assert exc_info.value.code == 1
+    assert "must not be empty" in capsys.readouterr().err
+
+
+def test_lexicon_add_rejects_duplicate_term_in_same_scope(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "KAH-dern", "--db", str(db_path)])
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "different", "--db", str(db_path)])
+
+    assert exc_info.value.code == 1
+    assert "already exists" in capsys.readouterr().err
+
+
+def test_lexicon_list_shows_global_entries(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "KAH-dern", "--db", str(db_path)])
+    capsys.readouterr()
+
+    cli.main(["lexicon", "list", "--db", str(db_path)])
+
+    captured = capsys.readouterr()
+    assert "Cadeyrn" in captured.out
+    assert "KAH-dern" in captured.out
+
+
+def test_lexicon_list_shows_book_scoped_and_global_entries(tmp_path, capsys, monkeypatch):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not installed")
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    db_path = tmp_path / "test.db"
+
+    cli.main(["generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path)])
+    cli.main(["lexicon", "add", "--term", "Global One", "--respell", "g-one", "--db", str(db_path)])
+    cli.main([
+        "lexicon", "add", "--term", "Book One", "--respell", "b-one",
+        "--book", str(md_path), "--db", str(db_path),
+    ])
+    capsys.readouterr()
+
+    cli.main(["lexicon", "list", "--book", str(md_path), "--db", str(db_path)])
+
+    captured = capsys.readouterr()
+    assert "Global One" in captured.out
+    assert "Book One" in captured.out
+
+
+def test_lexicon_list_reports_when_empty(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+
+    cli.main(["lexicon", "list", "--db", str(db_path)])
+
+    assert "No lexicon entries yet" in capsys.readouterr().out

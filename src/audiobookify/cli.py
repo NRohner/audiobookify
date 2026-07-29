@@ -195,6 +195,62 @@ def _handle_voice_preview(args) -> None:
     print(f"Wrote preview to {out_path}")
 
 
+def _resolve_book_for_lexicon(db: Database, book_path: str):
+    resolved = str(Path(book_path).resolve())
+    book = db.find_book_by_source(resolved)
+    if book is None:
+        print(
+            f"Error: no book found for '{resolved}'; run 'generate' at least once to register it",
+            file=sys.stderr,
+        )
+        db.close()
+        sys.exit(1)
+    return book
+
+
+def _handle_lexicon_add(args) -> None:
+    if not args.term.strip():
+        print("Error: lexicon term must not be empty", file=sys.stderr)
+        sys.exit(1)
+    args.term = args.term.strip()
+
+    db = Database(args.db)
+    book_id = 0
+    scope = "global"
+    if args.book:
+        book = _resolve_book_for_lexicon(db, args.book)
+        book_id = book.id
+        scope = "book"
+
+    try:
+        entry = db.create_lexicon_entry(
+            term=args.term, override_value=args.respell, scope=scope,
+            book_id=book_id, notes=args.notes,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        db.close()
+        sys.exit(1)
+
+    print(f"Added pronunciation for '{entry.term}' -> '{entry.override_value}' ({entry.scope} scope)")
+    db.close()
+
+
+def _handle_lexicon_list(args) -> None:
+    db = Database(args.db)
+    book_id = None
+    if args.book:
+        book = _resolve_book_for_lexicon(db, args.book)
+        book_id = book.id
+
+    entries = db.list_lexicon_entries(book_id)
+    if not entries:
+        print("No lexicon entries yet. Add one with 'audiobookify lexicon add'.")
+    for entry in entries:
+        print(f"{entry.term}\t{entry.override_value}\t{entry.scope}")
+    db.close()
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(prog="audiobookify")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -234,6 +290,22 @@ def main(argv: Optional[List[str]] = None) -> None:
     voice_preview_parser.add_argument("--device", default="auto")
     voice_preview_parser.add_argument("--db", default="audiobookify.db")
 
+    lexicon_parser = subparsers.add_parser("lexicon", help="Manage pronunciation overrides")
+    lexicon_subparsers = lexicon_parser.add_subparsers(dest="lexicon_command", required=True)
+
+    lexicon_add_parser = lexicon_subparsers.add_parser(
+        "add", help="Add a pronunciation override for a term"
+    )
+    lexicon_add_parser.add_argument("--term", required=True)
+    lexicon_add_parser.add_argument("--respell", required=True)
+    lexicon_add_parser.add_argument("--book", default=None)
+    lexicon_add_parser.add_argument("--notes", default=None)
+    lexicon_add_parser.add_argument("--db", default="audiobookify.db")
+
+    lexicon_list_parser = lexicon_subparsers.add_parser("list", help="List pronunciation overrides")
+    lexicon_list_parser.add_argument("--book", default=None)
+    lexicon_list_parser.add_argument("--db", default="audiobookify.db")
+
     args = parser.parse_args(argv)
 
     if args.command == "generate":
@@ -245,6 +317,11 @@ def main(argv: Optional[List[str]] = None) -> None:
             _handle_voice_list(args)
         elif args.voice_command == "preview":
             _handle_voice_preview(args)
+    elif args.command == "lexicon":
+        if args.lexicon_command == "add":
+            _handle_lexicon_add(args)
+        elif args.lexicon_command == "list":
+            _handle_lexicon_list(args)
 
 
 if __name__ == "__main__":
