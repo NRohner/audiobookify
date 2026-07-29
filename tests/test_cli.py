@@ -272,3 +272,73 @@ def test_voice_preview_tears_down_engine_even_if_load_fails(tmp_path, monkeypatc
         cli.main(["voice", "preview", "--name", "narrator-1", "--text", "Hi.", "--db", str(db_path)])
 
     assert FailingLoadEngine.teardown_called is True
+
+
+@requires_ffmpeg
+def test_generate_command_uses_voice_profile_reference_and_params(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "voice", "add", "--name", "narrator-1", "--reference", str(ref_path),
+        "--exaggeration", "0.9", "--db", str(db_path),
+    ])
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    cli.main([
+        "generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path),
+        "--voice-profile", "narrator-1",
+    ])
+
+    from mutagen.mp3 import MP3
+    tags = MP3(str(out_dir / "01 - Chapter One.mp3"))
+    assert str(tags.get("TPE1")) == "narrator-1"  # narrator tag defaults to the profile name
+
+
+@requires_ffmpeg
+def test_generate_command_voice_flag_overrides_profile_name_as_narrator_tag(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    cli.main([
+        "generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path),
+        "--voice-profile", "narrator-1", "--voice", "Custom Narrator Name",
+    ])
+
+    from mutagen.mp3 import MP3
+    tags = MP3(str(out_dir / "01 - Chapter One.mp3"))
+    assert str(tags.get("TPE1")) == "Custom Narrator Name"
+
+
+@requires_ffmpeg
+def test_generate_command_reports_missing_voice_profile(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([
+            "generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path),
+            "--voice-profile", "ghost",
+        ])
+
+    assert exc_info.value.code == 1
+    assert "no voice profile named 'ghost'" in capsys.readouterr().err

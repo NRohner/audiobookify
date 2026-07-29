@@ -48,8 +48,27 @@ def _handle_generate(args) -> None:
             file=sys.stderr,
         )
 
+    profile = None
+    if args.voice_profile:
+        profile = db.find_voice_profile_by_name(args.voice_profile)
+        if profile is None:
+            print(f"Error: no voice profile named '{args.voice_profile}'", file=sys.stderr)
+            db.close()
+            sys.exit(1)
+
+    voice_name = args.voice or (profile.name if profile else "default")
+    voice_params = {"voice_name": voice_name}
+    if profile:
+        voice_params.update({
+            "reference_audio": profile.reference_audio_path,
+            "reference_text": profile.reference_transcript,
+            "exaggeration": profile.exaggeration,
+            "cfg": profile.cfg_weight,
+            "temperature": profile.temperature,
+        })
+
     engine = ChatterboxEngine()
-    results = generate_book(book, engine, db, {"voice_name": args.voice or "default"}, device=args.device)
+    results = generate_book(book, engine, db, voice_params, device=args.device)
     for chapter in results:
         print(f"{chapter.status.value}: {chapter.title} -> {chapter.output_mp3_path}")
 
@@ -142,6 +161,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     generate_parser.add_argument("--input", required=True)
     generate_parser.add_argument("--out", required=True)
     generate_parser.add_argument("--voice", default=None)
+    generate_parser.add_argument("--voice-profile", default=None)
     generate_parser.add_argument("--device", default="auto")
     generate_parser.add_argument("--db", default="audiobookify.db")
     generate_parser.add_argument("--heading-level", type=int, default=1)
