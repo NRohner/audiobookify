@@ -34,6 +34,7 @@ dev:
 
 down:
 	@for f in .run/*.pid; do [ -f "$$f" ] && kill "$$(cat "$$f")" 2>/dev/null; rm -f "$$f"; done
+	@command -v lsof >/dev/null 2>&1 && lsof -ti:5173 | xargs kill 2>/dev/null; true
 	@echo "stopped."
 
 clean:
