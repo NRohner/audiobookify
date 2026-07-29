@@ -302,6 +302,52 @@ def test_generate_command_uses_voice_profile_reference_and_params(tmp_path, monk
 
 
 @requires_ffmpeg
+def test_generate_command_passes_voice_profile_reference_and_params_to_engine(tmp_path, monkeypatch):
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "voice", "add", "--name", "narrator-1", "--reference", str(ref_path),
+        "--transcript", "Hello there.", "--exaggeration", "0.9", "--cfg", "0.2",
+        "--temperature", "0.95", "--db", str(db_path),
+    ])
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    class RecordingEngine(FakeEngine):
+        clone_calls = []
+        synthesize_params = []
+
+        def clone_profile(self, reference_audio, reference_text, params):
+            type(self).clone_calls.append((reference_audio, reference_text))
+            return super().clone_profile(reference_audio, reference_text, params)
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            type(self).synthesize_params.append(params)
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    monkeypatch.setattr(cli, "ChatterboxEngine", RecordingEngine)
+
+    cli.main([
+        "generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path),
+        "--voice-profile", "narrator-1",
+    ])
+
+    assert RecordingEngine.clone_calls == [(str(ref_path.resolve()), "Hello there.")]
+    assert RecordingEngine.synthesize_params[0] == {
+        "voice_name": "narrator-1",
+        "reference_audio": str(ref_path.resolve()),
+        "reference_text": "Hello there.",
+        "exaggeration": 0.9,
+        "cfg": 0.2,
+        "temperature": 0.95,
+    }
+
+
+@requires_ffmpeg
 def test_generate_command_voice_flag_overrides_profile_name_as_narrator_tag(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
 
