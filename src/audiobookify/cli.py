@@ -115,8 +115,8 @@ def _handle_voice_preview(args) -> None:
         sys.exit(1)
 
     engine = ChatterboxEngine()
-    engine.load(args.device)
     try:
+        engine.load(args.device)
         handle = engine.clone_profile(profile.reference_audio_path, profile.reference_transcript, {})
         audio = engine.synthesize(
             args.text, handle,

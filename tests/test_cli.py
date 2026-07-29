@@ -248,3 +248,27 @@ def test_voice_preview_reports_missing_profile(tmp_path, capsys):
 
     assert exc_info.value.code == 1
     assert "no voice profile named 'ghost'" in capsys.readouterr().err
+
+
+def test_voice_preview_tears_down_engine_even_if_load_fails(tmp_path, monkeypatch):
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+
+    class FailingLoadEngine(FakeEngine):
+        teardown_called = False
+
+        def load(self, device):
+            raise RuntimeError("device unavailable")
+
+        def teardown(self):
+            type(self).teardown_called = True
+
+    monkeypatch.setattr(cli, "ChatterboxEngine", FailingLoadEngine)
+
+    with pytest.raises(RuntimeError, match="device unavailable"):
+        cli.main(["voice", "preview", "--name", "narrator-1", "--text", "Hi.", "--db", str(db_path)])
+
+    assert FailingLoadEngine.teardown_called is True
