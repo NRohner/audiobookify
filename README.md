@@ -5,8 +5,11 @@ Fully local EPUB/Markdown → audiobook (MP3 per chapter) converter. See `projec
 ## Setup
 
 1. Install [ffmpeg](https://ffmpeg.org/) (`brew install ffmpeg` on macOS, or see your platform's docs).
-2. `make setup` — creates a venv and installs the Python package + dev dependencies.
-3. `make models` — downloads and caches the Chatterbox TTS weights (several GB, one-time; cached under your Hugging Face hub cache directory). Re-run any time to verify the cache.
+2. Install [espeak-ng](https://github.com/espeak-ng/espeak-ng) (`brew install espeak-ng` on macOS, or see your platform's docs) — required by the M3 pronunciation-from-audio feature's `phonemizer` dependency (see note below).
+3. `make setup` — creates a venv and installs the Python package + dev dependencies.
+4. `make models` — downloads and caches the Chatterbox TTS and phoneme-recognition weights (several GB, one-time; cached under your Hugging Face hub cache directory). Re-run any time to verify the cache.
+
+**Note on `phonemizer` (GPL-3.0):** `lexicon add-from-audio` (see M3 below) loads `facebook/wav2vec2-lv-60-espeak-cv-ft` via Hugging Face `transformers`, whose phoneme tokenizer unconditionally requires the `phonemizer` package (and the `espeak-ng` system binary it wraps) just to construct the tokenizer, even though this project only ever calls `decode`, never `encode`. Every other dependency in this project is Apache-2.0/permissive; this is a deliberate, known exception, accepted for `facebook/wav2vec2-lv-60-espeak-cv-ft`'s zero-additional-*Python*-dependency footprint otherwise. If this project is ever distributed in a form where GPL-3.0 is a problem, revisit this before shipping.
 
 ## Usage
 

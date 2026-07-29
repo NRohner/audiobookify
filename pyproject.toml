@@ -11,6 +11,7 @@ dependencies = [
     "numpy>=1.26",
     "mutagen>=1.47",
     "chatterbox-tts>=0.1.1",
+    "phonemizer>=3.2",
 ]
 
 [project.optional-dependencies]

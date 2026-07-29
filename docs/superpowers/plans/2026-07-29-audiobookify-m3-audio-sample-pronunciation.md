@@ -8,6 +8,8 @@
 
 **Tech Stack:** `transformers`/`torch`/`torchaudio` (all already installed — no new pip dependency), `soundfile` (already installed), `pytest`.
 
+**Post-implementation addendum (found only once the real model was actually loaded — see Task 8's addendum below and the whole-branch review's finding #4): `phonemizer>=3.2` (GPL-3.0) had to be added as a dependency, plus the `espeak-ng` system binary, because `Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-lv-60-espeak-cv-ft")` unconditionally constructs a `Wav2Vec2PhonemeCTCTokenizer`, whose `__init__` calls `init_backend()` requiring `phonemizer` even though this project only ever calls `decode`. This was surfaced to the user, who chose to accept the GPL-3.0 dependency rather than rework the extractor to bypass the phoneme tokenizer or switch models. See `README.md`'s "Note on `phonemizer`" for the user-facing record of this decision.**
+
 **Reference:** `docs/superpowers/specs/2026-07-29-audiobookify-m3-audio-sample-pronunciation-design.md` (approved design spec — read it for the full rationale behind the decisions below).
 
 ## Global Constraints
