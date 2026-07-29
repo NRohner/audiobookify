@@ -17,16 +17,24 @@ models:
 	$(PY) -c "from audiobookify.phoneme.wav2vec2 import Wav2Vec2PhonemeExtractor; e = Wav2Vec2PhonemeExtractor(); e.load('cpu'); e.teardown(); print('Phoneme recognition weights cached.')"
 
 build:
-	@echo "no frontend yet - 'build' arrives with the GUI (M4)"
+	cd frontend && npm run build
 
-up:
-	@echo "no server yet - 'up' arrives with the GUI (M4); use 'audiobookify generate ...' directly for now"
+up: build
+	mkdir -p .run
+	$(VENV)/bin/uvicorn audiobookify.api.app:create_app --factory --host 127.0.0.1 --port 8000 & echo $$! > .run/api.pid
+	$(VENV)/bin/audiobookify worker & echo $$! > .run/worker.pid
+	@echo "audiobookify running at http://127.0.0.1:8000 - 'make down' to stop."
 
 dev:
-	@echo "no dev server yet - 'dev' arrives with the GUI (M4)"
+	mkdir -p .run
+	$(VENV)/bin/uvicorn audiobookify.api.app:create_app --factory --reload --host 127.0.0.1 --port 8000 & echo $$! > .run/api.pid
+	$(VENV)/bin/audiobookify worker & echo $$! > .run/worker.pid
+	cd frontend && npm run dev & echo $$! > .run/frontend.pid
+	@echo "dev stack running - api http://127.0.0.1:8000, frontend http://127.0.0.1:5173 - 'make down' to stop."
 
 down:
-	@echo "nothing running - 'down' arrives with the GUI (M4)"
+	@for f in .run/*.pid; do [ -f "$$f" ] && kill "$$(cat "$$f")" 2>/dev/null; rm -f "$$f"; done
+	@echo "stopped."
 
 clean:
 	rm -rf $(VENV) build dist src/*.egg-info

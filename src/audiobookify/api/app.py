@@ -1,15 +1,19 @@
 import uuid
 from pathlib import Path
 
+from typing import Optional
+
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from ..db import Database
 from ..ingest import ingest_by_path
 from ..models import JobStatus
 
 
-def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads") -> FastAPI:
+def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
+                frontend_dist: Optional[str] = None) -> FastAPI:
     app = FastAPI()
     Path(upload_dir).mkdir(parents=True, exist_ok=True)
 
@@ -96,5 +100,9 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads") ->
             queued_job_ids.append(job.id)
 
         return {"queued_job_ids": queued_job_ids}
+
+    resolved_dist = Path(frontend_dist) if frontend_dist else Path(__file__).resolve().parents[3] / "frontend" / "dist"
+    if resolved_dist.is_dir():
+        app.mount("/", StaticFiles(directory=str(resolved_dist), html=True), name="frontend")
 
     return app

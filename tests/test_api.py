@@ -121,6 +121,33 @@ def test_generate_endpoint_returns_404_for_unknown_book(tmp_path):
     assert response.status_code == 404
 
 
+def test_create_app_serves_built_frontend_index_when_dist_dir_provided(tmp_path):
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    (dist_dir / "index.html").write_text("<html><body>Audiobookify</body></html>", encoding="utf-8")
+    app = create_app(db_path=str(tmp_path / "test.db"), upload_dir=str(tmp_path / "uploads"),
+                      frontend_dist=str(dist_dir))
+    client = TestClient(app)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Audiobookify" in response.text
+
+
+def test_create_app_returns_404_at_root_when_no_frontend_dist_configured(tmp_path):
+    # Point frontend_dist at a directory that doesn't exist rather than relying on the
+    # default (which resolves to the real repo's frontend/dist) - otherwise this test
+    # would flake depending on whether `npm run build` has been run on this machine.
+    app = create_app(db_path=str(tmp_path / "test.db"), upload_dir=str(tmp_path / "uploads"),
+                      frontend_dist=str(tmp_path / "no-such-dist"))
+    client = TestClient(app)
+
+    response = client.get("/")
+
+    assert response.status_code == 404
+
+
 @requires_ffmpeg
 def test_book_detail_reflects_job_progress_after_worker_processes_it(tmp_path):
     client = _client(tmp_path)
