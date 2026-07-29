@@ -7,6 +7,7 @@ import soundfile as sf
 from audiobookify import cli
 from audiobookify.db import Database
 from audiobookify.engines.fake import FakeEngine
+from audiobookify.phoneme.fake import FakePhonemeExtractor
 
 requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
@@ -920,3 +921,118 @@ def test_lexicon_preview_falls_back_to_global_entry_when_book_scope_has_none(tmp
     cli.main(["lexicon", "preview", "--term", "Cadeyrn", "--book", str(md_path), "--db", str(db_path)])
 
     assert any("GLOBAL-version" in text for text in RecordingEngine.synthesized_texts)
+
+
+def test_lexicon_add_from_audio_creates_entry_with_derived_respelling(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+
+    audio_path = tmp_path / "cadeyrn.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+        "--db", str(db_path),
+    ])
+
+    captured = capsys.readouterr()
+    assert "Extracted phonemes: k ə d eɪ ɹ n" in captured.out
+    assert "Derived respelling: kuhdayrn" in captured.out
+    assert "Added pronunciation for 'Cadeyrn' -> 'kuhdayrn'" in captured.out
+
+    db = Database(str(db_path))
+    entry = db.find_lexicon_entry("Cadeyrn")
+    assert entry.source == "from_audio"
+    assert entry.phonemes == "k ə d eɪ ɹ n"
+    assert entry.sample_audio_path == str(audio_path.resolve())
+    db.close()
+
+
+def test_lexicon_add_from_audio_creates_book_scoped_entry(tmp_path, monkeypatch):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not installed")
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    db_path = tmp_path / "test.db"
+    audio_path = tmp_path / "cadeyrn.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+
+    cli.main(["generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path)])
+    cli.main([
+        "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+        "--book", str(md_path), "--db", str(db_path),
+    ])
+
+    db = Database(str(db_path))
+    book = db.find_book_by_source(str(md_path.resolve()))
+    entry = db.find_lexicon_entry("Cadeyrn", book_id=book.id)
+    assert entry is not None
+    assert entry.scope == "book"
+    db.close()
+
+
+def test_lexicon_add_from_audio_reports_unreadable_audio(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+    db_path = tmp_path / "test.db"
+    bad_path = tmp_path / "not-audio.txt"
+    bad_path.write_text("not a wav file", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([
+            "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(bad_path),
+            "--db", str(db_path),
+        ])
+
+    assert exc_info.value.code == 1
+    assert "could not read pronunciation clip" in capsys.readouterr().err
+
+
+def test_lexicon_add_from_audio_rejects_empty_term(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+    audio_path = tmp_path / "cadeyrn.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([
+            "lexicon", "add-from-audio", "--term", "  ", "--audio", str(audio_path),
+            "--db", str(db_path),
+        ])
+
+    assert exc_info.value.code == 1
+    assert "must not be empty" in capsys.readouterr().err
+
+
+def test_lexicon_list_shows_source_and_phonemes_for_from_audio_entries(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+    audio_path = tmp_path / "cadeyrn.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+        "--db", str(db_path),
+    ])
+    capsys.readouterr()
+
+    cli.main(["lexicon", "list", "--db", str(db_path)])
+
+    captured = capsys.readouterr()
+    assert "from_audio" in captured.out
+    assert "k ə d eɪ ɹ n" in captured.out
+
+
+def test_lexicon_list_still_shows_manual_entries_without_phonemes_column_crashing(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "KAH-dern", "--db", str(db_path)])
+    capsys.readouterr()
+
+    cli.main(["lexicon", "list", "--db", str(db_path)])
+
+    captured = capsys.readouterr()
+    assert "Cadeyrn" in captured.out
+    assert "manual" in captured.out

@@ -11,6 +11,8 @@ from .engines.chatterbox import ChatterboxEngine
 from .ingest import epub, markdown
 from .lexicon.substitution import apply_lexicon
 from .models import ChapterStatus, SourceFormat
+from .phoneme.respelling import phonemes_to_respelling
+from .phoneme.wav2vec2 import Wav2Vec2PhonemeExtractor
 from .synth.pipeline import generate_book
 from .voice.validation import validate_reference_audio
 
@@ -48,6 +50,15 @@ def _check_reference_audio_present(profile, db: Optional[Database] = None) -> No
 
 def _sanitize_filename_component(value: str) -> str:
     return re.sub(r"[^\w.-]+", "_", value)
+
+
+def _validate_pronunciation_clip(path: str) -> None:
+    try:
+        data, _ = sf.read(path, always_2d=True, dtype="float32")
+    except (RuntimeError, OSError) as exc:
+        raise ValueError(f"could not read pronunciation clip '{path}': {exc}") from exc
+    if len(data) == 0:
+        raise ValueError(f"pronunciation clip '{path}' contains no audio")
 
 
 def _handle_generate(args) -> None:
@@ -254,6 +265,63 @@ def _handle_lexicon_add(args) -> None:
     db.close()
 
 
+def _handle_lexicon_add_from_audio(args) -> None:
+    if not args.term.strip():
+        print("Error: lexicon term must not be empty", file=sys.stderr)
+        sys.exit(1)
+    args.term = args.term.strip()
+
+    if not re.match(r"^\w", args.term) or not re.search(r"\w$", args.term):
+        print(
+            f"Warning: '{args.term}' doesn't start and end with a letter or digit; "
+            "whole-word substitution requires a word boundary there and may never match",
+            file=sys.stderr,
+        )
+
+    audio_path = str(Path(args.audio).resolve())
+    try:
+        _validate_pronunciation_clip(audio_path)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    db = Database(args.db)
+    book_id = 0
+    scope = "global"
+    if args.book:
+        book = _resolve_book_for_lexicon(db, args.book)
+        book_id = book.id
+        scope = "book"
+
+    extractor = Wav2Vec2PhonemeExtractor()
+    try:
+        extractor.load(args.device)
+        phonemes = extractor.extract(audio_path)
+    finally:
+        extractor.teardown()
+
+    respelling = phonemes_to_respelling(phonemes)
+
+    try:
+        entry = db.create_lexicon_entry(
+            term=args.term, override_value=respelling, scope=scope, book_id=book_id,
+            notes=args.notes, source="from_audio", phonemes=phonemes,
+            sample_audio_path=audio_path,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        db.close()
+        sys.exit(1)
+
+    print(f"Extracted phonemes: {phonemes}")
+    print(f"Derived respelling: {respelling}")
+    print(
+        f"Added pronunciation for '{entry.term}' -> '{entry.override_value}' "
+        f"({entry.scope} scope, source: from_audio)"
+    )
+    db.close()
+
+
 def _handle_lexicon_list(args) -> None:
     db = Database(args.db)
     book_id = None
@@ -265,7 +333,10 @@ def _handle_lexicon_list(args) -> None:
     if not entries:
         print("No lexicon entries yet. Add one with 'audiobookify lexicon add'.")
     for entry in entries:
-        print(f"{entry.term}\t{entry.override_value}\t{entry.scope}")
+        line = f"{entry.term}\t{entry.override_value}\t{entry.scope}\t{entry.source}"
+        if entry.phonemes:
+            line += f"\t{entry.phonemes}"
+        print(line)
     db.close()
 
 
@@ -389,6 +460,17 @@ def main(argv: Optional[List[str]] = None) -> None:
     lexicon_add_parser.add_argument("--notes", default=None)
     lexicon_add_parser.add_argument("--db", default="audiobookify.db")
 
+    lexicon_add_from_audio_parser = lexicon_subparsers.add_parser(
+        "add-from-audio",
+        help="Derive a pronunciation override from an audio clip of the term spoken correctly",
+    )
+    lexicon_add_from_audio_parser.add_argument("--term", required=True)
+    lexicon_add_from_audio_parser.add_argument("--audio", required=True)
+    lexicon_add_from_audio_parser.add_argument("--book", default=None)
+    lexicon_add_from_audio_parser.add_argument("--notes", default=None)
+    lexicon_add_from_audio_parser.add_argument("--device", default="auto")
+    lexicon_add_from_audio_parser.add_argument("--db", default="audiobookify.db")
+
     lexicon_list_parser = lexicon_subparsers.add_parser("list", help="List pronunciation overrides")
     lexicon_list_parser.add_argument("--book", default=None)
     lexicon_list_parser.add_argument("--db", default="audiobookify.db")
@@ -425,6 +507,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     elif args.command == "lexicon":
         if args.lexicon_command == "add":
             _handle_lexicon_add(args)
+        elif args.lexicon_command == "add-from-audio":
+            _handle_lexicon_add_from_audio(args)
         elif args.lexicon_command == "list":
             _handle_lexicon_list(args)
         elif args.lexicon_command == "remove":
