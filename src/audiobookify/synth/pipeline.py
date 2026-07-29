@@ -1,6 +1,7 @@
 from typing import List
 
 from ..db import Database
+from ..lexicon.substitution import apply_lexicon
 from ..models import Book, Chapter, ChapterStatus
 from ..normalize.text import chunk_text
 from ..postprocess.audio import concatenate_chunks, export_chapter_mp3
@@ -13,6 +14,7 @@ def generate_book(book: Book, engine, db: Database, voice_params: dict, device: 
         profile_handle = engine.clone_profile(
             voice_params.get("reference_audio"), voice_params.get("reference_text"), voice_params
         )
+        lexicon_entries = db.list_lexicon_entries(book.id)
 
         for chapter in db.list_chapters(book.id):
             if chapter.status == ChapterStatus.DONE:
@@ -21,7 +23,8 @@ def generate_book(book: Book, engine, db: Database, voice_params: dict, device: 
 
             db.update_chapter_status(chapter.id, ChapterStatus.GENERATING)
             try:
-                chunks = chunk_text(chapter.text, engine.max_chunk_chars())
+                text = apply_lexicon(chapter.text, lexicon_entries)
+                chunks = chunk_text(text, engine.max_chunk_chars())
                 audio_chunks = [engine.synthesize(c, profile_handle, voice_params) for c in chunks]
                 combined = concatenate_chunks(audio_chunks, engine.sample_rate())
                 mp3_path = export_chapter_mp3(

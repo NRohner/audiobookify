@@ -77,3 +77,34 @@ def test_generate_book_resumes_after_a_failed_chapter(tmp_path):
     # chapters 1 and 3 were already DONE and must be skipped, not redone.
     assert second_run_engine.call_count == 1
     db.close()
+
+
+@requires_ffmpeg
+def test_generate_book_applies_lexicon_substitution_before_synthesis(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = _make_book(tmp_path, db, n_chapters=1)
+    db.create_lexicon_entry(term="chapter", override_value="CHAP-ter", scope="global")
+
+    class RecordingEngine(FakeEngine):
+        synthesized_texts = []
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            type(self).synthesized_texts.append(text_chunk)
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    generate_book(book, RecordingEngine(), db, {"voice_name": "fake"})
+
+    assert any("CHAP-ter" in text for text in RecordingEngine.synthesized_texts)
+    assert not any("Body of chapter" in text for text in RecordingEngine.synthesized_texts)
+    db.close()
+
+
+@requires_ffmpeg
+def test_generate_book_works_normally_with_no_lexicon_entries(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = _make_book(tmp_path, db, n_chapters=1)
+
+    results = generate_book(book, FakeEngine(), db, {"voice_name": "fake"})
+
+    assert results[0].status == ChapterStatus.DONE
+    db.close()
