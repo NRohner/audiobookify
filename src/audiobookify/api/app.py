@@ -1,3 +1,4 @@
+import shutil
 import uuid
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..db import Database
 from ..ingest import ingest_by_path
-from ..models import JobStatus
+from ..models import ChapterStatus, JobStatus
 
 
 def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
@@ -62,6 +63,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         try:
             parsed, source_format = ingest_by_path(str(staged_path.resolve()))
         except ValueError as exc:
+            shutil.rmtree(staged_dir, ignore_errors=True)
             raise HTTPException(status_code=400, detail=str(exc))
 
         book = db.create_book(
@@ -93,6 +95,8 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
 
         queued_job_ids = []
         for chapter in db.list_chapters(book.id):
+            if chapter.status == ChapterStatus.DONE:
+                continue
             latest = db.latest_job_for_chapter(chapter.id)
             if latest is not None and latest.status in (JobStatus.QUEUED, JobStatus.GENERATING):
                 continue

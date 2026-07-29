@@ -78,6 +78,26 @@ def test_run_worker_once_marks_job_failed_when_synthesis_raises(tmp_path):
     db.close()
 
 
+def test_run_worker_once_marks_job_failed_when_an_unexpected_exception_occurs_before_synthesis(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    _, chapter, job = _make_book_with_job(tmp_path, db)
+
+    class ExplodingEngine(FakeEngine):
+        def clone_profile(self, reference_audio, reference_text, params):
+            raise RuntimeError("clone_profile blew up")
+
+    engine = ExplodingEngine()
+    engine.load("cpu")
+
+    did_work = run_worker_once(db, engine, {})
+
+    assert did_work is True
+    finished = db.get_job(job.id)
+    assert finished.status == JobStatus.FAILED
+    assert "clone_profile blew up" in finished.error
+    db.close()
+
+
 @requires_ffmpeg
 def test_run_worker_once_reuses_cached_profile_handle_for_same_book(tmp_path):
     db = Database(str(tmp_path / "test.db"))

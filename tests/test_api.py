@@ -113,6 +113,26 @@ def test_generate_endpoint_does_not_duplicate_jobs_for_already_queued_chapters(t
     assert second.json()["queued_job_ids"] == []
 
 
+@requires_ffmpeg
+def test_generate_endpoint_does_not_requeue_already_done_chapters(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/books", files={"file": ("book.md", b"# One\nA.\n", "text/markdown")},
+        data={"output_dir": str(tmp_path / "out")},
+    ).json()
+    client.post(f"/api/books/{created['id']}/generate")
+
+    db = Database(str(tmp_path / "test.db"))
+    engine = FakeEngine()
+    engine.load("cpu")
+    run_worker_once(db, engine, {})
+    db.close()
+
+    second = client.post(f"/api/books/{created['id']}/generate")
+
+    assert second.json()["queued_job_ids"] == []
+
+
 def test_generate_endpoint_returns_404_for_unknown_book(tmp_path):
     client = _client(tmp_path)
 

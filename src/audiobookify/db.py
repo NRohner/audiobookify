@@ -123,7 +123,7 @@ def _row_to_job(row: sqlite3.Row) -> Job:
 
 class Database:
     def __init__(self, path: str):
-        self.conn = sqlite3.connect(path)
+        self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         # Two OS processes (the API and the worker) now write to this file
         # concurrently - WAL + a busy timeout turns lock contention into a
