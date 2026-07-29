@@ -1,6 +1,8 @@
 import shutil
 
+import numpy as np
 import pytest
+import soundfile as sf
 
 from audiobookify import cli
 from audiobookify.db import Database
@@ -127,3 +129,79 @@ def test_generate_command_rejects_unsupported_format(tmp_path, capsys):
     captured = capsys.readouterr()
     assert "unsupported input format" in captured.err
     assert ".txt" in captured.err
+
+
+def _write_reference_wav(path, duration_s=15.0, sample_rate=22050):
+    n_total = int(duration_s * sample_rate)
+    n_silence = int(n_total * 0.1)
+    n_tone = n_total - n_silence
+    t = np.linspace(0, n_tone / sample_rate, n_tone, endpoint=False)
+    tone = (0.6 * np.sin(2 * np.pi * 220 * t)).astype("float32")
+    silence = np.zeros(n_silence, dtype="float32")
+    sf.write(str(path), np.concatenate([tone, silence]), sample_rate)
+
+
+def test_voice_add_creates_profile_and_reports_reference_info(tmp_path, capsys):
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+
+    captured = capsys.readouterr()
+    assert "Created voice profile 'narrator-1'" in captured.out
+
+    db = Database(str(db_path))
+    profile = db.find_voice_profile_by_name("narrator-1")
+    assert profile is not None
+    assert profile.reference_audio_path == str(ref_path.resolve())
+    assert profile.engine == "chatterbox"
+    db.close()
+
+
+def test_voice_add_rejects_too_short_reference(tmp_path, capsys):
+    ref_path = tmp_path / "tiny.wav"
+    sf.write(str(ref_path), np.zeros(1000, dtype="float32"), 22050)
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["voice", "add", "--name", "tiny", "--reference", str(ref_path), "--db", str(db_path)])
+
+    assert exc_info.value.code == 1
+    assert "too short" in capsys.readouterr().err
+
+
+def test_voice_add_rejects_duplicate_name(tmp_path, capsys):
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+
+    assert exc_info.value.code == 1
+    assert "already exists" in capsys.readouterr().err
+
+
+def test_voice_list_shows_added_profiles(tmp_path, capsys):
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+    capsys.readouterr()
+
+    cli.main(["voice", "list", "--db", str(db_path)])
+
+    assert "narrator-1" in capsys.readouterr().out
+
+
+def test_voice_list_reports_when_empty(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+
+    cli.main(["voice", "list", "--db", str(db_path)])
+
+    assert "No voice profiles yet" in capsys.readouterr().out
