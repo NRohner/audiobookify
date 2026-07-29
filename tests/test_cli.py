@@ -782,6 +782,7 @@ def test_lexicon_preview_uses_custom_sentence_when_given(tmp_path, monkeypatch):
             return super().synthesize(text_chunk, profile_handle, params)
 
     monkeypatch.setattr(cli, "ChatterboxEngine", RecordingEngine)
+    monkeypatch.chdir(tmp_path)
 
     db_path = tmp_path / "test.db"
     cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "KAH-dern", "--db", str(db_path)])
