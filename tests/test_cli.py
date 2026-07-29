@@ -205,3 +205,46 @@ def test_voice_list_reports_when_empty(tmp_path, capsys):
     cli.main(["voice", "list", "--db", str(db_path)])
 
     assert "No voice profiles yet" in capsys.readouterr().out
+
+
+def test_voice_preview_writes_audio_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+    out_path = tmp_path / "preview.wav"
+
+    cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+    cli.main([
+        "voice", "preview", "--name", "narrator-1", "--text", "Hello there, listener.",
+        "--out", str(out_path), "--db", str(db_path),
+    ])
+
+    assert out_path.exists()
+    data, _sr = sf.read(str(out_path))
+    assert len(data) > 0
+
+
+def test_voice_preview_defaults_output_filename_to_profile_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+    monkeypatch.chdir(tmp_path)
+
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+    cli.main(["voice", "preview", "--name", "narrator-1", "--text", "Hi.", "--db", str(db_path)])
+
+    assert (tmp_path / "narrator-1-preview.wav").exists()
+
+
+def test_voice_preview_reports_missing_profile(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["voice", "preview", "--name", "ghost", "--text", "hi", "--db", str(db_path)])
+
+    assert exc_info.value.code == 1
+    assert "no voice profile named 'ghost'" in capsys.readouterr().err

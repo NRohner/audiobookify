@@ -10,6 +10,8 @@ from .models import ChapterStatus, SourceFormat
 from .synth.pipeline import generate_book
 from .voice.validation import validate_reference_audio
 
+import soundfile as sf
+
 
 def _ingest(path: str, heading_level: int):
     suffix = Path(path).suffix.lower()
@@ -104,6 +106,34 @@ def _handle_voice_list(args) -> None:
     db.close()
 
 
+def _handle_voice_preview(args) -> None:
+    db = Database(args.db)
+    profile = db.find_voice_profile_by_name(args.name)
+    db.close()
+    if profile is None:
+        print(f"Error: no voice profile named '{args.name}'", file=sys.stderr)
+        sys.exit(1)
+
+    engine = ChatterboxEngine()
+    engine.load(args.device)
+    try:
+        handle = engine.clone_profile(profile.reference_audio_path, profile.reference_transcript, {})
+        audio = engine.synthesize(
+            args.text, handle,
+            {
+                "exaggeration": profile.exaggeration,
+                "cfg": profile.cfg_weight,
+                "temperature": profile.temperature,
+            },
+        )
+        out_path = args.out or f"{profile.name}-preview.wav"
+        sf.write(out_path, audio, engine.sample_rate())
+    finally:
+        engine.teardown()
+
+    print(f"Wrote preview to {out_path}")
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(prog="audiobookify")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -133,6 +163,15 @@ def main(argv: Optional[List[str]] = None) -> None:
     voice_list_parser = voice_subparsers.add_parser("list", help="List saved voice profiles")
     voice_list_parser.add_argument("--db", default="audiobookify.db")
 
+    voice_preview_parser = voice_subparsers.add_parser(
+        "preview", help="Synthesize a sample sentence with a saved voice profile"
+    )
+    voice_preview_parser.add_argument("--name", required=True)
+    voice_preview_parser.add_argument("--text", required=True)
+    voice_preview_parser.add_argument("--out", default=None)
+    voice_preview_parser.add_argument("--device", default="auto")
+    voice_preview_parser.add_argument("--db", default="audiobookify.db")
+
     args = parser.parse_args(argv)
 
     if args.command == "generate":
@@ -142,6 +181,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             _handle_voice_add(args)
         elif args.voice_command == "list":
             _handle_voice_list(args)
+        elif args.voice_command == "preview":
+            _handle_voice_preview(args)
 
 
 if __name__ == "__main__":
