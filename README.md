@@ -40,6 +40,29 @@ Register a respelling for any term (a name, an invented word, jargon) so it's re
 
 Only respelling overrides are supported in M2 — IPA/ARPAbet phoneme overrides are deferred until an engine that can actually consume them is added (the installed Chatterbox engine cannot).
 
+## Audio-sample pronunciation (M3)
+
+Instead of typing a respelling by hand, attach a short clip of the term spoken correctly and let the app derive one:
+
+```bash
+.venv/bin/audiobookify lexicon add-from-audio --term "Cadeyrn" --audio ./cadeyrn.wav
+```
+
+This runs the clip through a local phoneme recognizer (`facebook/wav2vec2-lv-60-espeak-cv-ft`, fetched once via `make models`), derives an ASCII respelling from the extracted phonemes, and creates a lexicon entry with `source: from_audio` — printing both the raw phonemes and the derived respelling so you can judge it immediately. `--book <path>` scopes it to one book, same as `lexicon add`.
+
+The derived respelling is a starting point, not guaranteed to be right — audit it:
+
+```bash
+.venv/bin/audiobookify lexicon preview --term "Cadeyrn"
+.venv/bin/audiobookify lexicon edit --term "Cadeyrn" --respell "kah-DAIRN"
+```
+
+- `lexicon preview` (unchanged from M2) works on any entry regardless of source — hear how the current respelling sounds.
+- `lexicon edit --term NAME --respell NEW_VALUE`: corrects just the respelling in place. Use this instead of `remove` + `add` — it preserves the entry's extracted phonemes, attached clip path, and `source: from_audio` provenance, all of which `remove`+`add` would silently discard. `--book <path>` scopes it to a book-specific entry.
+- `lexicon list` now also shows each entry's `source` (`manual` or `from_audio`) and, when present, its raw extracted phonemes.
+
+Audio-derived entries substitute into text exactly like manual ones — nothing about `generate` changes. The phoneme string is stored for reference/audit only; it is never sent to the TTS engine directly (Chatterbox still can't consume phoneme input, same constraint as M2).
+
 ## Voice cloning (M1)
 
 Import a short reference clip (10-30s recommended, clean single-speaker audio) as a named voice profile, preview it, then generate a book with it:
