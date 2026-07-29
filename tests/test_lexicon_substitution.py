@@ -54,3 +54,14 @@ def test_apply_lexicon_processes_entries_in_given_order_first_match_wins():
     result = apply_lexicon("Cadeyrn spoke.", entries)
 
     assert result == "book-specific-version spoke."
+
+
+def test_apply_lexicon_treats_override_value_as_a_literal_replacement():
+    # re.sub's replacement string normally treats backslashes specially
+    # (\1, \g<name>, etc). override_value is arbitrary user-authored text
+    # with no such restriction, so it must be substituted literally.
+    entries = [_Entry(term="Cadeyrn", override_value="KAH\\dern")]
+
+    result = apply_lexicon("Cadeyrn spoke.", entries)
+
+    assert result == "KAH\\dern spoke."
