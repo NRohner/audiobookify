@@ -8,32 +8,13 @@ import soundfile as sf
 
 from .db import Database
 from .engines.chatterbox import ChatterboxEngine
-from .ingest import epub, markdown
+from .ingest import ingest_by_path
 from .lexicon.substitution import apply_lexicon
-from .models import ChapterStatus, SourceFormat
+from .models import ChapterStatus
 from .phoneme.respelling import phonemes_to_respelling
 from .phoneme.wav2vec2 import Wav2Vec2PhonemeExtractor
 from .synth.pipeline import generate_book
-from .voice.validation import validate_reference_audio
-
-
-def _ingest(path: str, heading_level: int):
-    suffix = Path(path).suffix.lower()
-    if suffix == ".epub":
-        return epub.parse(path), SourceFormat.EPUB
-    if suffix == ".md":
-        return markdown.parse(path, heading_level=heading_level), SourceFormat.MARKDOWN
-    raise ValueError(f"unsupported input format: {suffix}")
-
-
-def _voice_params(profile) -> dict:
-    return {
-        "reference_audio": profile.reference_audio_path,
-        "reference_text": profile.reference_transcript,
-        "exaggeration": profile.exaggeration,
-        "cfg": profile.cfg_weight,
-        "temperature": profile.temperature,
-    }
+from .voice.validation import params_from_profile, validate_reference_audio
 
 
 def _check_reference_audio_present(profile, db: Optional[Database] = None) -> None:
@@ -69,7 +50,7 @@ def _handle_generate(args) -> None:
     book = db.find_book_by_source(source_path)
     if book is None:
         try:
-            parsed, source_format = _ingest(source_path, args.heading_level)
+            parsed, source_format = ingest_by_path(source_path, args.heading_level)
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -123,7 +104,7 @@ def _handle_generate(args) -> None:
     voice_name = args.voice or (profile.name if profile else "default")
     voice_params = {"voice_name": voice_name}
     if profile:
-        voice_params.update(_voice_params(profile))
+        voice_params.update(params_from_profile(profile))
 
     engine = ChatterboxEngine()
     results = generate_book(book, engine, db, voice_params, device=args.device)
@@ -202,7 +183,7 @@ def _handle_voice_preview(args) -> None:
     try:
         engine.load(args.device)
         handle = engine.clone_profile(profile.reference_audio_path, profile.reference_transcript, {})
-        audio = engine.synthesize(args.text, handle, _voice_params(profile))
+        audio = engine.synthesize(args.text, handle, params_from_profile(profile))
         out_path = args.out or f"{profile.name}-preview.wav"
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         sf.write(out_path, audio, engine.sample_rate())
@@ -443,7 +424,7 @@ def _handle_lexicon_preview(args) -> None:
             profile.reference_transcript if profile else None,
             {},
         )
-        audio = engine.synthesize(text, handle, _voice_params(profile) if profile else {})
+        audio = engine.synthesize(text, handle, params_from_profile(profile) if profile else {})
         out_path = args.out or f"{_sanitize_filename_component(entry.term)}-pronunciation-preview.wav"
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         sf.write(out_path, audio, engine.sample_rate())

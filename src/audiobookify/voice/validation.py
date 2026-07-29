@@ -89,3 +89,13 @@ def validate_reference_audio(path: str) -> ReferenceAudioInfo:
         path=path, sample_rate=sample_rate, channels=channels,
         duration_seconds=duration_seconds, warnings=warnings,
     )
+
+
+def params_from_profile(profile) -> dict:
+    return {
+        "reference_audio": profile.reference_audio_path,
+        "reference_text": profile.reference_transcript,
+        "exaggeration": profile.exaggeration,
+        "cfg": profile.cfg_weight,
+        "temperature": profile.temperature,
+    }
