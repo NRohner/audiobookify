@@ -82,6 +82,38 @@ Import a short reference clip (10-30s recommended, clean single-speaker audio) a
 - `voice preview`: synthesizes `--text` with the named profile and writes a WAV file (`--out`, defaults to `<name>-preview.wav` in the current directory) — play it in any audio player to judge the voice before generating a whole book.
 - `generate --voice-profile NAME`: uses that profile's reference audio and tuning params for the whole book. The ID3 narrator tag defaults to the profile name (override with `--voice`). Without `--voice-profile`, `generate` behaves exactly as in M0 (Chatterbox's built-in default voice, no cloning).
 
+## GUI (M4)
+
+The GUI wraps the same core library behind a local web UI: a FastAPI backend, a
+separate worker process that owns the loaded TTS engine, and a React frontend — all
+running on `localhost`, still fully local.
+
+```bash
+make dev    # backend (autoreload) + worker + frontend dev server, hot reload
+```
+
+Open `http://127.0.0.1:5173`, upload an EPUB or Markdown file, type an output folder
+path, click Import, then click "Generate all". The chapter list polls the backend every
+couple of seconds and shows each chapter's status (`pending` / `generating` / `done` /
+`failed`), in-progress percentage, and — once done — the resulting MP3's path.
+
+For a non-hot-reload run (built frontend served by FastAPI itself):
+
+```bash
+make up     # builds the frontend, then runs backend + worker
+make down   # stops everything make dev/up started
+```
+
+The API and worker communicate purely through the same SQLite database `generate`/
+`voice`/`lexicon` already use — there's no separate message broker. You can run
+`audiobookify worker --db audiobookify.db` and the API server independently if you want
+more control than the Makefile targets give you.
+
+This first GUI pass is deliberately bare: one page, upload → generate → watch chapters
+finish. Chapter review/editing, voice profile management, the pronunciation lexicon, and
+a real generation dashboard are still CLI-only (`voice`, `lexicon` subcommands) until
+later GUI sub-projects land.
+
 ## Development
 
 ```bash
