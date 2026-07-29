@@ -6,7 +6,7 @@ from audiobookify.db import Database
 from audiobookify.engines.fake import FakeEngine
 from audiobookify.ingest.base import RawChapter
 from audiobookify.models import ChapterStatus, SourceFormat
-from audiobookify.synth.pipeline import generate_book
+from audiobookify.synth.pipeline import generate_book, synthesize_chapter
 
 requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
@@ -128,4 +128,25 @@ def test_generate_book_prefers_book_scoped_lexicon_entry_over_global(tmp_path):
 
     assert any("BOOK-version" in text for text in RecordingEngine.synthesized_texts)
     assert not any("GLOBAL-version" in text for text in RecordingEngine.synthesized_texts)
+    db.close()
+
+
+@requires_ffmpeg
+def test_synthesize_chapter_reports_progress_per_chunk(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = _make_book(tmp_path, db, n_chapters=1)
+    [chapter] = db.list_chapters(book.id)
+    engine = FakeEngine()
+    engine.load("cpu")
+    profile_handle = engine.clone_profile(None, None, {})
+
+    calls = []
+    result = synthesize_chapter(
+        chapter, book, engine, profile_handle, {"voice_name": "fake"}, [], db,
+        on_chunk_done=lambda done, total: calls.append((done, total)),
+    )
+
+    assert result.status == ChapterStatus.DONE
+    # "Body of chapter 1." is a single sentence, well under max_chunk_chars -> one chunk
+    assert calls == [(1, 1)]
     db.close()

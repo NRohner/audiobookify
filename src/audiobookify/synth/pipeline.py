@@ -1,10 +1,35 @@
-from typing import List
+from typing import Callable, List, Optional
 
 from ..db import Database
 from ..lexicon.substitution import apply_lexicon
 from ..models import Book, Chapter, ChapterStatus
 from ..normalize.text import chunk_text
 from ..postprocess.audio import concatenate_chunks, export_chapter_mp3
+
+
+def synthesize_chapter(chapter: Chapter, book: Book, engine, profile_handle, voice_params: dict,
+                        lexicon_entries: list, db: Database,
+                        on_chunk_done: Optional[Callable[[int, int], None]] = None) -> Chapter:
+    db.update_chapter_status(chapter.id, ChapterStatus.GENERATING)
+    try:
+        text = apply_lexicon(chapter.text, lexicon_entries)
+        chunks = chunk_text(text, engine.max_chunk_chars())
+        total = len(chunks)
+        audio_chunks = []
+        for i, c in enumerate(chunks):
+            audio_chunks.append(engine.synthesize(c, profile_handle, voice_params))
+            if on_chunk_done is not None:
+                on_chunk_done(i + 1, total)
+        combined = concatenate_chunks(audio_chunks, engine.sample_rate())
+        mp3_path = export_chapter_mp3(
+            combined, engine.sample_rate(), book.output_dir, chapter.order_index,
+            chapter.title, book.title, voice_params.get("voice_name", engine.name),
+        )
+        db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path=mp3_path)
+    except Exception as exc:
+        db.update_chapter_status(chapter.id, ChapterStatus.FAILED, error=str(exc))
+
+    return db.get_chapter(chapter.id)
 
 
 def generate_book(book: Book, engine, db: Database, voice_params: dict, device: str = "auto") -> List[Chapter]:
@@ -20,22 +45,10 @@ def generate_book(book: Book, engine, db: Database, voice_params: dict, device: 
             if chapter.status == ChapterStatus.DONE:
                 results.append(chapter)
                 continue
-
-            db.update_chapter_status(chapter.id, ChapterStatus.GENERATING)
-            try:
-                text = apply_lexicon(chapter.text, lexicon_entries)
-                chunks = chunk_text(text, engine.max_chunk_chars())
-                audio_chunks = [engine.synthesize(c, profile_handle, voice_params) for c in chunks]
-                combined = concatenate_chunks(audio_chunks, engine.sample_rate())
-                mp3_path = export_chapter_mp3(
-                    combined, engine.sample_rate(), book.output_dir, chapter.order_index,
-                    chapter.title, book.title, voice_params.get("voice_name", engine.name),
-                )
-                db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path=mp3_path)
-            except Exception as exc:
-                db.update_chapter_status(chapter.id, ChapterStatus.FAILED, error=str(exc))
-
-            results.append(db.get_chapter(chapter.id))
+            results.append(
+                synthesize_chapter(chapter, book, engine, profile_handle, voice_params,
+                                    lexicon_entries, db)
+            )
     finally:
         engine.teardown()
 
