@@ -12,6 +12,9 @@ dependencies = [
     "mutagen>=1.47",
     "chatterbox-tts>=0.1.1",
     "phonemizer>=3.2",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
