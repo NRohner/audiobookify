@@ -2,7 +2,7 @@ import sqlite3
 import time
 from typing import List, Optional
 
-from .models import Book, Chapter, ChapterStatus, LexiconEntry, SourceFormat, VoiceProfile
+from .models import Book, Chapter, ChapterStatus, Job, JobStatus, LexiconEntry, SourceFormat, VoiceProfile
 from .ingest.base import RawChapter
 
 SCHEMA = """
@@ -55,6 +55,17 @@ CREATE TABLE IF NOT EXISTS lexicon_entries (
     sample_audio_path TEXT,
     UNIQUE(book_id, term)
 );
+
+CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chapter_id INTEGER NOT NULL REFERENCES chapters(id),
+    status TEXT NOT NULL DEFAULT 'queued',
+    progress REAL,
+    created_at REAL NOT NULL,
+    started_at REAL,
+    finished_at REAL,
+    error TEXT
+);
 """
 
 
@@ -102,10 +113,23 @@ def _row_to_lexicon_entry(row: sqlite3.Row) -> LexiconEntry:
     )
 
 
+def _row_to_job(row: sqlite3.Row) -> Job:
+    return Job(
+        id=row["id"], chapter_id=row["chapter_id"], status=JobStatus(row["status"]),
+        progress=row["progress"], created_at=row["created_at"],
+        started_at=row["started_at"], finished_at=row["finished_at"], error=row["error"],
+    )
+
+
 class Database:
     def __init__(self, path: str):
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
+        # Two OS processes (the API and the worker) now write to this file
+        # concurrently - WAL + a busy timeout turns lock contention into a
+        # brief wait/retry instead of "database is locked".
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.executescript(SCHEMA)
         _migrate_lexicon_entries_columns(self.conn)
         self.conn.commit()
@@ -122,17 +146,29 @@ class Database:
 
     def get_book(self, book_id: int) -> Book:
         row = self.conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"no book with id {book_id}")
         return _row_to_book(row)
+
+    def list_books(self) -> List[Book]:
+        rows = self.conn.execute("SELECT * FROM books ORDER BY id").fetchall()
+        return [_row_to_book(row) for row in rows]
 
     def find_book_by_source(self, source_path: str) -> Optional[Book]:
         row = self.conn.execute("SELECT * FROM books WHERE source_path = ?", (source_path,)).fetchone()
         return _row_to_book(row) if row else None
 
     def add_chapters(self, book_id: int, raw_chapters: List[RawChapter]) -> List[Chapter]:
-        for index, raw in enumerate(raw_chapters):
+        # Find the next available order_index for this book
+        max_order = self.conn.execute(
+            "SELECT MAX(order_index) as max_idx FROM chapters WHERE book_id = ?", (book_id,)
+        ).fetchone()
+        start_index = (max_order["max_idx"] if max_order["max_idx"] is not None else -1) + 1
+
+        for offset, raw in enumerate(raw_chapters):
             self.conn.execute(
                 "INSERT INTO chapters (book_id, order_index, title, text) VALUES (?, ?, ?, ?)",
-                (book_id, index, raw.title, raw.text),
+                (book_id, start_index + offset, raw.title, raw.text),
             )
         self.conn.commit()
         return self.list_chapters(book_id)
@@ -254,3 +290,72 @@ class Database:
             raise KeyError(f"no lexicon entry for '{term}' in this scope")
         self.conn.commit()
         return self.find_lexicon_entry(term, book_id=book_id)
+
+    def create_job(self, chapter_id: int) -> Job:
+        cur = self.conn.execute(
+            "INSERT INTO jobs (chapter_id, status, progress, created_at) VALUES (?, ?, ?, ?)",
+            (chapter_id, JobStatus.QUEUED.value, 0.0, time.time()),
+        )
+        self.conn.commit()
+        return self.get_job(cur.lastrowid)
+
+    def get_job(self, job_id: int) -> Job:
+        row = self.conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"no job with id {job_id}")
+        return _row_to_job(row)
+
+    def list_jobs_for_chapter(self, chapter_id: int) -> List[Job]:
+        rows = self.conn.execute(
+            "SELECT * FROM jobs WHERE chapter_id = ? ORDER BY created_at DESC, id DESC",
+            (chapter_id,),
+        ).fetchall()
+        return [_row_to_job(row) for row in rows]
+
+    def latest_job_for_chapter(self, chapter_id: int) -> Optional[Job]:
+        row = self.conn.execute(
+            "SELECT * FROM jobs WHERE chapter_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+            (chapter_id,),
+        ).fetchone()
+        return _row_to_job(row) if row else None
+
+    def pop_next_queued_job(self) -> Optional[Job]:
+        row = self.conn.execute(
+            "SELECT id FROM jobs WHERE status = ? ORDER BY created_at, id LIMIT 1",
+            (JobStatus.QUEUED.value,),
+        ).fetchone()
+        if row is None:
+            return None
+        job_id = row["id"]
+        cur = self.conn.execute(
+            "UPDATE jobs SET status = ?, started_at = ? WHERE id = ? AND status = ?",
+            (JobStatus.GENERATING.value, time.time(), job_id, JobStatus.QUEUED.value),
+        )
+        self.conn.commit()
+        if cur.rowcount == 0:
+            return None  # claimed by another worker between the SELECT and UPDATE
+        return self.get_job(job_id)
+
+    def update_job_progress(self, job_id: int, progress: float) -> None:
+        self.conn.execute("UPDATE jobs SET progress = ? WHERE id = ?", (progress, job_id))
+        self.conn.commit()
+
+    def finish_job(self, job_id: int, status: JobStatus, error: Optional[str] = None) -> None:
+        if status == JobStatus.DONE:
+            self.conn.execute(
+                "UPDATE jobs SET status = ?, progress = 1.0, finished_at = ?, error = ? WHERE id = ?",
+                (status.value, time.time(), error, job_id),
+            )
+        else:
+            self.conn.execute(
+                "UPDATE jobs SET status = ?, finished_at = ?, error = ? WHERE id = ?",
+                (status.value, time.time(), error, job_id),
+            )
+        self.conn.commit()
+
+    def reset_stale_generating_jobs(self) -> None:
+        self.conn.execute(
+            "UPDATE jobs SET status = ?, started_at = NULL WHERE status = ?",
+            (JobStatus.QUEUED.value, JobStatus.GENERATING.value),
+        )
+        self.conn.commit()

@@ -1,7 +1,7 @@
 import pytest
 
 from audiobookify.db import Database
-from audiobookify.models import SourceFormat, ChapterStatus
+from audiobookify.models import SourceFormat, ChapterStatus, JobStatus
 from audiobookify.ingest.base import RawChapter
 
 
@@ -339,4 +339,172 @@ def test_update_lexicon_entry_override_respects_book_scope(tmp_path):
 
     assert db.find_lexicon_entry("Cadeyrn", book_id=book.id).override_value == "NEW-book-version"
     assert db.find_lexicon_entry("Cadeyrn").override_value == "KAH-dern"  # global untouched
+    db.close()
+
+
+def _make_chapter(tmp_path, db):
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    return book, chapter
+
+
+def test_create_job_defaults_to_queued_with_zero_progress(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    _, chapter = _make_chapter(tmp_path, db)
+
+    job = db.create_job(chapter.id)
+
+    assert job.chapter_id == chapter.id
+    assert job.status == JobStatus.QUEUED
+    assert job.progress == 0.0
+    assert job.started_at is None
+    assert job.finished_at is None
+    assert job.error is None
+    db.close()
+
+
+def test_get_job_raises_keyerror_for_missing_id(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    with pytest.raises(KeyError):
+        db.get_job(999)
+    db.close()
+
+
+def test_list_jobs_for_chapter_orders_most_recent_first(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    _, chapter = _make_chapter(tmp_path, db)
+    first = db.create_job(chapter.id)
+    second = db.create_job(chapter.id)
+
+    jobs = db.list_jobs_for_chapter(chapter.id)
+
+    assert [j.id for j in jobs] == [second.id, first.id]
+    db.close()
+
+
+def test_latest_job_for_chapter_returns_none_when_no_jobs(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    _, chapter = _make_chapter(tmp_path, db)
+
+    assert db.latest_job_for_chapter(chapter.id) is None
+    db.close()
+
+
+def test_pop_next_queued_job_claims_oldest_and_marks_generating(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    _, chapter = _make_chapter(tmp_path, db)
+    job = db.create_job(chapter.id)
+
+    popped = db.pop_next_queued_job()
+
+    assert popped.id == job.id
+    assert popped.status == JobStatus.GENERATING
+    assert popped.started_at is not None
+    db.close()
+
+
+def test_pop_next_queued_job_returns_none_when_queue_empty(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    assert db.pop_next_queued_job() is None
+    db.close()
+
+
+def test_pop_next_queued_job_orders_fifo_by_creation_order(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book, _ = _make_chapter(tmp_path, db)
+    chapters = db.add_chapters(book.id, [RawChapter(title="Ch 2", text="Body 2.")])
+    first_job = db.create_job(db.list_chapters(book.id)[0].id)
+    second_job = db.create_job(chapters[0].id)
+
+    popped = db.pop_next_queued_job()
+
+    assert popped.id == first_job.id
+    db.close()
+
+
+def test_pop_next_queued_job_does_not_reclaim_a_generating_job(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    _, chapter = _make_chapter(tmp_path, db)
+    db.create_job(chapter.id)
+    db.pop_next_queued_job()  # claims it -> generating
+
+    assert db.pop_next_queued_job() is None
+    db.close()
+
+
+def test_update_job_progress_updates_value(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    _, chapter = _make_chapter(tmp_path, db)
+    job = db.create_job(chapter.id)
+
+    db.update_job_progress(job.id, 0.5)
+
+    assert db.get_job(job.id).progress == 0.5
+    db.close()
+
+
+def test_finish_job_marks_done_and_sets_progress_to_one(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    _, chapter = _make_chapter(tmp_path, db)
+    job = db.create_job(chapter.id)
+    db.update_job_progress(job.id, 0.5)
+
+    db.finish_job(job.id, JobStatus.DONE)
+
+    finished = db.get_job(job.id)
+    assert finished.status == JobStatus.DONE
+    assert finished.progress == 1.0
+    assert finished.finished_at is not None
+    db.close()
+
+
+def test_finish_job_marks_failed_and_preserves_last_progress(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    _, chapter = _make_chapter(tmp_path, db)
+    job = db.create_job(chapter.id)
+    db.update_job_progress(job.id, 0.5)
+
+    db.finish_job(job.id, JobStatus.FAILED, error="synthesis blew up")
+
+    finished = db.get_job(job.id)
+    assert finished.status == JobStatus.FAILED
+    assert finished.progress == 0.5
+    assert finished.error == "synthesis blew up"
+    db.close()
+
+
+def test_reset_stale_generating_jobs_requeues_generating_rows(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    _, chapter = _make_chapter(tmp_path, db)
+    job = db.create_job(chapter.id)
+    db.pop_next_queued_job()  # -> generating
+
+    db.reset_stale_generating_jobs()
+
+    reset = db.get_job(job.id)
+    assert reset.status == JobStatus.QUEUED
+    assert reset.started_at is None
+    db.close()
+
+
+def test_list_books_returns_all_books_ordered_by_id(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    first = db.create_book(title="First", author=None, source_path=str(tmp_path / "a.md"),
+                            source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"))
+    second = db.create_book(title="Second", author=None, source_path=str(tmp_path / "b.md"),
+                             source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"))
+
+    books = db.list_books()
+
+    assert [b.id for b in books] == [first.id, second.id]
+    db.close()
+
+
+def test_get_book_raises_keyerror_for_missing_id(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    with pytest.raises(KeyError):
+        db.get_book(999)
     db.close()

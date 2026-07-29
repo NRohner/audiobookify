@@ -66,3 +66,22 @@ class LexiconEntry:
     created_at: float
     phonemes: Optional[str] = None
     sample_audio_path: Optional[str] = None
+
+
+class JobStatus(str, Enum):
+    QUEUED = "queued"
+    GENERATING = "generating"
+    DONE = "done"
+    FAILED = "failed"
+
+
+@dataclass
+class Job:
+    id: int
+    chapter_id: int
+    status: JobStatus
+    progress: Optional[float]
+    created_at: float
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+    error: Optional[str] = None
