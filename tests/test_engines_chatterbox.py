@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 from audiobookify.engines.base import detect_device
@@ -62,6 +63,29 @@ def test_chatterbox_engine_reraises_when_cpu_itself_fails(monkeypatch):
         engine.load("cpu")
 
     assert mock.call_count == 1  # no second attempt, no infinite fallback loop
+
+
+def test_chatterbox_engine_passes_reference_audio_and_params_to_generate():
+    engine = ChatterboxEngine()
+    engine.model = MagicMock()
+    engine.model.generate.return_value.squeeze.return_value.cpu.return_value.numpy.return_value = (
+        np.zeros(5, dtype=np.float32)
+    )
+
+    handle = engine.clone_profile("/refs/narrator.wav", "transcript text", {})
+    audio = engine.synthesize(
+        "Hello there.", handle,
+        {"exaggeration": 0.7, "cfg": 0.3, "temperature": 0.9},
+    )
+
+    assert isinstance(audio, np.ndarray)
+    engine.model.generate.assert_called_once_with(
+        "Hello there.",
+        audio_prompt_path="/refs/narrator.wav",
+        exaggeration=0.7,
+        cfg_weight=0.3,
+        temperature=0.9,
+    )
 
 
 @pytest.mark.integration

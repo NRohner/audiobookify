@@ -37,6 +37,7 @@ class ChatterboxEngine:
             audio_prompt_path=audio_prompt_path,
             exaggeration=params.get("exaggeration", 0.5),
             cfg_weight=params.get("cfg", 0.5),
+            temperature=params.get("temperature", 0.8),
         )
         return wav.squeeze().cpu().numpy()
 
