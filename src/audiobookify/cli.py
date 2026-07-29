@@ -1,4 +1,5 @@
 import argparse
+import re
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -43,6 +44,10 @@ def _check_reference_audio_present(profile, db: Optional[Database] = None) -> No
         if db is not None:
             db.close()
         sys.exit(1)
+
+
+def _sanitize_filename_component(value: str) -> str:
+    return re.sub(r"[^\w.-]+", "_", value)
 
 
 def _handle_generate(args) -> None:
@@ -215,6 +220,18 @@ def _handle_lexicon_add(args) -> None:
         sys.exit(1)
     args.term = args.term.strip()
 
+    if not args.respell.strip():
+        print("Error: lexicon respelling must not be empty", file=sys.stderr)
+        sys.exit(1)
+    args.respell = args.respell.strip()
+
+    if not re.match(r"^\w", args.term) or not re.search(r"\w$", args.term):
+        print(
+            f"Warning: '{args.term}' doesn't start and end with a letter or digit; "
+            "whole-word substitution requires a word boundary there and may never match",
+            file=sys.stderr,
+        )
+
     db = Database(args.db)
     book_id = 0
     scope = "global"
@@ -253,6 +270,8 @@ def _handle_lexicon_list(args) -> None:
 
 
 def _handle_lexicon_remove(args) -> None:
+    args.term = args.term.strip()
+
     db = Database(args.db)
     book_id = 0
     if args.book:
@@ -262,7 +281,7 @@ def _handle_lexicon_remove(args) -> None:
     try:
         db.delete_lexicon_entry(args.term, book_id=book_id)
     except KeyError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        print(f"Error: {exc.args[0]}", file=sys.stderr)
         db.close()
         sys.exit(1)
 
@@ -271,8 +290,17 @@ def _handle_lexicon_remove(args) -> None:
 
 
 def _handle_lexicon_preview(args) -> None:
+    args.term = args.term.strip()
+
     db = Database(args.db)
-    entry = db.find_lexicon_entry(args.term)
+    book_id = 0
+    if args.book:
+        book = _resolve_book_for_lexicon(db, args.book)
+        book_id = book.id
+
+    entry = db.find_lexicon_entry(args.term, book_id=book_id)
+    if entry is None and book_id:
+        entry = db.find_lexicon_entry(args.term)  # fall back to the global entry
     if entry is None:
         print(f"Error: no lexicon entry for '{args.term}'", file=sys.stderr)
         db.close()
@@ -301,7 +329,7 @@ def _handle_lexicon_preview(args) -> None:
             {},
         )
         audio = engine.synthesize(text, handle, _voice_params(profile) if profile else {})
-        out_path = args.out or f"{entry.term}-pronunciation-preview.wav"
+        out_path = args.out or f"{_sanitize_filename_component(entry.term)}-pronunciation-preview.wav"
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         sf.write(out_path, audio, engine.sample_rate())
     finally:
@@ -378,6 +406,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     lexicon_preview_parser.add_argument("--term", required=True)
     lexicon_preview_parser.add_argument("--sentence", default=None)
     lexicon_preview_parser.add_argument("--voice-profile", default=None)
+    lexicon_preview_parser.add_argument("--book", default=None)
     lexicon_preview_parser.add_argument("--out", default=None)
     lexicon_preview_parser.add_argument("--device", default="auto")
     lexicon_preview_parser.add_argument("--db", default="audiobookify.db")

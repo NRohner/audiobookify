@@ -65,3 +65,19 @@ def test_apply_lexicon_treats_override_value_as_a_literal_replacement():
     result = apply_lexicon("Cadeyrn spoke.", entries)
 
     assert result == "KAH\\dern spoke."
+
+
+def test_apply_lexicon_prefers_longer_overlapping_term_regardless_of_order():
+    entries_short_first = [
+        _Entry(term="York", override_value="Yorrk"),
+        _Entry(term="New York", override_value="Noo Yawk"),
+    ]
+    result = apply_lexicon("She flew to New York yesterday.", entries_short_first)
+    assert result == "She flew to Noo Yawk yesterday."
+
+    entries_long_first = [
+        _Entry(term="New York", override_value="Noo Yawk"),
+        _Entry(term="York", override_value="Yorrk"),
+    ]
+    result = apply_lexicon("She flew to New York yesterday.", entries_long_first)
+    assert result == "She flew to Noo Yawk yesterday."

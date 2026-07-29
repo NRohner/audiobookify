@@ -108,3 +108,24 @@ def test_generate_book_works_normally_with_no_lexicon_entries(tmp_path):
 
     assert results[0].status == ChapterStatus.DONE
     db.close()
+
+
+@requires_ffmpeg
+def test_generate_book_prefers_book_scoped_lexicon_entry_over_global(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = _make_book(tmp_path, db, n_chapters=1)
+    db.create_lexicon_entry(term="chapter", override_value="GLOBAL-version", scope="global")
+    db.create_lexicon_entry(term="chapter", override_value="BOOK-version", scope="book", book_id=book.id)
+
+    class RecordingEngine(FakeEngine):
+        synthesized_texts = []
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            type(self).synthesized_texts.append(text_chunk)
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    generate_book(book, RecordingEngine(), db, {"voice_name": "fake"})
+
+    assert any("BOOK-version" in text for text in RecordingEngine.synthesized_texts)
+    assert not any("GLOBAL-version" in text for text in RecordingEngine.synthesized_texts)
+    db.close()

@@ -822,3 +822,101 @@ def test_lexicon_preview_reports_missing_entry(tmp_path, capsys):
 
     assert exc_info.value.code == 1
     assert "no lexicon entry" in capsys.readouterr().err
+
+
+def test_lexicon_add_rejects_empty_respelling(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["lexicon", "add", "--term", "Ghost", "--respell", "   ", "--db", str(db_path)])
+
+    assert exc_info.value.code == 1
+    assert "must not be empty" in capsys.readouterr().err
+
+
+def test_lexicon_add_warns_when_term_cannot_match_a_word_boundary(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+
+    cli.main(["lexicon", "add", "--term", "Dr.", "--respell", "Doctor", "--db", str(db_path)])
+
+    assert "word boundary" in capsys.readouterr().err
+
+
+def test_lexicon_remove_strips_whitespace_from_term(tmp_path):
+    db_path = tmp_path / "test.db"
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "KAH-dern", "--db", str(db_path)])
+
+    cli.main(["lexicon", "remove", "--term", "  Cadeyrn  ", "--db", str(db_path)])
+
+    db = Database(str(db_path))
+    assert db.find_lexicon_entry("Cadeyrn") is None
+    db.close()
+
+
+def test_lexicon_preview_sanitizes_term_for_default_filename(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+    monkeypatch.chdir(tmp_path)
+
+    db_path = tmp_path / "test.db"
+    cli.main(["lexicon", "add", "--term", "AC/DC", "--respell", "AY-SEE-DEE-SEE", "--db", str(db_path)])
+
+    cli.main(["lexicon", "preview", "--term", "AC/DC", "--db", str(db_path)])
+
+    assert not (tmp_path / "AC").exists()  # no unwanted subdirectory created
+    assert any(p.name.endswith("-pronunciation-preview.wav") for p in tmp_path.iterdir())
+
+
+@requires_ffmpeg
+def test_lexicon_preview_prefers_book_scoped_entry_over_global(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    class RecordingEngine(FakeEngine):
+        synthesized_texts = []
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            type(self).synthesized_texts.append(text_chunk)
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    monkeypatch.setattr(cli, "ChatterboxEngine", RecordingEngine)
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    db_path = tmp_path / "test.db"
+
+    cli.main(["generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path)])
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "GLOBAL-version", "--db", str(db_path)])
+    cli.main([
+        "lexicon", "add", "--term", "Cadeyrn", "--respell", "BOOK-version",
+        "--book", str(md_path), "--db", str(db_path),
+    ])
+
+    cli.main(["lexicon", "preview", "--term", "Cadeyrn", "--book", str(md_path), "--db", str(db_path)])
+
+    assert any("BOOK-version" in text for text in RecordingEngine.synthesized_texts)
+
+
+@requires_ffmpeg
+def test_lexicon_preview_falls_back_to_global_entry_when_book_scope_has_none(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    class RecordingEngine(FakeEngine):
+        synthesized_texts = []
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            type(self).synthesized_texts.append(text_chunk)
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    monkeypatch.setattr(cli, "ChatterboxEngine", RecordingEngine)
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    db_path = tmp_path / "test.db"
+
+    cli.main(["generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path)])
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "GLOBAL-version", "--db", str(db_path)])
+
+    cli.main(["lexicon", "preview", "--term", "Cadeyrn", "--book", str(md_path), "--db", str(db_path)])
+
+    assert any("GLOBAL-version" in text for text in RecordingEngine.synthesized_texts)
