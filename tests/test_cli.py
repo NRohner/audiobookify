@@ -1112,3 +1112,137 @@ def test_lexicon_edit_respects_book_scope(tmp_path, monkeypatch):
     assert db.find_lexicon_entry("Cadeyrn", book_id=book.id).override_value == "BOOK-EDITED"
     assert db.find_lexicon_entry("Cadeyrn").override_value == "GLOBAL-version"  # untouched
     db.close()
+
+
+def test_lexicon_add_from_audio_rejects_silent_clip_with_no_detectable_speech(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", lambda: FakePhonemeExtractor(canned_phonemes=""))
+
+    audio_path = tmp_path / "silent.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([
+            "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+            "--db", str(db_path),
+        ])
+
+    assert exc_info.value.code == 1
+    assert "no pronunciation could be derived" in capsys.readouterr().err
+
+    db = Database(str(db_path))
+    assert db.find_lexicon_entry("Cadeyrn") is None
+    db.close()
+
+
+def test_lexicon_add_from_audio_warns_when_respelling_has_non_ascii_letters(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", lambda: FakePhonemeExtractor(canned_phonemes="ɐ"))
+
+    audio_path = tmp_path / "clip.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+        "--db", str(db_path),
+    ])
+
+    assert "contains characters that aren't plain letters or hyphens" in capsys.readouterr().err
+
+
+def test_lexicon_add_from_audio_rejects_duplicate_term_in_same_scope(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+
+    audio_path = tmp_path / "cadeyrn.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+        "--db", str(db_path),
+    ])
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([
+            "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+            "--db", str(db_path),
+        ])
+
+    assert exc_info.value.code == 1
+    assert "already exists" in capsys.readouterr().err
+
+
+def test_lexicon_add_from_audio_warns_when_term_cannot_match_a_word_boundary(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+
+    audio_path = tmp_path / "clip.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "lexicon", "add-from-audio", "--term", "Dr.", "--audio", str(audio_path),
+        "--db", str(db_path),
+    ])
+
+    assert "word boundary" in capsys.readouterr().err
+
+
+def test_lexicon_add_from_audio_stores_notes(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+
+    audio_path = tmp_path / "cadeyrn.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+        "--notes", "derived from a recording", "--db", str(db_path),
+    ])
+
+    db = Database(str(db_path))
+    entry = db.find_lexicon_entry("Cadeyrn")
+    assert entry.notes == "derived from a recording"
+    db.close()
+
+
+def test_lexicon_add_from_audio_reports_extraction_failure(tmp_path, monkeypatch, capsys):
+    class FailingExtractor(FakePhonemeExtractor):
+        def extract(self, audio_path):
+            raise RuntimeError("model inference failed")
+
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FailingExtractor)
+
+    audio_path = tmp_path / "cadeyrn.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([
+            "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+            "--db", str(db_path),
+        ])
+
+    assert exc_info.value.code == 1
+    assert "could not extract phonemes" in capsys.readouterr().err
+
+    db = Database(str(db_path))
+    assert db.find_lexicon_entry("Cadeyrn") is None
+    db.close()
+
+
+def test_lexicon_add_from_audio_rejects_empty_audio_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+
+    audio_path = tmp_path / "empty.wav"
+    sf.write(str(audio_path), np.zeros(0, dtype="float32"), 16000)
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([
+            "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+            "--db", str(db_path),
+        ])
+
+    assert exc_info.value.code == 1
+    assert "contains no audio" in capsys.readouterr().err

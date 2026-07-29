@@ -225,23 +225,27 @@ def _resolve_book_for_lexicon(db: Database, book_path: str):
     return book
 
 
-def _handle_lexicon_add(args) -> None:
-    if not args.term.strip():
+def _validate_lexicon_term(term: str) -> str:
+    term = term.strip()
+    if not term:
         print("Error: lexicon term must not be empty", file=sys.stderr)
         sys.exit(1)
-    args.term = args.term.strip()
+    if not re.match(r"^\w", term) or not re.search(r"\w$", term):
+        print(
+            f"Warning: '{term}' doesn't start and end with a letter or digit; "
+            "whole-word substitution requires a word boundary there and may never match",
+            file=sys.stderr,
+        )
+    return term
+
+
+def _handle_lexicon_add(args) -> None:
+    args.term = _validate_lexicon_term(args.term)
 
     if not args.respell.strip():
         print("Error: lexicon respelling must not be empty", file=sys.stderr)
         sys.exit(1)
     args.respell = args.respell.strip()
-
-    if not re.match(r"^\w", args.term) or not re.search(r"\w$", args.term):
-        print(
-            f"Warning: '{args.term}' doesn't start and end with a letter or digit; "
-            "whole-word substitution requires a word boundary there and may never match",
-            file=sys.stderr,
-        )
 
     db = Database(args.db)
     book_id = 0
@@ -266,17 +270,7 @@ def _handle_lexicon_add(args) -> None:
 
 
 def _handle_lexicon_add_from_audio(args) -> None:
-    if not args.term.strip():
-        print("Error: lexicon term must not be empty", file=sys.stderr)
-        sys.exit(1)
-    args.term = args.term.strip()
-
-    if not re.match(r"^\w", args.term) or not re.search(r"\w$", args.term):
-        print(
-            f"Warning: '{args.term}' doesn't start and end with a letter or digit; "
-            "whole-word substitution requires a word boundary there and may never match",
-            file=sys.stderr,
-        )
+    args.term = _validate_lexicon_term(args.term)
 
     audio_path = str(Path(args.audio).resolve())
     try:
@@ -293,14 +287,39 @@ def _handle_lexicon_add_from_audio(args) -> None:
         book_id = book.id
         scope = "book"
 
+    if db.find_lexicon_entry(args.term, book_id=book_id) is not None:
+        print(f"Error: a lexicon entry for '{args.term}' already exists in this scope", file=sys.stderr)
+        db.close()
+        sys.exit(1)
+
     extractor = Wav2Vec2PhonemeExtractor()
     try:
         extractor.load(args.device)
         phonemes = extractor.extract(audio_path)
+    except Exception as exc:
+        db.close()
+        print(f"Error: could not extract phonemes from '{audio_path}': {exc}", file=sys.stderr)
+        sys.exit(1)
     finally:
         extractor.teardown()
 
     respelling = phonemes_to_respelling(phonemes)
+
+    if not respelling.strip():
+        print(
+            f"Error: no pronunciation could be derived from '{audio_path}' "
+            "(the clip may contain no detectable speech)",
+            file=sys.stderr,
+        )
+        db.close()
+        sys.exit(1)
+
+    if not re.fullmatch(r"[A-Za-z-]+", respelling):
+        print(
+            f"Warning: derived respelling '{respelling}' contains characters that aren't "
+            "plain letters or hyphens; correct it with 'lexicon edit' before generating",
+            file=sys.stderr,
+        )
 
     try:
         entry = db.create_lexicon_entry(
