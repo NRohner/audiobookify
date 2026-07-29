@@ -1,6 +1,15 @@
+import shutil
+
+import pytest
 from fastapi.testclient import TestClient
 
 from audiobookify.api.app import create_app
+from audiobookify.db import Database
+from audiobookify.engines.fake import FakeEngine
+from audiobookify.models import JobStatus
+from audiobookify.worker import run_worker_once
+
+requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
 
 def _client(tmp_path):
@@ -71,3 +80,62 @@ def test_get_book_returns_404_for_unknown_id(tmp_path):
     response = client.get("/api/books/999")
 
     assert response.status_code == 404
+
+
+def test_generate_endpoint_creates_queued_jobs_for_all_chapters(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/books", files={"file": ("book.md", b"# One\nA.\n\n# Two\nB.\n", "text/markdown")},
+        data={"output_dir": str(tmp_path / "out")},
+    ).json()
+
+    response = client.post(f"/api/books/{created['id']}/generate")
+
+    assert response.status_code == 200
+    assert len(response.json()["queued_job_ids"]) == 2
+
+    db = Database(str(tmp_path / "test.db"))
+    for chapter in db.list_chapters(created["id"]):
+        assert db.latest_job_for_chapter(chapter.id).status == JobStatus.QUEUED
+    db.close()
+
+
+def test_generate_endpoint_does_not_duplicate_jobs_for_already_queued_chapters(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/books", files={"file": ("book.md", b"# One\nA.\n", "text/markdown")},
+        data={"output_dir": str(tmp_path / "out")},
+    ).json()
+
+    client.post(f"/api/books/{created['id']}/generate")
+    second = client.post(f"/api/books/{created['id']}/generate")
+
+    assert second.json()["queued_job_ids"] == []
+
+
+def test_generate_endpoint_returns_404_for_unknown_book(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.post("/api/books/999/generate")
+
+    assert response.status_code == 404
+
+
+@requires_ffmpeg
+def test_book_detail_reflects_job_progress_after_worker_processes_it(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/books", files={"file": ("book.md", b"# One\nA.\n", "text/markdown")},
+        data={"output_dir": str(tmp_path / "out")},
+    ).json()
+    client.post(f"/api/books/{created['id']}/generate")
+
+    db = Database(str(tmp_path / "test.db"))
+    engine = FakeEngine()
+    engine.load("cpu")
+    run_worker_once(db, engine, {})
+    db.close()
+
+    detail = client.get(f"/api/books/{created['id']}").json()
+    assert detail["chapters"][0]["status"] == "done"
+    assert detail["chapters"][0]["progress"] == 1.0
