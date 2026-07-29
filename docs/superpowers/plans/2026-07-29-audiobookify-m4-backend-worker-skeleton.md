@@ -1924,8 +1924,19 @@ dev:
 
 down:
 	@for f in .run/*.pid; do [ -f "$$f" ] && kill "$$(cat "$$f")" 2>/dev/null; rm -f "$$f"; done
+	@command -v lsof >/dev/null 2>&1 && lsof -ti:5173 | xargs kill 2>/dev/null; true
 	@echo "stopped."
 ```
+
+**Note (added after Task 8 implementation found a real bug via the process-lifecycle
+verification below):** `npm run dev &` forks a child `node`/`vite` process rather than
+exec'ing into it, so `$!` captures the wrong PID and the plain `kill "$(cat
+.run/frontend.pid)"` above leaves an orphaned Vite process holding port 5173. The
+`lsof -ti:5173 | xargs kill` line kills whatever process is actually listening on the
+frontend dev port, independent of how many process levels `npm`/`vite` fork through.
+`command -v lsof` guards against `lsof` being unavailable (e.g. some Windows/Git Bash
+setups); the trailing `; true` keeps this best-effort line from aborting `make down` if
+`lsof` is missing or nothing is listening.
 
 - [ ] **Step 6: Run the full test suite**
 
