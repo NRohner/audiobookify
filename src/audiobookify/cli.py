@@ -251,6 +251,24 @@ def _handle_lexicon_list(args) -> None:
     db.close()
 
 
+def _handle_lexicon_remove(args) -> None:
+    db = Database(args.db)
+    book_id = 0
+    if args.book:
+        book = _resolve_book_for_lexicon(db, args.book)
+        book_id = book.id
+
+    try:
+        db.delete_lexicon_entry(args.term, book_id=book_id)
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        db.close()
+        sys.exit(1)
+
+    print(f"Removed pronunciation override for '{args.term}'")
+    db.close()
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(prog="audiobookify")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -306,6 +324,13 @@ def main(argv: Optional[List[str]] = None) -> None:
     lexicon_list_parser.add_argument("--book", default=None)
     lexicon_list_parser.add_argument("--db", default="audiobookify.db")
 
+    lexicon_remove_parser = lexicon_subparsers.add_parser(
+        "remove", help="Remove a pronunciation override"
+    )
+    lexicon_remove_parser.add_argument("--term", required=True)
+    lexicon_remove_parser.add_argument("--book", default=None)
+    lexicon_remove_parser.add_argument("--db", default="audiobookify.db")
+
     args = parser.parse_args(argv)
 
     if args.command == "generate":
@@ -322,6 +347,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             _handle_lexicon_add(args)
         elif args.lexicon_command == "list":
             _handle_lexicon_list(args)
+        elif args.lexicon_command == "remove":
+            _handle_lexicon_remove(args)
 
 
 if __name__ == "__main__":

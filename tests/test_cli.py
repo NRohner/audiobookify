@@ -726,3 +726,26 @@ def test_lexicon_list_reports_when_empty(tmp_path, capsys):
     cli.main(["lexicon", "list", "--db", str(db_path)])
 
     assert "No lexicon entries yet" in capsys.readouterr().out
+
+
+def test_lexicon_remove_deletes_global_entry(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "KAH-dern", "--db", str(db_path)])
+    capsys.readouterr()
+
+    cli.main(["lexicon", "remove", "--term", "Cadeyrn", "--db", str(db_path)])
+
+    assert "Removed" in capsys.readouterr().out
+    db = Database(str(db_path))
+    assert db.find_lexicon_entry("Cadeyrn") is None
+    db.close()
+
+
+def test_lexicon_remove_reports_missing_entry(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["lexicon", "remove", "--term", "Ghost", "--db", str(db_path)])
+
+    assert exc_info.value.code == 1
+    assert "no lexicon entry" in capsys.readouterr().err
