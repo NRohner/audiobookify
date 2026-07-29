@@ -1095,3 +1095,412 @@ Only respelling overrides are supported in M2 — IPA/ARPAbet phoneme overrides 
 git add README.md
 git commit -m "docs: M2 pronunciation lexicon usage instructions"
 ```
+
+---
+
+### Task 8: Final-review fix wave
+
+**Context:** the whole-branch review of Tasks 1-7 found no Critical issues but three Important, real, empirically-verified bugs plus several Minor findings. This task fixes all of them in one pass.
+
+**Files:**
+- Modify: `src/audiobookify/cli.py`
+- Modify: `src/audiobookify/lexicon/substitution.py`
+- Modify: `README.md`
+- Test: `tests/test_cli.py`, `tests/test_lexicon_substitution.py`, `tests/test_pipeline.py`
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/test_lexicon_substitution.py`:
+
+```python
+def test_apply_lexicon_prefers_longer_overlapping_term_regardless_of_order():
+    entries_short_first = [
+        _Entry(term="York", override_value="Yorrk"),
+        _Entry(term="New York", override_value="Noo Yawk"),
+    ]
+    result = apply_lexicon("She flew to New York yesterday.", entries_short_first)
+    assert result == "She flew to Noo Yawk yesterday."
+
+    entries_long_first = [
+        _Entry(term="New York", override_value="Noo Yawk"),
+        _Entry(term="York", override_value="Yorrk"),
+    ]
+    result = apply_lexicon("She flew to New York yesterday.", entries_long_first)
+    assert result == "She flew to Noo Yawk yesterday."
+```
+
+Append to `tests/test_pipeline.py`:
+
+```python
+@requires_ffmpeg
+def test_generate_book_prefers_book_scoped_lexicon_entry_over_global(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = _make_book(tmp_path, db, n_chapters=1)
+    db.create_lexicon_entry(term="chapter", override_value="GLOBAL-version", scope="global")
+    db.create_lexicon_entry(term="chapter", override_value="BOOK-version", scope="book", book_id=book.id)
+
+    class RecordingEngine(FakeEngine):
+        synthesized_texts = []
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            type(self).synthesized_texts.append(text_chunk)
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    generate_book(book, RecordingEngine(), db, {"voice_name": "fake"})
+
+    assert any("BOOK-version" in text for text in RecordingEngine.synthesized_texts)
+    assert not any("GLOBAL-version" in text for text in RecordingEngine.synthesized_texts)
+    db.close()
+```
+
+Append to `tests/test_cli.py`:
+
+```python
+def test_lexicon_add_rejects_empty_respelling(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["lexicon", "add", "--term", "Ghost", "--respell", "   ", "--db", str(db_path)])
+
+    assert exc_info.value.code == 1
+    assert "must not be empty" in capsys.readouterr().err
+
+
+def test_lexicon_add_warns_when_term_cannot_match_a_word_boundary(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+
+    cli.main(["lexicon", "add", "--term", "Dr.", "--respell", "Doctor", "--db", str(db_path)])
+
+    assert "word boundary" in capsys.readouterr().err
+
+
+def test_lexicon_remove_strips_whitespace_from_term(tmp_path):
+    db_path = tmp_path / "test.db"
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "KAH-dern", "--db", str(db_path)])
+
+    cli.main(["lexicon", "remove", "--term", "  Cadeyrn  ", "--db", str(db_path)])
+
+    db = Database(str(db_path))
+    assert db.find_lexicon_entry("Cadeyrn") is None
+    db.close()
+
+
+def test_lexicon_preview_sanitizes_term_for_default_filename(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+    monkeypatch.chdir(tmp_path)
+
+    db_path = tmp_path / "test.db"
+    cli.main(["lexicon", "add", "--term", "AC/DC", "--respell", "AY-SEE-DEE-SEE", "--db", str(db_path)])
+
+    cli.main(["lexicon", "preview", "--term", "AC/DC", "--db", str(db_path)])
+
+    assert not (tmp_path / "AC").exists()  # no unwanted subdirectory created
+    assert any(p.name.endswith("-pronunciation-preview.wav") for p in tmp_path.iterdir())
+
+
+@requires_ffmpeg
+def test_lexicon_preview_prefers_book_scoped_entry_over_global(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    class RecordingEngine(FakeEngine):
+        synthesized_texts = []
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            type(self).synthesized_texts.append(text_chunk)
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    monkeypatch.setattr(cli, "ChatterboxEngine", RecordingEngine)
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    db_path = tmp_path / "test.db"
+
+    cli.main(["generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path)])
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "GLOBAL-version", "--db", str(db_path)])
+    cli.main([
+        "lexicon", "add", "--term", "Cadeyrn", "--respell", "BOOK-version",
+        "--book", str(md_path), "--db", str(db_path),
+    ])
+
+    cli.main(["lexicon", "preview", "--term", "Cadeyrn", "--book", str(md_path), "--db", str(db_path)])
+
+    assert any("BOOK-version" in text for text in RecordingEngine.synthesized_texts)
+
+
+@requires_ffmpeg
+def test_lexicon_preview_falls_back_to_global_entry_when_book_scope_has_none(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    class RecordingEngine(FakeEngine):
+        synthesized_texts = []
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            type(self).synthesized_texts.append(text_chunk)
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    monkeypatch.setattr(cli, "ChatterboxEngine", RecordingEngine)
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    db_path = tmp_path / "test.db"
+
+    cli.main(["generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path)])
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "GLOBAL-version", "--db", str(db_path)])
+
+    cli.main(["lexicon", "preview", "--term", "Cadeyrn", "--book", str(md_path), "--db", str(db_path)])
+
+    assert any("GLOBAL-version" in text for text in RecordingEngine.synthesized_texts)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `.venv/bin/pytest tests/test_lexicon_substitution.py tests/test_pipeline.py tests/test_cli.py -v -k "overlapping_term or prefers_book_scoped_lexicon_entry_over_global or empty_respelling or word_boundary or strips_whitespace_from_term or sanitizes_term or prefers_book_scoped_entry_over_global or falls_back_to_global_entry"`
+Expected: FAIL — the overlapping-term test fails because entries are applied in list order with no length sort; the pipeline test fails because there's no scope precedence bug at the unit level to exercise (it currently DOES pass by luck of ordering, so this one is a regression-guard rather than a RED — that's fine, note it and move on); the empty-respelling test fails because no validation exists; the word-boundary warning test fails because no warning is printed; the strips-whitespace test fails because `remove` doesn't strip; the sanitize test fails because `AC/DC` creates a real `AC/` directory; the two preview-scope tests fail because `lexicon preview` has no `--book` flag (argparse rejects it with `SystemExit(2)`)
+
+- [ ] **Step 3: Fix `src/audiobookify/lexicon/substitution.py` — longest-match-first ordering**
+
+Replace the full file contents with:
+
+```python
+import re
+from typing import List
+
+
+def apply_lexicon(text: str, entries: List) -> str:
+    for entry in sorted(entries, key=lambda e: -len(e.term)):
+        pattern = r"\b" + re.escape(entry.term) + r"\b"
+        text = re.sub(pattern, lambda m: entry.override_value, text, flags=re.IGNORECASE)
+    return text
+```
+
+(Python's `sorted()` is stable, so entries of equal term length keep their original relative order — this preserves the book-scoped-before-global precedence for same-length/identical terms while fixing the case where a genuinely longer term would otherwise be defeated by a shorter one matching first.)
+
+- [ ] **Step 4: Fix `src/audiobookify/cli.py`**
+
+Add `import re` to the top of the file, alphabetized with the other stdlib imports:
+
+```python
+import argparse
+import re
+import sys
+from pathlib import Path
+from typing import List, Optional
+```
+
+Add this helper function after `_check_reference_audio_present`:
+
+```python
+def _sanitize_filename_component(value: str) -> str:
+    return re.sub(r"[^\w.-]+", "_", value)
+```
+
+In `_handle_lexicon_add`, add the respelling validation and the word-boundary warning. Replace:
+
+```python
+def _handle_lexicon_add(args) -> None:
+    if not args.term.strip():
+        print("Error: lexicon term must not be empty", file=sys.stderr)
+        sys.exit(1)
+    args.term = args.term.strip()
+
+    db = Database(args.db)
+```
+
+with:
+
+```python
+def _handle_lexicon_add(args) -> None:
+    if not args.term.strip():
+        print("Error: lexicon term must not be empty", file=sys.stderr)
+        sys.exit(1)
+    args.term = args.term.strip()
+
+    if not args.respell.strip():
+        print("Error: lexicon respelling must not be empty", file=sys.stderr)
+        sys.exit(1)
+    args.respell = args.respell.strip()
+
+    if not re.match(r"^\w", args.term) or not re.search(r"\w$", args.term):
+        print(
+            f"Warning: '{args.term}' doesn't start and end with a letter or digit; "
+            "whole-word substitution requires a word boundary there and may never match",
+            file=sys.stderr,
+        )
+
+    db = Database(args.db)
+```
+
+In `_handle_lexicon_remove`, strip the term for consistency with `add`. Replace:
+
+```python
+def _handle_lexicon_remove(args) -> None:
+    db = Database(args.db)
+    book_id = 0
+```
+
+with:
+
+```python
+def _handle_lexicon_remove(args) -> None:
+    args.term = args.term.strip()
+
+    db = Database(args.db)
+    book_id = 0
+```
+
+And its error-message unwrap — replace:
+
+```python
+    try:
+        db.delete_lexicon_entry(args.term, book_id=book_id)
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        db.close()
+        sys.exit(1)
+```
+
+with:
+
+```python
+    try:
+        db.delete_lexicon_entry(args.term, book_id=book_id)
+    except KeyError as exc:
+        print(f"Error: {exc.args[0]}", file=sys.stderr)
+        db.close()
+        sys.exit(1)
+```
+
+Replace the whole `_handle_lexicon_preview` function with:
+
+```python
+def _handle_lexicon_preview(args) -> None:
+    args.term = args.term.strip()
+
+    db = Database(args.db)
+    book_id = 0
+    if args.book:
+        book = _resolve_book_for_lexicon(db, args.book)
+        book_id = book.id
+
+    entry = db.find_lexicon_entry(args.term, book_id=book_id)
+    if entry is None and book_id:
+        entry = db.find_lexicon_entry(args.term)  # fall back to the global entry
+    if entry is None:
+        print(f"Error: no lexicon entry for '{args.term}'", file=sys.stderr)
+        db.close()
+        sys.exit(1)
+
+    profile = None
+    if args.voice_profile:
+        profile = db.find_voice_profile_by_name(args.voice_profile)
+        if profile is None:
+            print(f"Error: no voice profile named '{args.voice_profile}'", file=sys.stderr)
+            db.close()
+            sys.exit(1)
+    db.close()
+
+    _check_reference_audio_present(profile)
+
+    sentence = args.sentence or f"The pronunciation of {entry.term} is being previewed."
+    text = apply_lexicon(sentence, [entry])
+
+    engine = ChatterboxEngine()
+    try:
+        engine.load(args.device)
+        handle = engine.clone_profile(
+            profile.reference_audio_path if profile else None,
+            profile.reference_transcript if profile else None,
+            {},
+        )
+        audio = engine.synthesize(text, handle, _voice_params(profile) if profile else {})
+        out_path = args.out or f"{_sanitize_filename_component(entry.term)}-pronunciation-preview.wav"
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        sf.write(out_path, audio, engine.sample_rate())
+    finally:
+        engine.teardown()
+
+    print(f"Wrote preview to {out_path}")
+```
+
+In `main()`, add `--book` to the `lexicon preview` subparser. Replace:
+
+```python
+    lexicon_preview_parser = lexicon_subparsers.add_parser(
+        "preview", help="Synthesize a sample sentence with a term's pronunciation override applied"
+    )
+    lexicon_preview_parser.add_argument("--term", required=True)
+    lexicon_preview_parser.add_argument("--sentence", default=None)
+    lexicon_preview_parser.add_argument("--voice-profile", default=None)
+    lexicon_preview_parser.add_argument("--out", default=None)
+    lexicon_preview_parser.add_argument("--device", default="auto")
+    lexicon_preview_parser.add_argument("--db", default="audiobookify.db")
+```
+
+with:
+
+```python
+    lexicon_preview_parser = lexicon_subparsers.add_parser(
+        "preview", help="Synthesize a sample sentence with a term's pronunciation override applied"
+    )
+    lexicon_preview_parser.add_argument("--term", required=True)
+    lexicon_preview_parser.add_argument("--sentence", default=None)
+    lexicon_preview_parser.add_argument("--voice-profile", default=None)
+    lexicon_preview_parser.add_argument("--book", default=None)
+    lexicon_preview_parser.add_argument("--out", default=None)
+    lexicon_preview_parser.add_argument("--device", default="auto")
+    lexicon_preview_parser.add_argument("--db", default="audiobookify.db")
+```
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `.venv/bin/pytest tests/test_lexicon_substitution.py tests/test_pipeline.py tests/test_cli.py -v`
+Expected: all pass
+
+- [ ] **Step 6: Run the full test suite**
+
+Run: `.venv/bin/pytest -v`
+Expected: all pass (104 baseline + 7 new tests = 111 passed, 1 deselected)
+
+- [ ] **Step 7: Update `README.md`**
+
+Replace:
+
+```markdown
+- `lexicon add`: substitution is whole-word, case-insensitive, and supports multi-word terms (`--term "New York"`). `--book <path>` scopes the entry to one already-registered book (run `generate` on it at least once first) instead of applying it everywhere; the same term can have both a global and a book-specific entry — the book-specific one wins for that book. Respellings should stick to plain letters/hyphens: the term is substituted before the normal number/abbreviation expansion runs, so a respelling containing digits or a period could be altered by that later step.
+- `lexicon list` / `lexicon remove --term NAME`: pass `--book <path>` to see or remove a book-scoped entry instead of a global one.
+- `lexicon preview --term NAME`: synthesizes a short carrier sentence (or `--sentence "..."`) with the term's override applied, optionally in a saved `--voice-profile`, and writes a WAV file (same convention as `voice preview` — no auto-playback).
+- `generate` applies every applicable lexicon entry (global + that book's own) automatically — no flag needed.
+```
+
+with:
+
+```markdown
+- `lexicon add`: substitution is whole-word, case-insensitive, and supports multi-word terms (`--term "New York"`); when two terms overlap (e.g. "York" and "New York"), the longer one wins regardless of which was added first. `--book <path>` scopes the entry to one already-registered book (run `generate` on it at least once first) instead of applying it everywhere; the same term can have both a global and a book-specific entry — the book-specific one wins for that book. Respellings should stick to plain letters/hyphens: the term is substituted before the normal number/abbreviation expansion runs, so a respelling containing digits or a period could be altered by that later step. A term's replacement text can itself be matched by a later entry (e.g. a separate entry for "dern" would also match inside a "Cadeyrn" → "KAH dern" replacement) — keep respellings free of other registered terms if that's not the intent.
+- `lexicon list` / `lexicon remove --term NAME`: pass `--book <path>` to see or remove a book-scoped entry instead of a global one.
+- `lexicon preview --term NAME`: synthesizes a short carrier sentence (or `--sentence "..."`) with the term's override applied, optionally in a saved `--voice-profile` and/or `--book <path>` (to preview a book-specific override, falling back to the global one if the book has none), and writes a WAV file (same convention as `voice preview` — no auto-playback).
+- `generate` applies every applicable lexicon entry (global + that book's own) automatically — no flag needed. Lexicon changes only affect chapters that haven't been generated yet; a chapter already marked done keeps its existing audio. Pass a fresh `--db` (or delete the chapter's MP3 and reset its status) to re-render with an updated pronunciation.
+```
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/audiobookify/cli.py src/audiobookify/lexicon/substitution.py README.md \
+        tests/test_cli.py tests/test_lexicon_substitution.py tests/test_pipeline.py
+git commit -m "fix: address M2 whole-branch review findings
+
+Fix three Important, empirically-verified bugs: lexicon preview
+ignored --book and could silently preview the wrong scope's
+pronunciation when both existed; an empty --respell was accepted and
+silently deleted the term from every chapter of every book using it;
+and overlapping multi-word terms (e.g. \"York\" vs \"New York\") were
+substituted in list order rather than longest-match-first, so a
+shorter term could preempt a more specific one regardless of scope.
+Also: unwrap KeyError's repr in lexicon remove's error message, strip
+whitespace from --term in remove/preview for consistency with add,
+sanitize the term used in lexicon preview's default output filename
+so a term like \"AC/DC\" can't create an unwanted directory, warn at
+add time when a term can't ever match a word boundary, and document
+cascading substitution and the mid-book lexicon-change caveat."
+```
