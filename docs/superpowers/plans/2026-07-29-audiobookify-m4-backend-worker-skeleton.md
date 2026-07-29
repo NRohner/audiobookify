@@ -26,6 +26,30 @@ project). `pytest` + FastAPI's `TestClient` for API tests.
 `docs/superpowers/plans/2026-07-29-audiobookify-m3-audio-sample-pronunciation.md` (this
 project's established plan/task conventions).
 
+**Post-implementation addendum (final whole-branch review, all 9 tasks complete):**
+found no Critical issues, but 3 real Important findings a per-task lens missed — (1)
+`POST /api/books/{book_id}/generate` (Task 6) only checked `Job` status, never
+`Chapter.status`, so calling it again on a fully-`done` book silently re-queued and
+re-synthesized already-finished chapters, overwriting completed MP3s (reproduced
+concretely, not hypothetical — this contradicted the CLI's own resumability contract
+going back to M0); (2) the worker (Task 4) had no exception boundary around
+chapter/book lookup, voice-profile-cache resolution, or lexicon lookup, so any
+unexpected exception there killed the entire worker process rather than just failing
+one job — not reachable through today's API surface, but would become reachable once
+later GUI sub-projects add chapter/profile mutation, and directly undercut the
+"separate worker process" architecture decision's own stated rationale
+(crash-isolation from the API); (3) `db.py`'s `sqlite3.connect` used the default
+`check_same_thread=True`, a residual risk given the API's sync `Depends(get_db)` +
+sync-route pattern relies on FastAPI's threadpool reuse landing dependency-resolution
+and route-body execution on the same thread — true today but not a documented
+guarantee. All three fixed in one wave and re-reviewed clean: `generate` now also
+skips `ChapterStatus.DONE` chapters; `run_worker_once` wraps its post-pop body in
+try/except (marking the claimed Job `FAILED` with the real error on any exception) and
+`run_forever` wraps the `run_worker_once` call as a last-resort safety net; `db.py`
+now uses `check_same_thread=False`. Also fixed as part of the same wave: orphaned
+staged-upload directories on `ingest_by_path` failure (Task 5) are now cleaned up.
+Final count: 184 tests passing, 2 integration tests deselected.
+
 ## Global Constraints
 
 - **New Python dependencies limited to `fastapi`, `uvicorn`, `python-multipart`.** No
