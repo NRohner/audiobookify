@@ -1346,8 +1346,15 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads") ->
         }
 
     @app.post("/api/books")
-    async def create_book(file: UploadFile = File(...), output_dir: str = Form(...),
-                           db: Database = Depends(get_db)):
+    def create_book(file: UploadFile = File(...), output_dir: str = Form(...),
+                     db: Database = Depends(get_db)):
+        # Sync, not async: get_db is a sync generator dependency, so FastAPI builds
+        # the Database (and its check_same_thread=True sqlite3 connection) on a
+        # threadpool worker thread. An `async def` route body runs on the event
+        # loop thread instead - a different thread than the one that opened the
+        # connection - so any db.* call inside would raise sqlite3.ProgrammingError.
+        # Keeping this route sync keeps dependency resolution and the route body on
+        # the same worker thread.
         filename = Path(file.filename).name
         suffix = Path(filename).suffix.lower()
         if suffix not in (".epub", ".md"):
@@ -1356,7 +1363,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads") ->
         staged_dir = Path(upload_dir) / uuid.uuid4().hex
         staged_dir.mkdir(parents=True, exist_ok=True)
         staged_path = staged_dir / filename
-        staged_path.write_bytes(await file.read())
+        staged_path.write_bytes(file.file.read())
 
         try:
             parsed, source_format = ingest_by_path(str(staged_path.resolve()))
