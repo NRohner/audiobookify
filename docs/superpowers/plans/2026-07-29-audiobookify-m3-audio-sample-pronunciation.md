@@ -1236,3 +1236,322 @@ git commit -m "docs: M3 audio-sample pronunciation usage instructions"
 ## After Task 7
 
 Run the full whole-branch review (per `subagent-driven-development`) before considering M3 done — M1 and M2's final reviews each caught real bugs a per-task lens missed (e.g. M2's longest-term-first substitution ordering bug, M1's voice-mixing bug). Add a "Task 8: final-review fix wave" to this plan only if that review finds something, following M2's precedent (`docs/superpowers/plans/2026-07-28-audiobookify-m2-pronunciation-lexicon.md` Task 8) — do not pre-emptively invent fixes for issues that haven't been found yet.
+
+---
+
+### Task 8: Final-review fix wave
+
+**Context:** the whole-branch review of Tasks 1-7 (opus) found no Critical issues, 2 Important, and several Minor. This task fixes them in one pass, following the exact same "1 opus review -> 1 fix wave" precedent as M1 Task 8 and M2 Task 8.
+
+Findings being fixed:
+- **Important:** `_handle_lexicon_add_from_audio` wrote a derived respelling straight into `override_value` with no non-empty check. `phonemes_to_respelling("")` returns `""`, and an empty `override_value` is not NULL so it inserts cleanly — then `apply_lexicon` substitutes every occurrence of the term with the empty string, **silently deleting the word from the generated narration**. This is the same class of bug M2's own final review found and fixed (an empty `--respell` silently deleting terms) — `lexicon add`/`lexicon edit` both already guard against it; `add-from-audio` was the one hole.
+- **Important:** an unmapped IPA token in the extracted phonemes passes straight through into `override_value` (per-plan, since `phonemes_to_respelling` intentionally passes unknown tokens through unchanged) with no signal to the user that the result contains characters the engine can't read naturally (M2's README already warns respellings should stay to plain letters/hyphens).
+- **Minor:** an extraction failure (a real model/inference exception) was uncaught, leaking the DB connection and surfacing a raw traceback instead of the CLI's `"Error: "` convention.
+- **Minor:** re-running `add-from-audio` on a term that already exists in scope pays for a full model load + inference before failing on the `UNIQUE` constraint — an early existence check makes the failure instant.
+- **Minor:** the term-trim/empty-check/word-boundary-warning block was copy-pasted verbatim between `_handle_lexicon_add` and `_handle_lexicon_add_from_audio` — extract a shared helper.
+- **Minor (test gaps):** no test covered `_validate_pronunciation_clip`'s "contains no audio" branch, the duplicate-term error path for `add-from-audio`, the word-boundary warning in the new handler, or `--notes` pass-through.
+- **Minor (docs):** the README M3 section didn't mention the `--notes`/`--device` flags on `add-from-audio`, though both exist.
+
+**Files:**
+- Modify: `src/audiobookify/cli.py`
+- Modify: `README.md`
+- Test: `tests/test_cli.py`
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/test_cli.py`:
+
+```python
+def test_lexicon_add_from_audio_rejects_silent_clip_with_no_detectable_speech(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", lambda: FakePhonemeExtractor(canned_phonemes=""))
+
+    audio_path = tmp_path / "silent.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([
+            "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+            "--db", str(db_path),
+        ])
+
+    assert exc_info.value.code == 1
+    assert "no pronunciation could be derived" in capsys.readouterr().err
+
+    db = Database(str(db_path))
+    assert db.find_lexicon_entry("Cadeyrn") is None
+    db.close()
+
+
+def test_lexicon_add_from_audio_warns_when_respelling_has_non_ascii_letters(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", lambda: FakePhonemeExtractor(canned_phonemes="ɐ"))
+
+    audio_path = tmp_path / "clip.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+        "--db", str(db_path),
+    ])
+
+    assert "contains characters that aren't plain letters or hyphens" in capsys.readouterr().err
+
+
+def test_lexicon_add_from_audio_rejects_duplicate_term_in_same_scope(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+
+    audio_path = tmp_path / "cadeyrn.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+        "--db", str(db_path),
+    ])
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([
+            "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+            "--db", str(db_path),
+        ])
+
+    assert exc_info.value.code == 1
+    assert "already exists" in capsys.readouterr().err
+
+
+def test_lexicon_add_from_audio_warns_when_term_cannot_match_a_word_boundary(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+
+    audio_path = tmp_path / "clip.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "lexicon", "add-from-audio", "--term", "Dr.", "--audio", str(audio_path),
+        "--db", str(db_path),
+    ])
+
+    assert "word boundary" in capsys.readouterr().err
+
+
+def test_lexicon_add_from_audio_stores_notes(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+
+    audio_path = tmp_path / "cadeyrn.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+        "--notes", "derived from a recording", "--db", str(db_path),
+    ])
+
+    db = Database(str(db_path))
+    entry = db.find_lexicon_entry("Cadeyrn")
+    assert entry.notes == "derived from a recording"
+    db.close()
+
+
+def test_lexicon_add_from_audio_reports_extraction_failure(tmp_path, monkeypatch, capsys):
+    class FailingExtractor(FakePhonemeExtractor):
+        def extract(self, audio_path):
+            raise RuntimeError("model inference failed")
+
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FailingExtractor)
+
+    audio_path = tmp_path / "cadeyrn.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([
+            "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+            "--db", str(db_path),
+        ])
+
+    assert exc_info.value.code == 1
+    assert "could not extract phonemes" in capsys.readouterr().err
+
+    db = Database(str(db_path))
+    assert db.find_lexicon_entry("Cadeyrn") is None
+    db.close()
+
+
+def test_lexicon_add_from_audio_rejects_empty_audio_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+
+    audio_path = tmp_path / "empty.wav"
+    sf.write(str(audio_path), np.zeros(0, dtype="float32"), 16000)
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([
+            "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+            "--db", str(db_path),
+        ])
+
+    assert exc_info.value.code == 1
+    assert "contains no audio" in capsys.readouterr().err
+```
+
+Add `from audiobookify.phoneme.fake import FakePhonemeExtractor` if it isn't already imported at the top of `tests/test_cli.py` (Task 5 already added it — check first, don't duplicate the import).
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `.venv/bin/pytest tests/test_cli.py -v -k "silent_clip or non_ascii or duplicate_term_in_same_scope and add_from_audio or word_boundary and add_from_audio or stores_notes or extraction_failure or empty_audio_file"`
+Expected: FAIL — the silent-clip, non-ascii-warning, and extraction-failure tests fail because the guards don't exist yet; the duplicate-term test currently fails on model-load being attempted before the DB constraint check (behavior differs, not a crash, but the assertion on `"already exists"` still passes today since `create_lexicon_entry` already raises — so this one may already PASS; the point of Step 3 is to make it fail *fast*, not to fix a bug in this one). The word-boundary and notes tests likely already PASS since that behavior already exists — that's fine, they're regression coverage for the refactor in Step 3.
+
+- [ ] **Step 3: Fix `src/audiobookify/cli.py`**
+
+Add a shared term-validation helper. Insert it directly before `_handle_lexicon_add`:
+
+```python
+def _validate_lexicon_term(term: str) -> str:
+    term = term.strip()
+    if not term:
+        print("Error: lexicon term must not be empty", file=sys.stderr)
+        sys.exit(1)
+    if not re.match(r"^\w", term) or not re.search(r"\w$", term):
+        print(
+            f"Warning: '{term}' doesn't start and end with a letter or digit; "
+            "whole-word substitution requires a word boundary there and may never match",
+            file=sys.stderr,
+        )
+    return term
+```
+
+Replace `_handle_lexicon_add`'s opening (term validation only — leave the rest of the function, including the respelling-empty check and everything after, unchanged):
+
+```python
+def _handle_lexicon_add(args) -> None:
+    if not args.term.strip():
+        print("Error: lexicon term must not be empty", file=sys.stderr)
+        sys.exit(1)
+    args.term = args.term.strip()
+
+    if not args.respell.strip():
+        print("Error: lexicon respelling must not be empty", file=sys.stderr)
+        sys.exit(1)
+    args.respell = args.respell.strip()
+
+    if not re.match(r"^\w", args.term) or not re.search(r"\w$", args.term):
+        print(
+            f"Warning: '{args.term}' doesn't start and end with a letter or digit; "
+            "whole-word substitution requires a word boundary there and may never match",
+            file=sys.stderr,
+        )
+```
+
+with:
+
+```python
+def _handle_lexicon_add(args) -> None:
+    args.term = _validate_lexicon_term(args.term)
+
+    if not args.respell.strip():
+        print("Error: lexicon respelling must not be empty", file=sys.stderr)
+        sys.exit(1)
+    args.respell = args.respell.strip()
+```
+
+Replace the entire `_handle_lexicon_add_from_audio` function with:
+
+```python
+def _handle_lexicon_add_from_audio(args) -> None:
+    args.term = _validate_lexicon_term(args.term)
+
+    audio_path = str(Path(args.audio).resolve())
+    try:
+        _validate_pronunciation_clip(audio_path)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    db = Database(args.db)
+    book_id = 0
+    scope = "global"
+    if args.book:
+        book = _resolve_book_for_lexicon(db, args.book)
+        book_id = book.id
+        scope = "book"
+
+    if db.find_lexicon_entry(args.term, book_id=book_id) is not None:
+        print(f"Error: a lexicon entry for '{args.term}' already exists in this scope", file=sys.stderr)
+        db.close()
+        sys.exit(1)
+
+    extractor = Wav2Vec2PhonemeExtractor()
+    try:
+        extractor.load(args.device)
+        phonemes = extractor.extract(audio_path)
+    except Exception as exc:
+        db.close()
+        print(f"Error: could not extract phonemes from '{audio_path}': {exc}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        extractor.teardown()
+
+    respelling = phonemes_to_respelling(phonemes)
+
+    if not respelling.strip():
+        print(
+            f"Error: no pronunciation could be derived from '{audio_path}' "
+            "(the clip may contain no detectable speech)",
+            file=sys.stderr,
+        )
+        db.close()
+        sys.exit(1)
+
+    if not re.fullmatch(r"[A-Za-z-]+", respelling):
+        print(
+            f"Warning: derived respelling '{respelling}' contains characters that aren't "
+            "plain letters or hyphens; correct it with 'lexicon edit' before generating",
+            file=sys.stderr,
+        )
+
+    try:
+        entry = db.create_lexicon_entry(
+            term=args.term, override_value=respelling, scope=scope, book_id=book_id,
+            notes=args.notes, source="from_audio", phonemes=phonemes,
+            sample_audio_path=audio_path,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        db.close()
+        sys.exit(1)
+
+    print(f"Extracted phonemes: {phonemes}")
+    print(f"Derived respelling: {respelling}")
+    print(
+        f"Added pronunciation for '{entry.term}' -> '{entry.override_value}' "
+        f"({entry.scope} scope, source: from_audio)"
+    )
+    db.close()
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `.venv/bin/pytest tests/test_cli.py -v`
+Expected: all pass (57 existing + 6 new = 63)
+
+- [ ] **Step 5: Run the full test suite**
+
+Run: `.venv/bin/pytest -v`
+Expected: all pass, 2 deselected
+
+- [ ] **Step 6: Update `README.md`**
+
+In the "Audio-sample pronunciation (M3)" section added by Task 7, find the sentence `--book <path> scopes it to one book, same as lexicon add.` and change it to also mention the two flags that weren't documented:
+
+```markdown
+`--book <path>` scopes it to one book, same as `lexicon add`. `--notes "..."` attaches a free-text note, same as `lexicon add`. `--device` picks the compute device for the phoneme model (`auto`/`cpu`/`cuda`/`mps`), same convention as `generate --device`.
+```
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/audiobookify/cli.py tests/test_cli.py README.md
+git commit -m "fix: address M3 whole-branch review findings"
+```
