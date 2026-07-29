@@ -749,3 +749,75 @@ def test_lexicon_remove_reports_missing_entry(tmp_path, capsys):
 
     assert exc_info.value.code == 1
     assert "no lexicon entry" in capsys.readouterr().err
+
+
+def test_lexicon_preview_writes_audio_with_substitution_applied(tmp_path, monkeypatch):
+    class RecordingEngine(FakeEngine):
+        synthesized_texts = []
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            type(self).synthesized_texts.append(text_chunk)
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    monkeypatch.setattr(cli, "ChatterboxEngine", RecordingEngine)
+
+    db_path = tmp_path / "test.db"
+    out_path = tmp_path / "preview.wav"
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "KAH-dern", "--db", str(db_path)])
+
+    cli.main([
+        "lexicon", "preview", "--term", "Cadeyrn", "--out", str(out_path), "--db", str(db_path),
+    ])
+
+    assert out_path.exists()
+    assert any("KAH-dern" in text for text in RecordingEngine.synthesized_texts)
+
+
+def test_lexicon_preview_uses_custom_sentence_when_given(tmp_path, monkeypatch):
+    class RecordingEngine(FakeEngine):
+        synthesized_texts = []
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            type(self).synthesized_texts.append(text_chunk)
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    monkeypatch.setattr(cli, "ChatterboxEngine", RecordingEngine)
+
+    db_path = tmp_path / "test.db"
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "KAH-dern", "--db", str(db_path)])
+
+    cli.main([
+        "lexicon", "preview", "--term", "Cadeyrn", "--sentence", "Cadeyrn walked home alone.",
+        "--db", str(db_path),
+    ])
+
+    assert any("KAH-dern walked home alone." in text for text in RecordingEngine.synthesized_texts)
+
+
+def test_lexicon_preview_supports_voice_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+    out_path = tmp_path / "preview.wav"
+
+    cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "KAH-dern", "--db", str(db_path)])
+
+    cli.main([
+        "lexicon", "preview", "--term", "Cadeyrn", "--voice-profile", "narrator-1",
+        "--out", str(out_path), "--db", str(db_path),
+    ])
+
+    assert out_path.exists()
+
+
+def test_lexicon_preview_reports_missing_entry(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["lexicon", "preview", "--term", "Ghost", "--db", str(db_path)])
+
+    assert exc_info.value.code == 1
+    assert "no lexicon entry" in capsys.readouterr().err

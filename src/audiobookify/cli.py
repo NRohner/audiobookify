@@ -8,6 +8,7 @@ import soundfile as sf
 from .db import Database
 from .engines.chatterbox import ChatterboxEngine
 from .ingest import epub, markdown
+from .lexicon.substitution import apply_lexicon
 from .models import ChapterStatus, SourceFormat
 from .synth.pipeline import generate_book
 from .voice.validation import validate_reference_audio
@@ -269,6 +270,46 @@ def _handle_lexicon_remove(args) -> None:
     db.close()
 
 
+def _handle_lexicon_preview(args) -> None:
+    db = Database(args.db)
+    entry = db.find_lexicon_entry(args.term)
+    if entry is None:
+        print(f"Error: no lexicon entry for '{args.term}'", file=sys.stderr)
+        db.close()
+        sys.exit(1)
+
+    profile = None
+    if args.voice_profile:
+        profile = db.find_voice_profile_by_name(args.voice_profile)
+        if profile is None:
+            print(f"Error: no voice profile named '{args.voice_profile}'", file=sys.stderr)
+            db.close()
+            sys.exit(1)
+    db.close()
+
+    _check_reference_audio_present(profile)
+
+    sentence = args.sentence or f"The pronunciation of {entry.term} is being previewed."
+    text = apply_lexicon(sentence, [entry])
+
+    engine = ChatterboxEngine()
+    try:
+        engine.load(args.device)
+        handle = engine.clone_profile(
+            profile.reference_audio_path if profile else None,
+            profile.reference_transcript if profile else None,
+            {},
+        )
+        audio = engine.synthesize(text, handle, _voice_params(profile) if profile else {})
+        out_path = args.out or f"{entry.term}-pronunciation-preview.wav"
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        sf.write(out_path, audio, engine.sample_rate())
+    finally:
+        engine.teardown()
+
+    print(f"Wrote preview to {out_path}")
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(prog="audiobookify")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -331,6 +372,16 @@ def main(argv: Optional[List[str]] = None) -> None:
     lexicon_remove_parser.add_argument("--book", default=None)
     lexicon_remove_parser.add_argument("--db", default="audiobookify.db")
 
+    lexicon_preview_parser = lexicon_subparsers.add_parser(
+        "preview", help="Synthesize a sample sentence with a term's pronunciation override applied"
+    )
+    lexicon_preview_parser.add_argument("--term", required=True)
+    lexicon_preview_parser.add_argument("--sentence", default=None)
+    lexicon_preview_parser.add_argument("--voice-profile", default=None)
+    lexicon_preview_parser.add_argument("--out", default=None)
+    lexicon_preview_parser.add_argument("--device", default="auto")
+    lexicon_preview_parser.add_argument("--db", default="audiobookify.db")
+
     args = parser.parse_args(argv)
 
     if args.command == "generate":
@@ -349,6 +400,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             _handle_lexicon_list(args)
         elif args.lexicon_command == "remove":
             _handle_lexicon_remove(args)
+        elif args.lexicon_command == "preview":
+            _handle_lexicon_preview(args)
 
 
 if __name__ == "__main__":
