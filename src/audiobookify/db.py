@@ -51,9 +51,19 @@ CREATE TABLE IF NOT EXISTS lexicon_entries (
     book_id INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
     created_at REAL NOT NULL,
+    phonemes TEXT,
+    sample_audio_path TEXT,
     UNIQUE(book_id, term)
 );
 """
+
+
+def _migrate_lexicon_entries_columns(conn: sqlite3.Connection) -> None:
+    existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(lexicon_entries)")}
+    if "phonemes" not in existing_cols:
+        conn.execute("ALTER TABLE lexicon_entries ADD COLUMN phonemes TEXT")
+    if "sample_audio_path" not in existing_cols:
+        conn.execute("ALTER TABLE lexicon_entries ADD COLUMN sample_audio_path TEXT")
 
 
 def _row_to_book(row: sqlite3.Row) -> Book:
@@ -88,6 +98,7 @@ def _row_to_lexicon_entry(row: sqlite3.Row) -> LexiconEntry:
         id=row["id"], term=row["term"], override_value=row["override_value"],
         source=row["source"], scope=row["scope"], book_id=row["book_id"],
         notes=row["notes"], created_at=row["created_at"],
+        phonemes=row["phonemes"], sample_audio_path=row["sample_audio_path"],
     )
 
 
@@ -96,6 +107,7 @@ class Database:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        _migrate_lexicon_entries_columns(self.conn)
         self.conn.commit()
 
     def create_book(self, title: str, author: Optional[str], source_path: str,
@@ -191,12 +203,14 @@ class Database:
 
     def create_lexicon_entry(self, term: str, override_value: str, scope: str,
                               book_id: int = 0, notes: Optional[str] = None,
-                              source: str = "manual") -> LexiconEntry:
+                              source: str = "manual", phonemes: Optional[str] = None,
+                              sample_audio_path: Optional[str] = None) -> LexiconEntry:
         try:
             self.conn.execute(
                 "INSERT INTO lexicon_entries (term, override_value, source, scope, book_id, notes, "
-                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (term, override_value, source, scope, book_id, notes, time.time()),
+                "created_at, phonemes, sample_audio_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (term, override_value, source, scope, book_id, notes, time.time(),
+                 phonemes, sample_audio_path),
             )
         except sqlite3.IntegrityError:
             raise ValueError(f"a lexicon entry for '{term}' already exists in this scope")
@@ -229,3 +243,14 @@ class Database:
         if cur.rowcount == 0:
             raise KeyError(f"no lexicon entry for '{term}' in this scope")
         self.conn.commit()
+
+    def update_lexicon_entry_override(self, term: str, override_value: str,
+                                       book_id: int = 0) -> LexiconEntry:
+        cur = self.conn.execute(
+            "UPDATE lexicon_entries SET override_value = ? WHERE term = ? AND book_id = ?",
+            (override_value, term, book_id),
+        )
+        if cur.rowcount == 0:
+            raise KeyError(f"no lexicon entry for '{term}' in this scope")
+        self.conn.commit()
+        return self.find_lexicon_entry(term, book_id=book_id)

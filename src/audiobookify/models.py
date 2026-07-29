@@ -64,3 +64,5 @@ class LexiconEntry:
     book_id: int
     notes: Optional[str]
     created_at: float
+    phonemes: Optional[str] = None
+    sample_audio_path: Optional[str] = None

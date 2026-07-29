@@ -242,3 +242,101 @@ def test_delete_lexicon_entry_raises_keyerror_for_missing_entry(tmp_path):
     with pytest.raises(KeyError, match="Cadeyrn"):
         db.delete_lexicon_entry("Cadeyrn")
     db.close()
+
+
+def test_create_lexicon_entry_stores_phonemes_and_sample_audio_path(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    entry = db.create_lexicon_entry(
+        term="Cadeyrn", override_value="kuhdayrn", scope="global",
+        source="from_audio", phonemes="k ə d eɪ ɹ n", sample_audio_path="/clips/cadeyrn.wav",
+    )
+
+    assert entry.source == "from_audio"
+    assert entry.phonemes == "k ə d eɪ ɹ n"
+    assert entry.sample_audio_path == "/clips/cadeyrn.wav"
+
+    found = db.find_lexicon_entry("Cadeyrn")
+    assert found.phonemes == "k ə d eɪ ɹ n"
+    assert found.sample_audio_path == "/clips/cadeyrn.wav"
+    db.close()
+
+
+def test_create_lexicon_entry_defaults_phonemes_and_sample_audio_path_to_none(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    entry = db.create_lexicon_entry(term="Cadeyrn", override_value="KAH-dern", scope="global")
+
+    assert entry.phonemes is None
+    assert entry.sample_audio_path is None
+    db.close()
+
+
+def test_existing_m2_database_gains_new_lexicon_columns_via_migration(tmp_path):
+    # Simulates opening a database file created before M3 (no phonemes/sample_audio_path
+    # columns) - the migration in Database.__init__ must add them without raising.
+    import sqlite3
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE lexicon_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            term TEXT NOT NULL COLLATE NOCASE,
+            override_value TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'manual',
+            scope TEXT NOT NULL,
+            book_id INTEGER NOT NULL DEFAULT 0,
+            notes TEXT,
+            created_at REAL NOT NULL,
+            UNIQUE(book_id, term)
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(db_path)  # must not raise
+    entry = db.create_lexicon_entry(term="Cadeyrn", override_value="KAH-dern", scope="global")
+    assert entry.phonemes is None
+    db.close()
+
+
+def test_update_lexicon_entry_override_changes_value_and_keeps_metadata(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    db.create_lexicon_entry(
+        term="Cadeyrn", override_value="kuhdayrn", scope="global",
+        source="from_audio", phonemes="k ə d eɪ ɹ n", sample_audio_path="/clips/cadeyrn.wav",
+        notes="derived from audio",
+    )
+
+    updated = db.update_lexicon_entry_override("Cadeyrn", "kah-DAIRN")
+
+    assert updated.override_value == "kah-DAIRN"
+    assert updated.source == "from_audio"
+    assert updated.phonemes == "k ə d eɪ ɹ n"
+    assert updated.sample_audio_path == "/clips/cadeyrn.wav"
+    assert updated.notes == "derived from audio"
+    db.close()
+
+
+def test_update_lexicon_entry_override_raises_keyerror_for_missing_entry(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    with pytest.raises(KeyError, match="Cadeyrn"):
+        db.update_lexicon_entry_override("Cadeyrn", "kah-DAIRN")
+    db.close()
+
+
+def test_update_lexicon_entry_override_respects_book_scope(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="Test Book", author=None, source_path="/books/test.md",
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    db.create_lexicon_entry(term="Cadeyrn", override_value="KAH-dern", scope="global")
+    db.create_lexicon_entry(term="Cadeyrn", override_value="kah-DAIRN", scope="book", book_id=book.id)
+
+    db.update_lexicon_entry_override("Cadeyrn", "NEW-book-version", book_id=book.id)
+
+    assert db.find_lexicon_entry("Cadeyrn", book_id=book.id).override_value == "NEW-book-version"
+    assert db.find_lexicon_entry("Cadeyrn").override_value == "KAH-dern"  # global untouched
+    db.close()
