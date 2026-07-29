@@ -155,3 +155,16 @@ class Database:
     def list_voice_profiles(self) -> List[VoiceProfile]:
         rows = self.conn.execute("SELECT * FROM voice_profiles ORDER BY id").fetchall()
         return [_row_to_voice_profile(row) for row in rows]
+
+    def update_book_voice_profile(self, book_id: int, voice_profile_id: Optional[int]) -> None:
+        self.conn.execute(
+            "UPDATE books SET voice_profile_id = ? WHERE id = ?",
+            (voice_profile_id, book_id),
+        )
+        self.conn.commit()
+
+    def get_voice_profile_by_id(self, voice_profile_id: int) -> Optional[VoiceProfile]:
+        row = self.conn.execute(
+            "SELECT * FROM voice_profiles WHERE id = ?", (voice_profile_id,)
+        ).fetchone()
+        return _row_to_voice_profile(row) if row else None

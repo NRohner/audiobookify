@@ -3,14 +3,14 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+import soundfile as sf
+
 from .db import Database
 from .engines.chatterbox import ChatterboxEngine
 from .ingest import epub, markdown
 from .models import ChapterStatus, SourceFormat
 from .synth.pipeline import generate_book
 from .voice.validation import validate_reference_audio
-
-import soundfile as sf
 
 
 def _ingest(path: str, heading_level: int):
@@ -20,6 +20,26 @@ def _ingest(path: str, heading_level: int):
     if suffix == ".md":
         return markdown.parse(path, heading_level=heading_level), SourceFormat.MARKDOWN
     raise ValueError(f"unsupported input format: {suffix}")
+
+
+def _voice_params(profile) -> dict:
+    return {
+        "reference_audio": profile.reference_audio_path,
+        "reference_text": profile.reference_transcript,
+        "exaggeration": profile.exaggeration,
+        "cfg": profile.cfg_weight,
+        "temperature": profile.temperature,
+    }
+
+
+def _check_reference_audio_present(profile) -> None:
+    if profile is not None and not Path(profile.reference_audio_path).is_file():
+        print(
+            f"Error: reference audio for voice profile '{profile.name}' is missing: "
+            f"{profile.reference_audio_path}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def _handle_generate(args) -> None:
@@ -48,24 +68,41 @@ def _handle_generate(args) -> None:
             file=sys.stderr,
         )
 
-    profile = None
+    requested_profile = None
     if args.voice_profile:
-        profile = db.find_voice_profile_by_name(args.voice_profile)
-        if profile is None:
+        requested_profile = db.find_voice_profile_by_name(args.voice_profile)
+        if requested_profile is None:
             print(f"Error: no voice profile named '{args.voice_profile}'", file=sys.stderr)
             db.close()
             sys.exit(1)
+    requested_profile_id = requested_profile.id if requested_profile else None
+
+    if book.voice_profile_id is None:
+        # First time this book has been associated with a voice (or explicitly
+        # with none) - lock it in so later runs stay consistent.
+        db.update_book_voice_profile(book.id, requested_profile_id)
+        profile = requested_profile
+    elif book.voice_profile_id != requested_profile_id:
+        # A different voice than the one already used for this book's earlier
+        # chapters was requested - keep the original for consistency and warn
+        # loudly rather than silently mixing voices across chapters.
+        original = db.get_voice_profile_by_id(book.voice_profile_id) if book.voice_profile_id else None
+        print(
+            f"Warning: this book was previously generated with voice profile "
+            f"'{original.name if original else 'the default voice'}'; continuing to use that "
+            "voice for consistency. Pass a fresh --db to use a different voice.",
+            file=sys.stderr,
+        )
+        profile = original
+    else:
+        profile = requested_profile
+
+    _check_reference_audio_present(profile)
 
     voice_name = args.voice or (profile.name if profile else "default")
     voice_params = {"voice_name": voice_name}
     if profile:
-        voice_params.update({
-            "reference_audio": profile.reference_audio_path,
-            "reference_text": profile.reference_transcript,
-            "exaggeration": profile.exaggeration,
-            "cfg": profile.cfg_weight,
-            "temperature": profile.temperature,
-        })
+        voice_params.update(_voice_params(profile))
 
     engine = ChatterboxEngine()
     results = generate_book(book, engine, db, voice_params, device=args.device)
@@ -82,15 +119,16 @@ def _handle_generate(args) -> None:
 
 
 def _handle_voice_add(args) -> None:
+    if not args.name.strip():
+        print("Error: voice profile name must not be empty", file=sys.stderr)
+        sys.exit(1)
+
     reference_path = str(Path(args.reference).resolve())
     try:
         info = validate_reference_audio(reference_path)
     except (ValueError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
-
-    for warning in info.warnings:
-        print(f"Warning: {warning}", file=sys.stderr)
 
     db = Database(args.db)
     try:
@@ -103,6 +141,9 @@ def _handle_voice_add(args) -> None:
         print(f"Error: {exc}", file=sys.stderr)
         db.close()
         sys.exit(1)
+
+    for warning in info.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
 
     print(
         f"Created voice profile '{profile.name}' ({info.duration_seconds:.1f}s, "
@@ -133,19 +174,15 @@ def _handle_voice_preview(args) -> None:
         print(f"Error: no voice profile named '{args.name}'", file=sys.stderr)
         sys.exit(1)
 
+    _check_reference_audio_present(profile)
+
     engine = ChatterboxEngine()
     try:
         engine.load(args.device)
         handle = engine.clone_profile(profile.reference_audio_path, profile.reference_transcript, {})
-        audio = engine.synthesize(
-            args.text, handle,
-            {
-                "exaggeration": profile.exaggeration,
-                "cfg": profile.cfg_weight,
-                "temperature": profile.temperature,
-            },
-        )
+        audio = engine.synthesize(args.text, handle, _voice_params(profile))
         out_path = args.out or f"{profile.name}-preview.wav"
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         sf.write(out_path, audio, engine.sample_rate())
     finally:
         engine.teardown()

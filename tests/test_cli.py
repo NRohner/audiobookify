@@ -388,3 +388,157 @@ def test_generate_command_reports_missing_voice_profile(tmp_path, monkeypatch, c
 
     assert exc_info.value.code == 1
     assert "no voice profile named 'ghost'" in capsys.readouterr().err
+
+
+@requires_ffmpeg
+def test_generate_command_persists_voice_profile_association_on_first_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    cli.main([
+        "generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path),
+        "--voice-profile", "narrator-1",
+    ])
+
+    db = Database(str(db_path))
+    book = db.find_book_by_source(str(md_path.resolve()))
+    profile = db.find_voice_profile_by_name("narrator-1")
+    assert book.voice_profile_id == profile.id
+    db.close()
+
+
+@requires_ffmpeg
+def test_generate_command_uses_original_voice_for_new_chapters_after_profile_mismatch(
+    tmp_path, monkeypatch, capsys
+):
+    ref_path_a = tmp_path / "narrator-a.wav"
+    _write_reference_wav(ref_path_a)
+    ref_path_b = tmp_path / "narrator-b.wav"
+    _write_reference_wav(ref_path_b)
+    db_path = tmp_path / "test.db"
+
+    cli.main(["voice", "add", "--name", "narrator-a", "--reference", str(ref_path_a), "--db", str(db_path)])
+    cli.main(["voice", "add", "--name", "narrator-b", "--reference", str(ref_path_b), "--db", str(db_path)])
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n\n# Chapter Two\nBody two.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    class FlakyOnce(FakeEngine):
+        def synthesize(self, text_chunk, profile_handle, params):
+            # Markdown ingest strips the heading out of chapter.text (it's
+            # tracked separately as chapter.title), so the pipeline only ever
+            # passes body text to synthesize() - match on "body two", not the
+            # chapter title, or this never fires and the chapter never fails.
+            if "body two" in text_chunk.lower():
+                raise RuntimeError("pause before chapter two")
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    monkeypatch.setattr(cli, "ChatterboxEngine", FlakyOnce)
+    with pytest.raises(SystemExit):
+        cli.main([
+            "generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path),
+            "--voice-profile", "narrator-a",
+        ])
+    capsys.readouterr()
+
+    class RecordingEngine(FakeEngine):
+        clone_calls = []
+
+        def clone_profile(self, reference_audio, reference_text, params):
+            type(self).clone_calls.append(reference_audio)
+            return super().clone_profile(reference_audio, reference_text, params)
+
+    monkeypatch.setattr(cli, "ChatterboxEngine", RecordingEngine)
+    cli.main([
+        "generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path),
+        "--voice-profile", "narrator-b",
+    ])
+
+    captured = capsys.readouterr()
+    assert "Warning" in captured.err
+    assert "narrator-a" in captured.err
+    # chapter two (not yet done at the time of the mismatch) was synthesized
+    # with the originally-associated voice (narrator-a), not the requested one
+    assert RecordingEngine.clone_calls == [str(ref_path_a.resolve())]
+
+
+def test_voice_add_rejects_empty_name(tmp_path, capsys):
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["voice", "add", "--name", "  ", "--reference", str(ref_path), "--db", str(db_path)])
+
+    assert exc_info.value.code == 1
+    assert "must not be empty" in capsys.readouterr().err
+
+
+def test_voice_add_does_not_print_warnings_on_duplicate_name_rejection(tmp_path, capsys):
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path, duration_s=3.0)  # short enough to trigger a real warning
+
+    db_path = tmp_path / "test.db"
+    cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit):
+        cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+
+    captured = capsys.readouterr()
+    assert "Warning" not in captured.err
+    assert "already exists" in captured.err
+
+
+def test_voice_preview_creates_output_directory_if_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+    out_path = tmp_path / "nested" / "dir" / "preview.wav"
+
+    cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+    cli.main([
+        "voice", "preview", "--name", "narrator-1", "--text", "Hi.",
+        "--out", str(out_path), "--db", str(db_path),
+    ])
+
+    assert out_path.exists()
+
+
+@requires_ffmpeg
+def test_generate_command_reports_missing_reference_audio(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
+    ref_path.unlink()  # simulate the user moving/deleting the reference clip
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main([
+            "generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path),
+            "--voice-profile", "narrator-1",
+        ])
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "reference audio" in captured.err
+    assert "missing" in captured.err

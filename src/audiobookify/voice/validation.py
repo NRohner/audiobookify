@@ -7,6 +7,7 @@ import soundfile as sf
 ABSOLUTE_MIN_SECONDS = 1.0
 RECOMMENDED_MIN_SECONDS = 10.0
 RECOMMENDED_MAX_SECONDS = 30.0
+RECOMMENDED_MIN_SAMPLE_RATE = 16000
 
 CLIP_AMPLITUDE = 0.999
 CLIP_FRACTION_WARN = 0.001
@@ -50,6 +51,12 @@ def validate_reference_audio(path: str) -> ReferenceAudioInfo:
         )
 
     warnings: List[str] = []
+    if sample_rate < RECOMMENDED_MIN_SAMPLE_RATE:
+        warnings.append(
+            f"reference audio sample rate is {sample_rate} Hz, below the recommended "
+            f"{RECOMMENDED_MIN_SAMPLE_RATE} Hz minimum"
+        )
+
     if duration_seconds < RECOMMENDED_MIN_SECONDS:
         warnings.append(
             f"reference audio is {duration_seconds:.1f}s, shorter than the recommended "

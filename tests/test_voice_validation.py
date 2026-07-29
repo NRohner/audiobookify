@@ -99,3 +99,12 @@ def test_validate_reference_audio_warns_on_constant_background_noise(tmp_path):
     info = validate_reference_audio(str(path))
 
     assert any("background noise" in w for w in info.warnings)
+
+
+def test_validate_reference_audio_warns_on_low_sample_rate(tmp_path):
+    path = tmp_path / "low_rate.wav"
+    _write_wav(path, _clean_tone(15.0, sample_rate=8000), 8000)
+
+    info = validate_reference_audio(str(path))
+
+    assert any("sample rate" in w for w in info.warnings)

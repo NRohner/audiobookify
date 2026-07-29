@@ -107,3 +107,35 @@ def test_create_voice_profile_rejects_duplicate_name(tmp_path):
         db.create_voice_profile(name="dup", engine="chatterbox", reference_audio_path="/b.wav",
                                  reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8)
     db.close()
+
+
+def test_update_book_voice_profile_persists(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="Test Book", author=None, source_path="/books/test.md",
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    profile = db.create_voice_profile(
+        name="narrator-1", engine="chatterbox", reference_audio_path="/refs/clip.wav",
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+
+    db.update_book_voice_profile(book.id, profile.id)
+
+    reloaded = db.get_book(book.id)
+    assert reloaded.voice_profile_id == profile.id
+    db.close()
+
+
+def test_get_voice_profile_by_id(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    profile = db.create_voice_profile(
+        name="narrator-1", engine="chatterbox", reference_audio_path="/refs/clip.wav",
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+
+    found = db.get_voice_profile_by_id(profile.id)
+    assert found is not None
+    assert found.name == "narrator-1"
+    assert db.get_voice_profile_by_id(999999) is None
+    db.close()
