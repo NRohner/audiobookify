@@ -32,13 +32,15 @@ def _voice_params(profile) -> dict:
     }
 
 
-def _check_reference_audio_present(profile) -> None:
+def _check_reference_audio_present(profile, db: Optional[Database] = None) -> None:
     if profile is not None and not Path(profile.reference_audio_path).is_file():
         print(
             f"Error: reference audio for voice profile '{profile.name}' is missing: "
             f"{profile.reference_audio_path}",
             file=sys.stderr,
         )
+        if db is not None:
+            db.close()
         sys.exit(1)
 
 
@@ -77,7 +79,9 @@ def _handle_generate(args) -> None:
             sys.exit(1)
     requested_profile_id = requested_profile.id if requested_profile else None
 
-    if book.voice_profile_id is None:
+    any_chapter_done = any(c.status == ChapterStatus.DONE for c in db.list_chapters(book.id))
+
+    if not any_chapter_done:
         # First time this book has been associated with a voice (or explicitly
         # with none) - lock it in so later runs stay consistent.
         db.update_book_voice_profile(book.id, requested_profile_id)
@@ -97,7 +101,7 @@ def _handle_generate(args) -> None:
     else:
         profile = requested_profile
 
-    _check_reference_audio_present(profile)
+    _check_reference_audio_present(profile, db)
 
     voice_name = args.voice or (profile.name if profile else "default")
     voice_params = {"voice_name": voice_name}
@@ -122,6 +126,7 @@ def _handle_voice_add(args) -> None:
     if not args.name.strip():
         print("Error: voice profile name must not be empty", file=sys.stderr)
         sys.exit(1)
+    args.name = args.name.strip()
 
     reference_path = str(Path(args.reference).resolve())
     try:

@@ -472,6 +472,64 @@ def test_generate_command_uses_original_voice_for_new_chapters_after_profile_mis
     assert RecordingEngine.clone_calls == [str(ref_path_a.resolve())]
 
 
+@requires_ffmpeg
+def test_generate_command_keeps_default_voice_for_new_chapters_after_later_profile_request(
+    tmp_path, monkeypatch, capsys
+):
+    ref_path = tmp_path / "narrator-a.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main(["voice", "add", "--name", "narrator-a", "--reference", str(ref_path), "--db", str(db_path)])
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n\n# Chapter Two\nBody two.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    class FlakyOnce(FakeEngine):
+        def synthesize(self, text_chunk, profile_handle, params):
+            if "body two" in text_chunk.lower():
+                raise RuntimeError("pause before chapter two")
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    monkeypatch.setattr(cli, "ChatterboxEngine", FlakyOnce)
+    with pytest.raises(SystemExit):
+        cli.main(["generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path)])
+    capsys.readouterr()
+
+    class RecordingEngine(FakeEngine):
+        clone_calls = []
+
+        def clone_profile(self, reference_audio, reference_text, params):
+            type(self).clone_calls.append(reference_audio)
+            return super().clone_profile(reference_audio, reference_text, params)
+
+    monkeypatch.setattr(cli, "ChatterboxEngine", RecordingEngine)
+    cli.main([
+        "generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path),
+        "--voice-profile", "narrator-a",
+    ])
+
+    captured = capsys.readouterr()
+    assert "Warning" in captured.err
+    assert "default voice" in captured.err
+    # chapter two (not yet done at the time of the mismatch) stayed on the
+    # default voice - it must NOT have been cloned with narrator-a
+    assert RecordingEngine.clone_calls == [None]
+
+
+def test_voice_add_strips_whitespace_from_name(tmp_path):
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main(["voice", "add", "--name", "  narrator-1  ", "--reference", str(ref_path), "--db", str(db_path)])
+
+    db = Database(str(db_path))
+    assert db.find_voice_profile_by_name("narrator-1") is not None
+    db.close()
+
+
 def test_voice_add_rejects_empty_name(tmp_path, capsys):
     ref_path = tmp_path / "narrator.wav"
     _write_reference_wav(ref_path)
