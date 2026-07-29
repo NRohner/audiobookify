@@ -322,6 +322,31 @@ def _handle_lexicon_add_from_audio(args) -> None:
     db.close()
 
 
+def _handle_lexicon_edit(args) -> None:
+    args.term = args.term.strip()
+
+    if not args.respell.strip():
+        print("Error: lexicon respelling must not be empty", file=sys.stderr)
+        sys.exit(1)
+    args.respell = args.respell.strip()
+
+    db = Database(args.db)
+    book_id = 0
+    if args.book:
+        book = _resolve_book_for_lexicon(db, args.book)
+        book_id = book.id
+
+    try:
+        entry = db.update_lexicon_entry_override(args.term, args.respell, book_id=book_id)
+    except KeyError as exc:
+        print(f"Error: {exc.args[0]}", file=sys.stderr)
+        db.close()
+        sys.exit(1)
+
+    print(f"Updated pronunciation for '{entry.term}' -> '{entry.override_value}'")
+    db.close()
+
+
 def _handle_lexicon_list(args) -> None:
     db = Database(args.db)
     book_id = None
@@ -482,6 +507,14 @@ def main(argv: Optional[List[str]] = None) -> None:
     lexicon_remove_parser.add_argument("--book", default=None)
     lexicon_remove_parser.add_argument("--db", default="audiobookify.db")
 
+    lexicon_edit_parser = lexicon_subparsers.add_parser(
+        "edit", help="Correct the respelling for an existing pronunciation override"
+    )
+    lexicon_edit_parser.add_argument("--term", required=True)
+    lexicon_edit_parser.add_argument("--respell", required=True)
+    lexicon_edit_parser.add_argument("--book", default=None)
+    lexicon_edit_parser.add_argument("--db", default="audiobookify.db")
+
     lexicon_preview_parser = lexicon_subparsers.add_parser(
         "preview", help="Synthesize a sample sentence with a term's pronunciation override applied"
     )
@@ -513,6 +546,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             _handle_lexicon_list(args)
         elif args.lexicon_command == "remove":
             _handle_lexicon_remove(args)
+        elif args.lexicon_command == "edit":
+            _handle_lexicon_edit(args)
         elif args.lexicon_command == "preview":
             _handle_lexicon_preview(args)
 

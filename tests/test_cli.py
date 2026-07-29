@@ -1036,3 +1036,79 @@ def test_lexicon_list_still_shows_manual_entries_without_phonemes_column_crashin
     captured = capsys.readouterr()
     assert "Cadeyrn" in captured.out
     assert "manual" in captured.out
+
+
+def test_lexicon_edit_updates_respelling_and_keeps_metadata(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
+    audio_path = tmp_path / "cadeyrn.wav"
+    _write_reference_wav(audio_path, duration_s=0.6)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "lexicon", "add-from-audio", "--term", "Cadeyrn", "--audio", str(audio_path),
+        "--db", str(db_path),
+    ])
+    capsys.readouterr()
+
+    cli.main(["lexicon", "edit", "--term", "Cadeyrn", "--respell", "kah-DAIRN", "--db", str(db_path)])
+
+    captured = capsys.readouterr()
+    assert "Updated pronunciation for 'Cadeyrn' -> 'kah-DAIRN'" in captured.out
+
+    db = Database(str(db_path))
+    entry = db.find_lexicon_entry("Cadeyrn")
+    assert entry.override_value == "kah-DAIRN"
+    assert entry.source == "from_audio"  # provenance preserved
+    assert entry.phonemes == "k ə d eɪ ɹ n"
+    db.close()
+
+
+def test_lexicon_edit_reports_missing_entry(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["lexicon", "edit", "--term", "Ghost", "--respell", "GOST", "--db", str(db_path)])
+
+    assert exc_info.value.code == 1
+    assert "no lexicon entry" in capsys.readouterr().err
+
+
+def test_lexicon_edit_rejects_empty_respelling(tmp_path, capsys):
+    db_path = tmp_path / "test.db"
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "KAH-dern", "--db", str(db_path)])
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["lexicon", "edit", "--term", "Cadeyrn", "--respell", "   ", "--db", str(db_path)])
+
+    assert exc_info.value.code == 1
+    assert "must not be empty" in capsys.readouterr().err
+
+
+def test_lexicon_edit_respects_book_scope(tmp_path, monkeypatch):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not installed")
+    monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
+
+    md_path = tmp_path / "book.md"
+    md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    db_path = tmp_path / "test.db"
+
+    cli.main(["generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path)])
+    cli.main(["lexicon", "add", "--term", "Cadeyrn", "--respell", "GLOBAL-version", "--db", str(db_path)])
+    cli.main([
+        "lexicon", "add", "--term", "Cadeyrn", "--respell", "BOOK-version",
+        "--book", str(md_path), "--db", str(db_path),
+    ])
+
+    cli.main([
+        "lexicon", "edit", "--term", "Cadeyrn", "--respell", "BOOK-EDITED",
+        "--book", str(md_path), "--db", str(db_path),
+    ])
+
+    db = Database(str(db_path))
+    book = db.find_book_by_source(str(md_path.resolve()))
+    assert db.find_lexicon_entry("Cadeyrn", book_id=book.id).override_value == "BOOK-EDITED"
+    assert db.find_lexicon_entry("Cadeyrn").override_value == "GLOBAL-version"  # untouched
+    db.close()
