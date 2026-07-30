@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..db import Database
@@ -43,6 +43,17 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             "term": entry.term,
             "override_value": entry.override_value,
             "notes": entry.notes,
+        }
+
+    def _text_clip_to_dict(clip) -> dict:
+        return {
+            "id": clip.id,
+            "text": clip.text,
+            "voice_profile_id": clip.voice_profile_id,
+            "status": clip.status.value,
+            "progress": clip.progress,
+            "error": clip.error,
+            "created_at": clip.created_at,
         }
 
     def _book_to_dict(db: Database, book) -> dict:
@@ -226,6 +237,52 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             db.delete_lexicon_entry(term)
         except KeyError:
             raise HTTPException(status_code=404, detail="pronunciation entry not found")
+        return {"ok": True}
+
+    @app.post("/api/text-clips")
+    def create_text_clip(payload: dict = Body(...), db: Database = Depends(get_db)):
+        text = (payload.get("text") or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="text must not be empty")
+
+        voice_profile_id = payload.get("voice_profile_id")
+        if voice_profile_id is not None and db.get_voice_profile_by_id(voice_profile_id) is None:
+            raise HTTPException(status_code=404, detail="voice profile not found")
+
+        clip = db.create_text_clip(text=text, voice_profile_id=voice_profile_id)
+        return _text_clip_to_dict(clip)
+
+    @app.get("/api/text-clips")
+    def list_text_clips(db: Database = Depends(get_db)):
+        return [_text_clip_to_dict(c) for c in db.list_text_clips()]
+
+    @app.get("/api/text-clips/{clip_id}")
+    def get_text_clip(clip_id: int, db: Database = Depends(get_db)):
+        try:
+            clip = db.get_text_clip(clip_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="text clip not found")
+        return _text_clip_to_dict(clip)
+
+    @app.get("/api/text-clips/{clip_id}/audio")
+    def get_text_clip_audio(clip_id: int, db: Database = Depends(get_db)):
+        try:
+            clip = db.get_text_clip(clip_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="text clip not found")
+        if clip.status != JobStatus.DONE or not clip.output_path:
+            raise HTTPException(status_code=404, detail="audio not ready")
+        return FileResponse(clip.output_path, media_type="audio/mpeg", filename=f"text-clip-{clip.id}.mp3")
+
+    @app.delete("/api/text-clips/{clip_id}")
+    def delete_text_clip(clip_id: int, db: Database = Depends(get_db)):
+        try:
+            clip = db.get_text_clip(clip_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="text clip not found")
+        db.delete_text_clip(clip_id)
+        if clip.output_path and Path(clip.output_path).is_file():
+            Path(clip.output_path).unlink()
         return {"ok": True}
 
     resolved_dist = Path(frontend_dist) if frontend_dist else Path(__file__).resolve().parents[3] / "frontend" / "dist"

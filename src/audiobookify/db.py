@@ -2,7 +2,9 @@ import sqlite3
 import time
 from typing import List, Optional
 
-from .models import Book, Chapter, ChapterStatus, Job, JobStatus, LexiconEntry, SourceFormat, VoiceProfile
+from .models import (
+    Book, Chapter, ChapterStatus, Job, JobStatus, LexiconEntry, SourceFormat, TextClip, VoiceProfile,
+)
 from .ingest.base import RawChapter
 
 SCHEMA = """
@@ -66,6 +68,19 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at REAL,
     error TEXT
 );
+
+CREATE TABLE IF NOT EXISTS text_clips (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,
+    voice_profile_id INTEGER REFERENCES voice_profiles(id),
+    status TEXT NOT NULL DEFAULT 'queued',
+    progress REAL,
+    output_path TEXT,
+    created_at REAL NOT NULL,
+    started_at REAL,
+    finished_at REAL,
+    error TEXT
+);
 """
 
 
@@ -118,6 +133,15 @@ def _row_to_job(row: sqlite3.Row) -> Job:
         id=row["id"], chapter_id=row["chapter_id"], status=JobStatus(row["status"]),
         progress=row["progress"], created_at=row["created_at"],
         started_at=row["started_at"], finished_at=row["finished_at"], error=row["error"],
+    )
+
+
+def _row_to_text_clip(row: sqlite3.Row) -> TextClip:
+    return TextClip(
+        id=row["id"], text=row["text"], voice_profile_id=row["voice_profile_id"],
+        status=JobStatus(row["status"]), progress=row["progress"], output_path=row["output_path"],
+        created_at=row["created_at"], started_at=row["started_at"], finished_at=row["finished_at"],
+        error=row["error"],
     )
 
 
@@ -364,6 +388,74 @@ class Database:
     def reset_stale_generating_jobs(self) -> None:
         self.conn.execute(
             "UPDATE jobs SET status = ?, started_at = NULL WHERE status = ?",
+            (JobStatus.QUEUED.value, JobStatus.GENERATING.value),
+        )
+        self.conn.commit()
+
+    def create_text_clip(self, text: str, voice_profile_id: Optional[int]) -> TextClip:
+        cur = self.conn.execute(
+            "INSERT INTO text_clips (text, voice_profile_id, status, progress, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (text, voice_profile_id, JobStatus.QUEUED.value, 0.0, time.time()),
+        )
+        self.conn.commit()
+        return self.get_text_clip(cur.lastrowid)
+
+    def get_text_clip(self, clip_id: int) -> TextClip:
+        row = self.conn.execute("SELECT * FROM text_clips WHERE id = ?", (clip_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"no text clip with id {clip_id}")
+        return _row_to_text_clip(row)
+
+    def list_text_clips(self) -> List[TextClip]:
+        rows = self.conn.execute("SELECT * FROM text_clips ORDER BY id DESC").fetchall()
+        return [_row_to_text_clip(row) for row in rows]
+
+    def delete_text_clip(self, clip_id: int) -> None:
+        cur = self.conn.execute("DELETE FROM text_clips WHERE id = ?", (clip_id,))
+        if cur.rowcount == 0:
+            raise KeyError(f"no text clip with id {clip_id}")
+        self.conn.commit()
+
+    def pop_next_queued_text_clip(self) -> Optional[TextClip]:
+        row = self.conn.execute(
+            "SELECT id FROM text_clips WHERE status = ? ORDER BY created_at, id LIMIT 1",
+            (JobStatus.QUEUED.value,),
+        ).fetchone()
+        if row is None:
+            return None
+        clip_id = row["id"]
+        cur = self.conn.execute(
+            "UPDATE text_clips SET status = ?, started_at = ? WHERE id = ? AND status = ?",
+            (JobStatus.GENERATING.value, time.time(), clip_id, JobStatus.QUEUED.value),
+        )
+        self.conn.commit()
+        if cur.rowcount == 0:
+            return None  # claimed by another worker between the SELECT and UPDATE
+        return self.get_text_clip(clip_id)
+
+    def update_text_clip_progress(self, clip_id: int, progress: float) -> None:
+        self.conn.execute("UPDATE text_clips SET progress = ? WHERE id = ?", (progress, clip_id))
+        self.conn.commit()
+
+    def finish_text_clip(self, clip_id: int, status: JobStatus, output_path: Optional[str] = None,
+                          error: Optional[str] = None) -> None:
+        if status == JobStatus.DONE:
+            self.conn.execute(
+                "UPDATE text_clips SET status = ?, progress = 1.0, output_path = ?, "
+                "finished_at = ?, error = ? WHERE id = ?",
+                (status.value, output_path, time.time(), error, clip_id),
+            )
+        else:
+            self.conn.execute(
+                "UPDATE text_clips SET status = ?, finished_at = ?, error = ? WHERE id = ?",
+                (status.value, time.time(), error, clip_id),
+            )
+        self.conn.commit()
+
+    def reset_stale_generating_text_clips(self) -> None:
+        self.conn.execute(
+            "UPDATE text_clips SET status = ?, started_at = NULL WHERE status = ?",
             (JobStatus.QUEUED.value, JobStatus.GENERATING.value),
         )
         self.conn.commit()

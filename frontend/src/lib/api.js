@@ -40,7 +40,21 @@ export const api = {
     }),
   deletePronunciation: (term) =>
     request(`/api/pronunciations/${encodeURIComponent(term)}`, { method: "DELETE" }),
+
+  listTextClips: () => request("/api/text-clips"),
+  createTextClip: (text, voiceProfileId) =>
+    request("/api/text-clips", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice_profile_id: voiceProfileId }),
+    }),
+  getTextClip: (id) => request(`/api/text-clips/${id}`),
+  deleteTextClip: (id) => request(`/api/text-clips/${id}`, { method: "DELETE" }),
 };
+
+export function textClipInProgress(clip) {
+  return clip.status === "queued" || clip.status === "generating";
+}
 
 // A chapter with a queued job still reports status "pending" (chapters only flip to
 // "generating" once the worker actually picks the job up, which can take a while - e.g.

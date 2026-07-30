@@ -440,7 +440,8 @@ def _handle_worker(args) -> None:
     engine = ChatterboxEngine()
     engine.load(args.device)
     try:
-        worker.run_forever(db, engine, poll_interval=args.poll_interval)
+        worker.run_forever(db, engine, poll_interval=args.poll_interval,
+                            text_clip_output_dir=args.text_output_dir)
     finally:
         engine.teardown()
         db.close()
@@ -542,6 +543,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     worker_parser.add_argument("--device", default="auto")
     worker_parser.add_argument("--poll-interval", type=float, default=2.0)
     worker_parser.add_argument("--db", default="audiobookify.db")
+    worker_parser.add_argument("--text-output-dir", default=worker.DEFAULT_TEXT_CLIP_OUTPUT_DIR)
 
     args = parser.parse_args(argv)
 

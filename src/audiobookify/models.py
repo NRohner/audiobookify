@@ -85,3 +85,17 @@ class Job:
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     error: Optional[str] = None
+
+
+@dataclass
+class TextClip:
+    id: int
+    text: str
+    voice_profile_id: Optional[int]
+    status: JobStatus
+    progress: Optional[float]
+    output_path: Optional[str]
+    created_at: float
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+    error: Optional[str] = None

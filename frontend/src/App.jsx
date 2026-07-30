@@ -4,6 +4,7 @@ import HomePage from "./pages/HomePage.jsx";
 import BookDetailPage from "./pages/BookDetailPage.jsx";
 import VoicesPage from "./pages/VoicesPage.jsx";
 import PronunciationsPage from "./pages/PronunciationsPage.jsx";
+import TextPage from "./pages/TextPage.jsx";
 
 export default function App() {
   return (
@@ -13,6 +14,7 @@ export default function App() {
         <Route path="/books/:bookId" element={<BookDetailPage />} />
         <Route path="/voices" element={<VoicesPage />} />
         <Route path="/pronunciations" element={<PronunciationsPage />} />
+        <Route path="/text" element={<TextPage />} />
       </Route>
     </Routes>
   );

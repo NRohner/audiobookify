@@ -1252,7 +1252,7 @@ def test_worker_command_loads_engine_once_and_runs_forever(tmp_path, monkeypatch
     monkeypatch.setattr(cli, "ChatterboxEngine", FakeEngine)
     calls = []
 
-    def fake_run_forever(db, engine, poll_interval):
+    def fake_run_forever(db, engine, poll_interval, text_clip_output_dir):
         calls.append((db, engine, poll_interval))
 
     monkeypatch.setattr(cli.worker, "run_forever", fake_run_forever)

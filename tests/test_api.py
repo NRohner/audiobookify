@@ -451,3 +451,99 @@ def test_delete_pronunciation_returns_404_for_missing_term(tmp_path):
     response = client.delete("/api/pronunciations/Nope")
 
     assert response.status_code == 404
+
+
+def test_create_text_clip_queues_it_with_default_voice(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.post("/api/text-clips", json={"text": "Hello there.", "voice_profile_id": None})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["text"] == "Hello there."
+    assert body["voice_profile_id"] is None
+    assert body["status"] == "queued"
+    assert body["progress"] == 0.0
+
+
+def test_create_text_clip_rejects_empty_text(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.post("/api/text-clips", json={"text": "   ", "voice_profile_id": None})
+
+    assert response.status_code == 400
+    assert "text must not be empty" in response.json()["detail"]
+
+
+def test_create_text_clip_returns_404_for_unknown_voice_profile(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.post("/api/text-clips", json={"text": "Hello there.", "voice_profile_id": 999})
+
+    assert response.status_code == 404
+
+
+def test_list_text_clips_returns_most_recent_first(tmp_path):
+    client = _client(tmp_path)
+    client.post("/api/text-clips", json={"text": "First", "voice_profile_id": None})
+    client.post("/api/text-clips", json={"text": "Second", "voice_profile_id": None})
+
+    response = client.get("/api/text-clips")
+
+    assert response.status_code == 200
+    assert [c["text"] for c in response.json()] == ["Second", "First"]
+
+
+def test_get_text_clip_returns_404_for_unknown_id(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.get("/api/text-clips/999")
+
+    assert response.status_code == 404
+
+
+def test_get_text_clip_audio_returns_404_before_generation_completes(tmp_path):
+    client = _client(tmp_path)
+    created = client.post("/api/text-clips", json={"text": "Hello", "voice_profile_id": None}).json()
+
+    response = client.get(f"/api/text-clips/{created['id']}/audio")
+
+    assert response.status_code == 404
+
+
+@requires_ffmpeg
+def test_worker_processes_queued_text_clip_and_audio_becomes_available(tmp_path):
+    client = _client(tmp_path)
+    created = client.post("/api/text-clips", json={"text": "Hello there.", "voice_profile_id": None}).json()
+
+    db = Database(str(tmp_path / "test.db"))
+    engine = FakeEngine()
+    engine.load("cpu")
+    run_worker_once(db, engine, {}, text_clip_output_dir=str(tmp_path / "text_clips"))
+    db.close()
+
+    detail = client.get(f"/api/text-clips/{created['id']}").json()
+    assert detail["status"] == "done"
+    assert detail["progress"] == 1.0
+
+    response = client.get(f"/api/text-clips/{created['id']}/audio")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/mpeg"
+
+
+def test_delete_text_clip_removes_it(tmp_path):
+    client = _client(tmp_path)
+    created = client.post("/api/text-clips", json={"text": "Hello", "voice_profile_id": None}).json()
+
+    response = client.delete(f"/api/text-clips/{created['id']}")
+
+    assert response.status_code == 200
+    assert client.get("/api/text-clips").json() == []
+
+
+def test_delete_text_clip_returns_404_for_unknown_id(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.delete("/api/text-clips/999")
+
+    assert response.status_code == 404

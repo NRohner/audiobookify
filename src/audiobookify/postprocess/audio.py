@@ -1,7 +1,7 @@
 import re
 import subprocess
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import soundfile as sf
@@ -54,3 +54,30 @@ def export_chapter_mp3(audio: np.ndarray, sample_rate: int, output_dir: str, ord
     tags.save()
 
     return str(mp3_path)
+
+
+def export_mp3(audio: np.ndarray, sample_rate: int, output_path: str,
+                title: Optional[str] = None, artist: Optional[str] = None) -> str:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    wav_path = output_path.with_suffix(".tmp.wav")
+    sf.write(str(wav_path), audio, sample_rate)
+
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(wav_path), "-codec:a", "libmp3lame", "-qscale:a", "2", str(output_path)],
+        check=True, capture_output=True,
+    )
+    wav_path.unlink()
+
+    if title or artist:
+        tags = MP3(str(output_path))
+        if tags.tags is None:
+            tags.add_tags()
+        if title:
+            tags.tags.add(TIT2(encoding=3, text=title))
+        if artist:
+            tags.tags.add(TPE1(encoding=3, text=artist))
+        tags.save()
+
+    return str(output_path)

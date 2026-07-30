@@ -1,9 +1,10 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { BookOpen, Home, Mic, SpellCheck2 } from "lucide-react";
+import { BookOpen, Home, Mic, SpellCheck2, Type } from "lucide-react";
 import ThemeToggle from "./ThemeToggle.jsx";
 
 const navItems = [
   { to: "/", label: "Home", icon: Home, end: true },
+  { to: "/text", label: "Text", icon: Type },
   { to: "/voices", label: "Voices", icon: Mic },
   { to: "/pronunciations", label: "Pronunciations", icon: SpellCheck2 },
 ];
