@@ -15,6 +15,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "python-multipart>=0.0.9",
+    "setuptools<81",  # resemble-perth (via chatterbox-tts) imports pkg_resources, removed in setuptools 81
 ]
 
 [project.optional-dependencies]

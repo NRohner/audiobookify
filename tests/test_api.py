@@ -1,6 +1,9 @@
+import io
 import shutil
 
+import numpy as np
 import pytest
+import soundfile as sf
 from fastapi.testclient import TestClient
 
 from audiobookify.api.app import create_app
@@ -15,6 +18,21 @@ requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffm
 def _client(tmp_path):
     app = create_app(db_path=str(tmp_path / "test.db"), upload_dir=str(tmp_path / "uploads"))
     return TestClient(app)
+
+
+def _clean_tone_wav_bytes(total_duration_s=15.0, sample_rate=22050, amplitude=0.6):
+    """A tone followed by a silent tail - passes validate_reference_audio cleanly."""
+    n_total = int(total_duration_s * sample_rate)
+    n_silence = int(n_total * 0.1)
+    n_tone = n_total - n_silence
+    t = np.linspace(0, n_tone / sample_rate, n_tone, endpoint=False)
+    tone = (amplitude * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    silence = np.zeros(n_silence, dtype=np.float32)
+    samples = np.concatenate([tone, silence])
+    buf = io.BytesIO()
+    sf.write(buf, samples, sample_rate, format="WAV")
+    buf.seek(0)
+    return buf.read()
 
 
 def test_create_book_ingests_uploaded_markdown_and_returns_chapters(tmp_path):
@@ -141,6 +159,103 @@ def test_generate_endpoint_returns_404_for_unknown_book(tmp_path):
     assert response.status_code == 404
 
 
+def test_generate_chapter_endpoint_queues_only_that_chapter(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/books", files={"file": ("book.md", b"# One\nA.\n\n# Two\nB.\n", "text/markdown")},
+        data={"output_dir": str(tmp_path / "out")},
+    ).json()
+    chapter_ids = [c["id"] for c in created["chapters"]]
+
+    response = client.post(f"/api/books/{created['id']}/chapters/{chapter_ids[0]}/generate")
+
+    assert response.status_code == 200
+    assert response.json()["job_id"] is not None
+
+    db = Database(str(tmp_path / "test.db"))
+    assert db.latest_job_for_chapter(chapter_ids[0]).status == JobStatus.QUEUED
+    assert db.latest_job_for_chapter(chapter_ids[1]) is None
+    db.close()
+
+
+def test_generate_chapter_endpoint_does_not_requeue_an_already_queued_chapter(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/books", files={"file": ("book.md", b"# One\nA.\n", "text/markdown")},
+        data={"output_dir": str(tmp_path / "out")},
+    ).json()
+    chapter_id = created["chapters"][0]["id"]
+    client.post(f"/api/books/{created['id']}/chapters/{chapter_id}/generate")
+
+    second = client.post(f"/api/books/{created['id']}/chapters/{chapter_id}/generate")
+
+    assert second.status_code == 200
+    assert second.json()["job_id"] is None
+
+
+@requires_ffmpeg
+def test_generate_chapter_endpoint_does_not_requeue_an_already_done_chapter(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/books", files={"file": ("book.md", b"# One\nA.\n", "text/markdown")},
+        data={"output_dir": str(tmp_path / "out")},
+    ).json()
+    chapter_id = created["chapters"][0]["id"]
+    client.post(f"/api/books/{created['id']}/chapters/{chapter_id}/generate")
+
+    db = Database(str(tmp_path / "test.db"))
+    engine = FakeEngine()
+    engine.load("cpu")
+    run_worker_once(db, engine, {})
+    db.close()
+
+    response = client.post(f"/api/books/{created['id']}/chapters/{chapter_id}/generate")
+
+    assert response.json()["job_id"] is None
+
+
+def test_generate_chapter_endpoint_returns_404_for_unknown_book(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/books", files={"file": ("book.md", b"# One\nA.\n", "text/markdown")},
+        data={"output_dir": str(tmp_path / "out")},
+    ).json()
+    chapter_id = created["chapters"][0]["id"]
+
+    response = client.post(f"/api/books/999/chapters/{chapter_id}/generate")
+
+    assert response.status_code == 404
+
+
+def test_generate_chapter_endpoint_returns_404_for_unknown_chapter(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/books", files={"file": ("book.md", b"# One\nA.\n", "text/markdown")},
+        data={"output_dir": str(tmp_path / "out")},
+    ).json()
+
+    response = client.post(f"/api/books/{created['id']}/chapters/999/generate")
+
+    assert response.status_code == 404
+
+
+def test_generate_chapter_endpoint_returns_404_when_chapter_belongs_to_a_different_book(tmp_path):
+    client = _client(tmp_path)
+    book_a = client.post(
+        "/api/books", files={"file": ("a.md", b"# One\nA.\n", "text/markdown")},
+        data={"output_dir": str(tmp_path / "out")},
+    ).json()
+    book_b = client.post(
+        "/api/books", files={"file": ("b.md", b"# One\nA.\n", "text/markdown")},
+        data={"output_dir": str(tmp_path / "out")},
+    ).json()
+    other_chapter_id = book_b["chapters"][0]["id"]
+
+    response = client.post(f"/api/books/{book_a['id']}/chapters/{other_chapter_id}/generate")
+
+    assert response.status_code == 404
+
+
 def test_create_app_serves_built_frontend_index_when_dist_dir_provided(tmp_path):
     dist_dir = tmp_path / "dist"
     dist_dir.mkdir()
@@ -186,3 +301,153 @@ def test_book_detail_reflects_job_progress_after_worker_processes_it(tmp_path):
     detail = client.get(f"/api/books/{created['id']}").json()
     assert detail["chapters"][0]["status"] == "done"
     assert detail["chapters"][0]["progress"] == 1.0
+
+
+def test_create_voice_uploads_reference_audio_and_returns_profile(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/api/voices",
+        files={"file": ("ref.wav", _clean_tone_wav_bytes(), "audio/wav")},
+        data={"name": "narrator-1", "exaggeration": "0.5", "cfg_weight": "0.5", "temperature": "0.8"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "narrator-1"
+    assert body["engine"] == "chatterbox"
+    assert body["warnings"] == []
+
+
+def test_create_voice_rejects_audio_too_short(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/api/voices",
+        files={"file": ("ref.wav", _clean_tone_wav_bytes(total_duration_s=0.3), "audio/wav")},
+        data={"name": "narrator-1"},
+    )
+
+    assert response.status_code == 400
+    assert "too short" in response.json()["detail"]
+
+
+def test_create_voice_rejects_duplicate_name(tmp_path):
+    client = _client(tmp_path)
+    client.post("/api/voices", files={"file": ("ref.wav", _clean_tone_wav_bytes(), "audio/wav")},
+                data={"name": "dup"})
+
+    response = client.post("/api/voices", files={"file": ("ref.wav", _clean_tone_wav_bytes(), "audio/wav")},
+                            data={"name": "dup"})
+
+    assert response.status_code == 400
+    assert "dup" in response.json()["detail"]
+
+
+def test_list_voices_returns_all_profiles(tmp_path):
+    client = _client(tmp_path)
+    client.post("/api/voices", files={"file": ("a.wav", _clean_tone_wav_bytes(), "audio/wav")},
+                data={"name": "a"})
+    client.post("/api/voices", files={"file": ("b.wav", _clean_tone_wav_bytes(), "audio/wav")},
+                data={"name": "b"})
+
+    response = client.get("/api/voices")
+
+    assert response.status_code == 200
+    assert [v["name"] for v in response.json()] == ["a", "b"]
+
+
+def test_delete_voice_removes_profile(tmp_path):
+    client = _client(tmp_path)
+    created = client.post("/api/voices", files={"file": ("a.wav", _clean_tone_wav_bytes(), "audio/wav")},
+                           data={"name": "a"}).json()
+
+    response = client.delete(f"/api/voices/{created['id']}")
+
+    assert response.status_code == 200
+    assert client.get("/api/voices").json() == []
+
+
+def test_delete_voice_returns_404_for_unknown_id(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.delete("/api/voices/999")
+
+    assert response.status_code == 404
+
+
+def test_assign_voice_to_book_persists(tmp_path):
+    client = _client(tmp_path)
+    book = client.post("/api/books", files={"file": ("book.md", b"# One\nA.\n", "text/markdown")},
+                        data={"output_dir": str(tmp_path / "out")}).json()
+    voice = client.post("/api/voices", files={"file": ("a.wav", _clean_tone_wav_bytes(), "audio/wav")},
+                         data={"name": "a"}).json()
+
+    response = client.patch(f"/api/books/{book['id']}/voice", json={"voice_profile_id": voice["id"]})
+
+    assert response.status_code == 200
+    assert client.get(f"/api/books/{book['id']}").json()["voice_profile_id"] == voice["id"]
+
+
+def test_assign_voice_to_book_returns_404_for_unknown_book(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.patch("/api/books/999/voice", json={"voice_profile_id": None})
+
+    assert response.status_code == 404
+
+
+def test_list_pronunciations_returns_global_entries(tmp_path):
+    client = _client(tmp_path)
+    client.post("/api/pronunciations", json={"term": "Cadeyrn", "override_value": "KAH-dern"})
+
+    response = client.get("/api/pronunciations")
+
+    assert response.status_code == 200
+    assert response.json()[0]["term"] == "Cadeyrn"
+
+
+def test_create_pronunciation_rejects_duplicate_term(tmp_path):
+    client = _client(tmp_path)
+    client.post("/api/pronunciations", json={"term": "Cadeyrn", "override_value": "KAH-dern"})
+
+    response = client.post("/api/pronunciations", json={"term": "Cadeyrn", "override_value": "kay-DERN"})
+
+    assert response.status_code == 400
+    assert "Cadeyrn" in response.json()["detail"]
+
+
+def test_update_pronunciation_override_value(tmp_path):
+    client = _client(tmp_path)
+    client.post("/api/pronunciations", json={"term": "Cadeyrn", "override_value": "KAH-dern"})
+
+    response = client.patch("/api/pronunciations/Cadeyrn", json={"override_value": "kay-DERN"})
+
+    assert response.status_code == 200
+    assert response.json()["override_value"] == "kay-DERN"
+
+
+def test_update_pronunciation_returns_404_for_missing_term(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.patch("/api/pronunciations/Nope", json={"override_value": "x"})
+
+    assert response.status_code == 404
+
+
+def test_delete_pronunciation_entry(tmp_path):
+    client = _client(tmp_path)
+    client.post("/api/pronunciations", json={"term": "Cadeyrn", "override_value": "KAH-dern"})
+
+    response = client.delete("/api/pronunciations/Cadeyrn")
+
+    assert response.status_code == 200
+    assert client.get("/api/pronunciations").json() == []
+
+
+def test_delete_pronunciation_returns_404_for_missing_term(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.delete("/api/pronunciations/Nope")
+
+    assert response.status_code == 404

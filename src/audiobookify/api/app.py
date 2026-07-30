@@ -4,13 +4,14 @@ from pathlib import Path
 
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..db import Database
 from ..ingest import ingest_by_path
 from ..models import ChapterStatus, JobStatus
+from ..voice.validation import validate_reference_audio
 
 
 def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
@@ -24,6 +25,25 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             yield db
         finally:
             db.close()
+
+    def _voice_to_dict(profile, warnings: Optional[list] = None) -> dict:
+        return {
+            "id": profile.id,
+            "name": profile.name,
+            "engine": profile.engine,
+            "reference_transcript": profile.reference_transcript,
+            "exaggeration": profile.exaggeration,
+            "cfg_weight": profile.cfg_weight,
+            "temperature": profile.temperature,
+            "warnings": warnings or [],
+        }
+
+    def _lexicon_to_dict(entry) -> dict:
+        return {
+            "term": entry.term,
+            "override_value": entry.override_value,
+            "notes": entry.notes,
+        }
 
     def _book_to_dict(db: Database, book) -> dict:
         chapters = []
@@ -104,6 +124,109 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             queued_job_ids.append(job.id)
 
         return {"queued_job_ids": queued_job_ids}
+
+    @app.post("/api/books/{book_id}/chapters/{chapter_id}/generate")
+    def generate_chapter(book_id: int, chapter_id: int, db: Database = Depends(get_db)):
+        try:
+            db.get_book(book_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="book not found")
+
+        try:
+            chapter = db.get_chapter(chapter_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="chapter not found")
+        if chapter.book_id != book_id:
+            raise HTTPException(status_code=404, detail="chapter not found")
+
+        if chapter.status == ChapterStatus.DONE:
+            return {"job_id": None}
+        latest = db.latest_job_for_chapter(chapter.id)
+        if latest is not None and latest.status in (JobStatus.QUEUED, JobStatus.GENERATING):
+            return {"job_id": None}
+
+        job = db.create_job(chapter.id)
+        return {"job_id": job.id}
+
+    @app.patch("/api/books/{book_id}/voice")
+    def assign_voice(book_id: int, payload: dict = Body(...), db: Database = Depends(get_db)):
+        try:
+            db.get_book(book_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="book not found")
+        db.update_book_voice_profile(book_id, payload.get("voice_profile_id"))
+        return {"ok": True}
+
+    @app.post("/api/voices")
+    def create_voice(file: UploadFile = File(...), name: str = Form(...),
+                      reference_transcript: Optional[str] = Form(None),
+                      exaggeration: float = Form(0.5), cfg_weight: float = Form(0.5),
+                      temperature: float = Form(0.8), db: Database = Depends(get_db)):
+        staged_dir = Path(upload_dir) / uuid.uuid4().hex
+        staged_dir.mkdir(parents=True, exist_ok=True)
+        staged_path = staged_dir / Path(file.filename).name
+        staged_path.write_bytes(file.file.read())
+
+        try:
+            info = validate_reference_audio(str(staged_path.resolve()))
+        except ValueError as exc:
+            shutil.rmtree(staged_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        try:
+            profile = db.create_voice_profile(
+                name=name, engine="chatterbox", reference_audio_path=str(staged_path.resolve()),
+                reference_transcript=reference_transcript, exaggeration=exaggeration,
+                cfg_weight=cfg_weight, temperature=temperature,
+            )
+        except ValueError as exc:
+            shutil.rmtree(staged_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        return _voice_to_dict(profile, warnings=info.warnings)
+
+    @app.get("/api/voices")
+    def list_voices(db: Database = Depends(get_db)):
+        return [_voice_to_dict(p) for p in db.list_voice_profiles()]
+
+    @app.delete("/api/voices/{voice_id}")
+    def delete_voice(voice_id: int, db: Database = Depends(get_db)):
+        try:
+            db.delete_voice_profile(voice_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="voice profile not found")
+        return {"ok": True}
+
+    @app.get("/api/pronunciations")
+    def list_pronunciations(db: Database = Depends(get_db)):
+        return [_lexicon_to_dict(e) for e in db.list_lexicon_entries()]
+
+    @app.post("/api/pronunciations")
+    def create_pronunciation(payload: dict = Body(...), db: Database = Depends(get_db)):
+        try:
+            entry = db.create_lexicon_entry(
+                term=payload["term"], override_value=payload["override_value"], scope="global",
+                notes=payload.get("notes"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return _lexicon_to_dict(entry)
+
+    @app.patch("/api/pronunciations/{term}")
+    def update_pronunciation(term: str, payload: dict = Body(...), db: Database = Depends(get_db)):
+        try:
+            entry = db.update_lexicon_entry_override(term, payload["override_value"])
+        except KeyError:
+            raise HTTPException(status_code=404, detail="pronunciation entry not found")
+        return _lexicon_to_dict(entry)
+
+    @app.delete("/api/pronunciations/{term}")
+    def delete_pronunciation(term: str, db: Database = Depends(get_db)):
+        try:
+            db.delete_lexicon_entry(term)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="pronunciation entry not found")
+        return {"ok": True}
 
     resolved_dist = Path(frontend_dist) if frontend_dist else Path(__file__).resolve().parents[3] / "frontend" / "dist"
     if resolved_dist.is_dir():

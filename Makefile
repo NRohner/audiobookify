@@ -21,14 +21,14 @@ build:
 
 up: build
 	mkdir -p .run
-	$(VENV)/bin/uvicorn audiobookify.api.app:create_app --factory --host 127.0.0.1 --port 8000 & echo $$! > .run/api.pid
-	$(VENV)/bin/audiobookify worker & echo $$! > .run/worker.pid
+	HF_HUB_OFFLINE=1 $(VENV)/bin/uvicorn audiobookify.api.app:create_app --factory --host 127.0.0.1 --port 8000 & echo $$! > .run/api.pid
+	HF_HUB_OFFLINE=1 $(VENV)/bin/audiobookify worker & echo $$! > .run/worker.pid
 	@echo "audiobookify running at http://127.0.0.1:8000 - 'make down' to stop."
 
 dev:
 	mkdir -p .run
-	$(VENV)/bin/uvicorn audiobookify.api.app:create_app --factory --reload --host 127.0.0.1 --port 8000 & echo $$! > .run/api.pid
-	$(VENV)/bin/audiobookify worker & echo $$! > .run/worker.pid
+	HF_HUB_OFFLINE=1 $(VENV)/bin/uvicorn audiobookify.api.app:create_app --factory --reload --host 127.0.0.1 --port 8000 & echo $$! > .run/api.pid
+	HF_HUB_OFFLINE=1 $(VENV)/bin/audiobookify worker & echo $$! > .run/worker.pid
 	cd frontend && npm run dev & echo $$! > .run/frontend.pid
 	@echo "dev stack running - api http://127.0.0.1:8000, frontend http://127.0.0.1:5173 - 'make down' to stop."
 

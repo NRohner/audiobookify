@@ -237,6 +237,14 @@ class Database:
         ).fetchone()
         return _row_to_voice_profile(row) if row else None
 
+    def delete_voice_profile(self, voice_profile_id: int) -> None:
+        cur = self.conn.execute(
+            "DELETE FROM voice_profiles WHERE id = ?", (voice_profile_id,)
+        )
+        if cur.rowcount == 0:
+            raise KeyError(f"no voice profile with id {voice_profile_id}")
+        self.conn.commit()
+
     def create_lexicon_entry(self, term: str, override_value: str, scope: str,
                               book_id: int = 0, notes: Optional[str] = None,
                               source: str = "manual", phonemes: Optional[str] = None,

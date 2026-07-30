@@ -141,6 +141,26 @@ def test_get_voice_profile_by_id(tmp_path):
     db.close()
 
 
+def test_delete_voice_profile_removes_it(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    profile = db.create_voice_profile(
+        name="narrator-1", engine="chatterbox", reference_audio_path="/refs/clip.wav",
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+
+    db.delete_voice_profile(profile.id)
+
+    assert db.get_voice_profile_by_id(profile.id) is None
+    db.close()
+
+
+def test_delete_voice_profile_raises_keyerror_for_missing_id(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    with pytest.raises(KeyError, match="999999"):
+        db.delete_voice_profile(999999)
+    db.close()
+
+
 def test_create_and_find_global_lexicon_entry(tmp_path):
     db = Database(str(tmp_path / "test.db"))
     entry = db.create_lexicon_entry(term="Cadeyrn", override_value="KAH-dern", scope="global")
