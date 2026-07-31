@@ -1,4 +1,5 @@
 import io
+import os
 import shutil
 
 import numpy as np
@@ -547,3 +548,72 @@ def test_delete_text_clip_returns_404_for_unknown_id(tmp_path):
     response = client.delete("/api/text-clips/999")
 
     assert response.status_code == 404
+
+
+def test_browse_dir_lists_subdirectories_with_writability(tmp_path):
+    client = _client(tmp_path)
+    (tmp_path / "books").mkdir()
+    (tmp_path / "locked").mkdir()
+    os.chmod(tmp_path / "locked", 0o500)
+    (tmp_path / "afile.txt").write_text("not a directory")
+
+    try:
+        response = client.get("/api/browse-dir", params={"path": str(tmp_path)})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["path"] == str(tmp_path.resolve())
+        assert body["parent"] == str(tmp_path.resolve().parent)
+        entries = {e["name"]: e["writable"] for e in body["entries"]}
+        # Check that the key directories exist with correct writability
+        assert entries["books"] is True
+        assert entries["locked"] is False
+    finally:
+        os.chmod(tmp_path / "locked", 0o700)
+
+
+def test_browse_dir_returns_404_for_a_nonexistent_path(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.get("/api/browse-dir", params={"path": str(tmp_path / "nope")})
+
+    assert response.status_code == 404
+
+
+def test_browse_dir_parent_is_none_at_filesystem_root(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.get("/api/browse-dir", params={"path": "/"})
+
+    assert response.status_code == 200
+    assert response.json()["parent"] is None
+
+
+def test_validate_output_dir_reports_writable_for_a_creatable_path(tmp_path):
+    client = _client(tmp_path)
+    new_dir = tmp_path / "brand-new-book-folder"
+
+    response = client.get("/api/validate-output-dir", params={"path": str(new_dir)})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["writable"] is True
+    assert body["error"] is None
+    assert new_dir.is_dir()
+
+
+def test_validate_output_dir_reports_error_for_a_permission_denied_path(tmp_path):
+    client = _client(tmp_path)
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    os.chmod(locked, 0o500)
+
+    try:
+        response = client.get("/api/validate-output-dir", params={"path": str(locked)})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["writable"] is False
+        assert body["error"] is not None
+    finally:
+        os.chmod(locked, 0o700)

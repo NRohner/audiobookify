@@ -14,6 +14,17 @@ from ..models import ChapterStatus, JobStatus
 from ..voice.validation import validate_reference_audio
 
 
+def _check_writable(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".audiobookify_write_test"
+        probe.write_text("")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
 def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
                 frontend_dist: Optional[str] = None) -> FastAPI:
     app = FastAPI()
@@ -116,6 +127,40 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         except KeyError:
             raise HTTPException(status_code=404, detail="book not found")
         return _book_to_dict(db, book)
+
+    @app.get("/api/browse-dir")
+    def browse_dir(path: Optional[str] = None):
+        current = Path(path).expanduser().resolve() if path else Path.home().resolve()
+        if not current.is_dir():
+            raise HTTPException(status_code=404, detail=f"not a directory: {current}")
+
+        try:
+            children = sorted(current.iterdir())
+        except PermissionError:
+            children = []
+
+        entries = [
+            {"name": child.name, "writable": _check_writable(child)}
+            for child in children if child.is_dir()
+        ]
+        parent = str(current.parent) if current.parent != current else None
+
+        return {
+            "path": str(current),
+            "parent": parent,
+            "writable": _check_writable(current),
+            "entries": entries,
+        }
+
+    @app.get("/api/validate-output-dir")
+    def validate_output_dir(path: str):
+        resolved = Path(path).expanduser().resolve()
+        if _check_writable(resolved):
+            return {"path": str(resolved), "writable": True, "error": None}
+        return {
+            "path": str(resolved), "writable": False,
+            "error": f"cannot write to '{resolved}' — check the folder exists and you have permission",
+        }
 
     @app.post("/api/books/{book_id}/generate")
     def generate(book_id: int, db: Database = Depends(get_db)):
