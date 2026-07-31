@@ -5,7 +5,12 @@ PIP := $(VENV)/bin/pip
 # On WSL, npm/node on PATH can resolve to a Windows install (via interop with
 # /mnt/c/...), which fails on WSL-style paths. Prefer a native nvm-installed node
 # when present so `make build`/`make dev` work the same on WSL as on macOS/Linux.
-NVM_NODE_BIN := $(firstword $(wildcard $(HOME)/.nvm/versions/node/*/bin))
+# Use nvm's default alias (not the alphabetically-first version dir) so this
+# matches whatever `nvm use default` gives you in an interactive shell -
+# picking the wrong installed version here breaks on APIs newer versions add
+# (e.g. node:crypto.getRandomValues, missing before Node 17.4).
+NVM_DEFAULT := $(shell cat $(HOME)/.nvm/alias/default 2>/dev/null)
+NVM_NODE_BIN := $(firstword $(wildcard $(HOME)/.nvm/versions/node/v$(NVM_DEFAULT)*/bin))
 ifneq ($(NVM_NODE_BIN),)
 export PATH := $(NVM_NODE_BIN):$(PATH)
 endif
