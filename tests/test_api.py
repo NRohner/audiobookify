@@ -568,6 +568,8 @@ def test_browse_dir_lists_subdirectories_with_writability(tmp_path):
         # Check that the key directories exist with correct writability
         assert entries["books"] is True
         assert entries["locked"] is False
+        # Check that non-directory files are filtered out
+        assert "afile.txt" not in entries
     finally:
         os.chmod(tmp_path / "locked", 0o700)
 

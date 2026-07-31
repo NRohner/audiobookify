@@ -1,3 +1,4 @@
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -140,7 +141,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             children = []
 
         entries = [
-            {"name": child.name, "writable": _check_writable(child)}
+            {"name": child.name, "writable": os.access(child, os.W_OK)}
             for child in children if child.is_dir()
         ]
         parent = str(current.parent) if current.parent != current else None
