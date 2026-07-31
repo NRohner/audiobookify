@@ -26,6 +26,7 @@ class Chapter:
     output_mp3_path: Optional[str] = None
     duration: Optional[float] = None
     error: Optional[str] = None
+    used_fallback: bool = False
 
 
 @dataclass
@@ -73,6 +74,7 @@ class JobStatus(str, Enum):
     GENERATING = "generating"
     DONE = "done"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -99,3 +101,4 @@ class TextClip:
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     error: Optional[str] = None
+    used_fallback: bool = False

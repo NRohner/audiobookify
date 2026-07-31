@@ -1,5 +1,7 @@
 import io
+import os
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -9,7 +11,8 @@ from fastapi.testclient import TestClient
 from audiobookify.api.app import create_app
 from audiobookify.db import Database
 from audiobookify.engines.fake import FakeEngine
-from audiobookify.models import JobStatus
+from audiobookify.ingest.base import RawChapter
+from audiobookify.models import ChapterStatus, JobStatus, SourceFormat
 from audiobookify.worker import run_worker_once
 
 requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
@@ -52,6 +55,20 @@ def test_create_book_ingests_uploaded_markdown_and_returns_chapters(tmp_path):
     assert body["chapters"][0]["title"] == "Chapter One"
     assert body["chapters"][0]["status"] == "pending"
     assert body["chapters"][0]["progress"] is None
+
+
+def test_create_book_strips_whitespace_from_output_dir(tmp_path):
+    client = _client(tmp_path)
+    target = tmp_path / "out"
+
+    response = client.post(
+        "/api/books",
+        files={"file": ("book.md", b"# Ch\nBody.\n", "text/markdown")},
+        data={"output_dir": f"  {target}  "},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["output_dir"] == str(target.resolve())
 
 
 def test_create_book_rejects_unsupported_format(tmp_path):
@@ -300,7 +317,10 @@ def test_book_detail_reflects_job_progress_after_worker_processes_it(tmp_path):
 
     detail = client.get(f"/api/books/{created['id']}").json()
     assert detail["chapters"][0]["status"] == "done"
-    assert detail["chapters"][0]["progress"] == 1.0
+    # progress is only surfaced for genuinely active (queued/generating) jobs; once a
+    # chapter is done, `status` alone communicates completion and stale progress from
+    # the finished job is no longer reported (see _book_to_dict in app.py).
+    assert detail["chapters"][0]["progress"] is None
 
 
 def test_create_voice_uploads_reference_audio_and_returns_profile(tmp_path):
@@ -342,6 +362,29 @@ def test_create_voice_rejects_duplicate_name(tmp_path):
 
     assert response.status_code == 400
     assert "dup" in response.json()["detail"]
+
+
+def test_create_voice_rolls_back_the_profile_row_when_permanent_storage_fails(tmp_path, monkeypatch):
+    import audiobookify.api.app as app_module
+
+    def failing_store(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app_module, "store_reference_audio", failing_store)
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/api/voices",
+        files={"file": ("ref.wav", _clean_tone_wav_bytes(), "audio/wav")},
+        data={"name": "narrator-1"},
+    )
+
+    assert response.status_code == 500
+
+    # the row was rolled back - the name is free to retry, not stuck on a duplicate check
+    db = Database(str(tmp_path / "test.db"))
+    assert db.find_voice_profile_by_name("narrator-1") is None
+    db.close()
 
 
 def test_list_voices_returns_all_profiles(tmp_path):
@@ -547,3 +590,420 @@ def test_delete_text_clip_returns_404_for_unknown_id(tmp_path):
     response = client.delete("/api/text-clips/999")
 
     assert response.status_code == 404
+
+
+def test_browse_dir_lists_subdirectories_with_writability(tmp_path):
+    client = _client(tmp_path)
+    (tmp_path / "books").mkdir()
+    (tmp_path / "locked").mkdir()
+    os.chmod(tmp_path / "locked", 0o500)
+    (tmp_path / "afile.txt").write_text("not a directory")
+
+    try:
+        response = client.get("/api/browse-dir", params={"path": str(tmp_path)})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["path"] == str(tmp_path.resolve())
+        assert body["parent"] == str(tmp_path.resolve().parent)
+        entries = {e["name"]: e["writable"] for e in body["entries"]}
+        # Check that the key directories exist with correct writability
+        assert entries["books"] is True
+        assert entries["locked"] is False
+        # Check that non-directory files are filtered out
+        assert "afile.txt" not in entries
+    finally:
+        os.chmod(tmp_path / "locked", 0o700)
+
+
+def test_browse_dir_returns_404_for_a_nonexistent_path(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.get("/api/browse-dir", params={"path": str(tmp_path / "nope")})
+
+    assert response.status_code == 404
+
+
+def test_browse_dir_parent_is_none_at_filesystem_root(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.get("/api/browse-dir", params={"path": "/"})
+
+    assert response.status_code == 200
+    assert response.json()["parent"] is None
+
+
+def test_validate_output_dir_reports_writable_for_a_creatable_path(tmp_path):
+    client = _client(tmp_path)
+    new_dir = tmp_path / "brand-new-book-folder"
+
+    response = client.get("/api/validate-output-dir", params={"path": str(new_dir)})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["writable"] is True
+    assert body["error"] is None
+    assert not new_dir.exists()  # validating must NOT create the directory
+
+
+def test_validate_output_dir_does_not_create_intermediate_directories(tmp_path):
+    client = _client(tmp_path)
+    nested = tmp_path / "a" / "b" / "c"
+
+    response = client.get("/api/validate-output-dir", params={"path": str(nested)})
+
+    assert response.status_code == 200
+    assert response.json()["writable"] is True
+    assert not (tmp_path / "a").exists()
+
+
+def test_validate_output_dir_reports_error_for_a_permission_denied_path(tmp_path):
+    client = _client(tmp_path)
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    os.chmod(locked, 0o500)
+
+    try:
+        response = client.get("/api/validate-output-dir", params={"path": str(locked)})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["writable"] is False
+        assert body["error"] is not None
+    finally:
+        os.chmod(locked, 0o700)
+
+
+def test_create_book_rejects_an_unwritable_output_dir(tmp_path):
+    client = _client(tmp_path)
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    os.chmod(locked, 0o500)
+
+    try:
+        response = client.post(
+            "/api/books",
+            files={"file": ("book.md", b"# Ch\nBody.\n", "text/markdown")},
+            data={"output_dir": str(locked)},
+        )
+
+        assert response.status_code == 400
+        assert "cannot write to" in response.json()["detail"]
+    finally:
+        os.chmod(locked, 0o700)
+
+    db = Database(str(tmp_path / "test.db"))
+    assert db.list_books() == []
+    db.close()
+
+
+def test_get_book_surfaces_used_fallback_per_chapter(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path="/backup/ch1.mp3",
+                              used_fallback=True)
+    db.close()
+
+    response = client.get(f"/api/books/{book.id}")
+
+    assert response.json()["chapters"][0]["used_fallback"] is True
+
+
+def test_get_book_surfaces_started_at_for_a_generating_chapter(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.create_job(chapter.id)
+    job = db.pop_next_queued_job()
+    db.close()
+
+    response = client.get(f"/api/books/{book.id}")
+
+    assert response.json()["chapters"][0]["started_at"] == pytest.approx(job.started_at)
+
+
+def test_get_text_clip_surfaces_used_fallback(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    clip = db.create_text_clip(text="Hi.", voice_profile_id=None)
+    db.finish_text_clip(clip.id, JobStatus.DONE, output_path="/backup/clip.mp3", used_fallback=True)
+    db.close()
+
+    response = client.get(f"/api/text-clips/{clip.id}")
+
+    assert response.json()["used_fallback"] is True
+
+
+def test_get_text_clip_surfaces_started_at_while_generating(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    clip = db.create_text_clip(text="Hi.", voice_profile_id=None)
+    clip = db.pop_next_queued_text_clip()
+    db.close()
+
+    response = client.get(f"/api/text-clips/{clip.id}")
+
+    assert response.json()["started_at"] == pytest.approx(clip.started_at)
+
+
+def test_worker_status_reports_not_paused_by_default(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.get("/api/worker/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"paused": False}
+
+
+def test_worker_pause_then_status_reports_paused(tmp_path):
+    client = _client(tmp_path)
+
+    pause_response = client.post("/api/worker/pause")
+    status_response = client.get("/api/worker/status")
+
+    assert pause_response.json() == {"paused": True}
+    assert status_response.json() == {"paused": True}
+
+
+def test_worker_resume_after_pause_reports_not_paused(tmp_path):
+    client = _client(tmp_path)
+    client.post("/api/worker/pause")
+
+    resume_response = client.post("/api/worker/resume")
+    status_response = client.get("/api/worker/status")
+
+    assert resume_response.json() == {"paused": False}
+    assert status_response.json() == {"paused": False}
+
+
+def test_cancel_chapter_with_a_queued_job_marks_it_cancelled_and_resets_the_chapter(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+    db = Database(str(tmp_path / "test.db"))
+    assert db.get_job(job.id).status == JobStatus.CANCELLED
+    assert db.get_chapter(chapter.id).status == ChapterStatus.PENDING
+    db.close()
+
+
+def test_cancel_chapter_with_a_generating_job_sets_cancel_requested_without_changing_status_yet(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    db.pop_next_queued_job()  # -> generating, simulating a worker mid-chapter
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+    db = Database(str(tmp_path / "test.db"))
+    assert db.is_job_cancel_requested(job.id) is True
+    assert db.get_job(job.id).status == JobStatus.GENERATING  # not yet transitioned - worker's job
+    db.close()
+
+
+def test_cancel_chapter_with_no_active_job_is_a_noop(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+
+
+def test_get_book_does_not_report_stale_progress_after_cancelling_a_queued_job(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.create_job(chapter.id)
+    db.close()
+
+    cancel_response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+    assert cancel_response.status_code == 200
+
+    response = client.get(f"/api/books/{book.id}")
+
+    chapter_dict = response.json()["chapters"][0]
+    assert chapter_dict["status"] == "pending"
+    assert chapter_dict["progress"] is None
+
+
+def test_get_book_still_reports_progress_for_a_genuinely_queued_job(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.create_job(chapter.id)
+    db.close()
+
+    response = client.get(f"/api/books/{book.id}")
+
+    chapter_dict = response.json()["chapters"][0]
+    assert chapter_dict["status"] == "pending"
+    assert chapter_dict["progress"] == 0.0
+
+
+def test_cancel_chapter_clears_the_cache_for_a_paused_then_cancelled_job(tmp_path):
+    import audiobookify.synth.chunk_cache as chunk_cache
+
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    # Simulate a chunk already cached from a paused attempt (the reachable scenario:
+    # the worker requeues a paused job to QUEUED while deliberately keeping its cache).
+    chunk_cache.save_chunk(chapter.id, 0, __import__("numpy").zeros(10, dtype="float32"), sample_rate=22050)
+    chunk_cache.write_manifest(chapter.id, "irrelevant-key-for-this-test")
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+    assert not chunk_cache.chapter_cache_dir(chapter.id).exists()
+
+
+def test_cancel_chapter_is_a_noop_for_an_already_cancelled_job(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    db.finish_job(job.id, JobStatus.CANCELLED)
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+    db = Database(str(tmp_path / "test.db"))
+    assert db.get_job(job.id).status == JobStatus.CANCELLED  # unchanged, not re-finished
+    db.close()
+
+
+def test_cancel_book_returns_404_for_an_unknown_book(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.post("/api/books/999/cancel")
+
+    assert response.status_code == 404
+
+
+def test_cancel_chapter_returns_404_for_a_chapter_in_a_different_book(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book_a = db.create_book(
+        title="A", author=None, source_path=str(tmp_path / "a.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    book_b = db.create_book(
+        title="B", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter_b] = db.add_chapters(book_b.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.close()
+
+    response = client.post(f"/api/books/{book_a.id}/chapters/{chapter_b.id}/cancel")
+
+    assert response.status_code == 404
+
+
+def test_cancel_book_cancels_every_chapter_with_an_active_job(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    chapters = db.add_chapters(book.id, [RawChapter(title=f"Ch {i}", text=f"Body {i}.")
+                                          for i in range(2)])
+    job0 = db.create_job(chapters[0].id)
+    job1 = db.create_job(chapters[1].id)
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/cancel")
+
+    assert response.status_code == 200
+    db = Database(str(tmp_path / "test.db"))
+    assert db.get_job(job0.id).status == JobStatus.CANCELLED
+    assert db.get_job(job1.id).status == JobStatus.CANCELLED
+    assert db.get_chapter(chapters[0].id).status == ChapterStatus.PENDING
+    assert db.get_chapter(chapters[1].id).status == ChapterStatus.PENDING
+    db.close()
+
+
+def test_create_voice_stores_reference_audio_under_voices_dir_not_uploads(tmp_path):
+    client = _client(tmp_path)
+
+    created = client.post(
+        "/api/voices",
+        files={"file": ("ref.wav", _clean_tone_wav_bytes(), "audio/wav")},
+        data={"name": "narrator-1"},
+    ).json()
+
+    db = Database(str(tmp_path / "test.db"))
+    profile = db.get_voice_profile_by_id(created["id"])
+    db.close()
+
+    assert profile.reference_audio_path.startswith(str((tmp_path / "voices").resolve()))
+    assert Path(profile.reference_audio_path).is_file()
+    assert list((tmp_path / "uploads").iterdir()) == []  # staging dir cleaned up
+
+
+def test_delete_voice_removes_the_permanent_voice_storage_folder(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/voices",
+        files={"file": ("a.wav", _clean_tone_wav_bytes(), "audio/wav")},
+        data={"name": "a"},
+    ).json()
+    db = Database(str(tmp_path / "test.db"))
+    voice_dir = Path(db.get_voice_profile_by_id(created["id"]).reference_audio_path).parent
+    db.close()
+    assert voice_dir.is_dir()
+
+    client.delete(f"/api/voices/{created['id']}")
+
+    assert not voice_dir.exists()

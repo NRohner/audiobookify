@@ -1,8 +1,10 @@
 import pytest
+from pathlib import Path
 
 from audiobookify.db import Database
 from audiobookify.models import SourceFormat, ChapterStatus, JobStatus
 from audiobookify.ingest.base import RawChapter
+import audiobookify.voice.storage as voice_storage
 
 
 def test_create_book_and_add_chapters(tmp_path):
@@ -528,3 +530,338 @@ def test_get_book_raises_keyerror_for_missing_id(tmp_path):
     with pytest.raises(KeyError):
         db.get_book(999)
     db.close()
+
+
+def test_update_chapter_status_sets_used_fallback(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="Test Book", author=None, source_path="/books/test.md",
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+
+    db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path="/out/01 - Ch 1.mp3",
+                              used_fallback=True)
+
+    [reloaded] = db.list_chapters(book.id)
+    assert reloaded.used_fallback is True
+    db.close()
+
+
+def test_update_chapter_status_defaults_used_fallback_to_false(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="Test Book", author=None, source_path="/books/test.md",
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+
+    db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path="/out/01 - Ch 1.mp3")
+
+    [reloaded] = db.list_chapters(book.id)
+    assert reloaded.used_fallback is False
+    db.close()
+
+
+def test_finish_text_clip_sets_used_fallback(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    clip = db.create_text_clip(text="Hello.", voice_profile_id=None)
+
+    db.finish_text_clip(clip.id, JobStatus.DONE, output_path="/out/clip.mp3", used_fallback=True)
+
+    assert db.get_text_clip(clip.id).used_fallback is True
+    db.close()
+
+
+def test_existing_pre_fallback_database_gains_used_fallback_columns_via_migration(tmp_path):
+    # Simulates opening a database file created before this change (no used_fallback
+    # column on chapters/text_clips) - the migration in Database.__init__ must add it
+    # without raising.
+    import sqlite3
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE chapters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id INTEGER NOT NULL,
+            order_index INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            text TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            output_mp3_path TEXT,
+            duration REAL,
+            error TEXT,
+            UNIQUE(book_id, order_index)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE text_clips (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            voice_profile_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'queued',
+            progress REAL,
+            output_path TEXT,
+            created_at REAL NOT NULL,
+            started_at REAL,
+            finished_at REAL,
+            error TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(db_path)  # must not raise
+    book = db.create_book(
+        title="T", author=None, source_path="/books/t.md",
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    assert chapter.used_fallback is False
+
+    clip = db.create_text_clip(text="Hi.", voice_profile_id=None)
+    db.finish_text_clip(clip.id, JobStatus.DONE, output_path="/o.mp3", used_fallback=True)
+    assert db.get_text_clip(clip.id).used_fallback is True
+    db.close()
+
+
+def test_is_paused_defaults_to_false(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    assert db.is_paused() is False
+    db.close()
+
+
+def test_set_paused_toggles_the_flag(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+
+    db.set_paused(True)
+    assert db.is_paused() is True
+
+    db.set_paused(False)
+    assert db.is_paused() is False
+    db.close()
+
+
+def test_is_job_cancel_requested_defaults_to_false(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+
+    assert db.is_job_cancel_requested(job.id) is False
+    db.close()
+
+
+def test_request_job_cancel_sets_the_flag(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+
+    db.request_job_cancel(job.id)
+
+    assert db.is_job_cancel_requested(job.id) is True
+    db.close()
+
+
+def test_requeue_job_resets_status_and_clears_started_at(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    db.pop_next_queued_job()  # -> generating, started_at set
+
+    db.requeue_job(job.id)
+
+    requeued = db.get_job(job.id)
+    assert requeued.status == JobStatus.QUEUED
+    assert requeued.started_at is None
+    db.close()
+
+
+def test_existing_pre_cancel_database_gains_cancel_requested_column_via_migration(tmp_path):
+    # Simulates opening a database file created before this change (no
+    # cancel_requested column on jobs) - the migration in Database.__init__ must add
+    # it without raising.
+    import sqlite3
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chapter_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            progress REAL,
+            created_at REAL NOT NULL,
+            started_at REAL,
+            finished_at REAL,
+            error TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(db_path)  # must not raise
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    assert db.is_job_cancel_requested(job.id) is False
+    db.close()
+
+
+def test_update_voice_profile_reference_audio_path_updates_the_path(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    profile = db.create_voice_profile(
+        name="Nova", engine="chatterbox", reference_audio_path=str(tmp_path / "old.wav"),
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+
+    db.update_voice_profile_reference_audio_path(profile.id, str(tmp_path / "new.wav"))
+
+    assert db.get_voice_profile_by_id(profile.id).reference_audio_path == str(tmp_path / "new.wav")
+    db.close()
+
+
+def test_update_voice_profile_reference_audio_path_raises_keyerror_for_missing_id(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    with pytest.raises(KeyError):
+        db.update_voice_profile_reference_audio_path(999, "/some/path.wav")
+    db.close()
+
+
+def test_existing_voice_profile_gets_migrated_to_permanent_voices_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(voice_storage, "VOICES_DIR", str(tmp_path / "voices"))
+    source_audio = tmp_path / "original-upload" / "clip.wav"
+    source_audio.parent.mkdir(parents=True)
+    source_audio.write_bytes(b"fake audio bytes")
+
+    db_path = str(tmp_path / "test.db")
+    db = Database(db_path)
+    db.create_voice_profile(
+        name="Nova", engine="chatterbox", reference_audio_path=str(source_audio),
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+    db.close()
+
+    reopened = Database(db_path)  # a fresh open triggers the migration
+
+    profile = reopened.find_voice_profile_by_name("Nova")
+    assert profile.reference_audio_path.startswith(str((tmp_path / "voices").resolve()))
+    assert Path(profile.reference_audio_path).is_file()
+    reopened.close()
+
+
+def test_migration_skips_a_voice_profile_whose_source_file_no_longer_exists(tmp_path, monkeypatch):
+    monkeypatch.setattr(voice_storage, "VOICES_DIR", str(tmp_path / "voices"))
+    missing_path = str(tmp_path / "does-not-exist.wav")
+
+    db_path = str(tmp_path / "test.db")
+    db = Database(db_path)
+    db.create_voice_profile(
+        name="Ghost", engine="chatterbox", reference_audio_path=missing_path,
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+    db.close()
+
+    reopened = Database(db_path)  # must not raise even though the source file is gone
+
+    profile = reopened.find_voice_profile_by_name("Ghost")
+    assert profile.reference_audio_path == missing_path  # left unchanged, nothing to migrate
+    reopened.close()
+
+
+def test_migration_of_one_profile_does_not_block_migration_of_others(tmp_path, monkeypatch):
+    monkeypatch.setattr(voice_storage, "VOICES_DIR", str(tmp_path / "voices"))
+    source_audio = tmp_path / "original-upload" / "clip.wav"
+    source_audio.parent.mkdir(parents=True)
+    source_audio.write_bytes(b"fake audio bytes")
+    missing_path = str(tmp_path / "does-not-exist.wav")
+
+    db_path = str(tmp_path / "test.db")
+    db = Database(db_path)
+    db.create_voice_profile(
+        name="Ghost", engine="chatterbox", reference_audio_path=missing_path,
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+    db.create_voice_profile(
+        name="Nova", engine="chatterbox", reference_audio_path=str(source_audio),
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+    db.close()
+
+    reopened = Database(db_path)
+
+    ghost = reopened.find_voice_profile_by_name("Ghost")
+    assert ghost.reference_audio_path == missing_path  # left unchanged
+
+    nova = reopened.find_voice_profile_by_name("Nova")
+    assert nova.reference_audio_path.startswith(str((tmp_path / "voices").resolve()))
+    assert Path(nova.reference_audio_path).is_file()
+    reopened.close()
+
+
+def test_migration_does_not_crash_when_storing_a_profile_raises_an_os_error(tmp_path, monkeypatch, capsys):
+    import audiobookify.db as db_module
+
+    monkeypatch.setattr(voice_storage, "VOICES_DIR", str(tmp_path / "voices"))
+    db_module._WARNED_VOICE_MIGRATION_IDS.clear()
+
+    broken_audio = tmp_path / "original-upload" / "broken.wav"
+    broken_audio.parent.mkdir(parents=True)
+    broken_audio.write_bytes(b"fake audio bytes")
+    fine_audio = tmp_path / "original-upload" / "fine.wav"
+    fine_audio.write_bytes(b"other fake audio bytes")
+
+    db_path = str(tmp_path / "test.db")
+    db = Database(db_path)
+    broken_profile = db.create_voice_profile(
+        name="Broken", engine="chatterbox", reference_audio_path=str(broken_audio),
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+    db.create_voice_profile(
+        name="Fine", engine="chatterbox", reference_audio_path=str(fine_audio),
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+    db.close()
+
+    real_store = voice_storage.store_reference_audio
+
+    def failing_for_broken(staged_path, profile_id, name):
+        if profile_id == broken_profile.id:
+            raise OSError("permission denied")
+        return real_store(staged_path, profile_id, name)
+
+    monkeypatch.setattr(voice_storage, "store_reference_audio", failing_for_broken)
+
+    reopened = Database(db_path)  # must not raise
+
+    broken = reopened.find_voice_profile_by_name("Broken")
+    assert broken.reference_audio_path == str(broken_audio)  # left unchanged after failure
+
+    fine = reopened.find_voice_profile_by_name("Fine")
+    assert fine.reference_audio_path.startswith(str((tmp_path / "voices").resolve()))
+    assert Path(fine.reference_audio_path).is_file()
+
+    captured = capsys.readouterr()
+    assert captured.err.count("could not be migrated") == 1
+    reopened.close()

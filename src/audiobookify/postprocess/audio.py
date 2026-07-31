@@ -1,12 +1,14 @@
 import re
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import soundfile as sf
 from mutagen.id3 import TALB, TIT2, TPE1, TRCK
 from mutagen.mp3 import MP3
+
+BACKUP_OUTPUT_DIR = str(Path(__file__).resolve().parents[3] / "output")
 
 
 def concatenate_chunks(chunks: List[np.ndarray], sample_rate: int, pause_seconds: float = 0.4) -> np.ndarray:
@@ -29,8 +31,8 @@ def chapter_filename(order_index: int, title: str) -> str:
     return f"{order_index + 1:02d} - {sanitize_filename(title)}.mp3"
 
 
-def export_chapter_mp3(audio: np.ndarray, sample_rate: int, output_dir: str, order_index: int,
-                        chapter_title: str, book_title: str, narrator: str) -> str:
+def _export_chapter_mp3_to(output_dir: str, audio: np.ndarray, sample_rate: int, order_index: int,
+                            chapter_title: str, book_title: str, narrator: str) -> str:
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -56,9 +58,21 @@ def export_chapter_mp3(audio: np.ndarray, sample_rate: int, output_dir: str, ord
     return str(mp3_path)
 
 
-def export_mp3(audio: np.ndarray, sample_rate: int, output_path: str,
-                title: Optional[str] = None, artist: Optional[str] = None) -> str:
-    output_path = Path(output_path)
+def export_chapter_mp3(audio: np.ndarray, sample_rate: int, output_dir: str, order_index: int,
+                        chapter_title: str, book_title: str, narrator: str,
+                        fallback_dir: Optional[str] = None) -> Tuple[str, bool]:
+    try:
+        return _export_chapter_mp3_to(output_dir, audio, sample_rate, order_index,
+                                       chapter_title, book_title, narrator), False
+    except (OSError, sf.LibsndfileError):
+        if fallback_dir is None:
+            raise
+        return _export_chapter_mp3_to(fallback_dir, audio, sample_rate, order_index,
+                                       chapter_title, book_title, narrator), True
+
+
+def _export_mp3_to(output_path: Path, audio: np.ndarray, sample_rate: int,
+                    title: Optional[str], artist: Optional[str]) -> str:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     wav_path = output_path.with_suffix(".tmp.wav")
@@ -81,3 +95,16 @@ def export_mp3(audio: np.ndarray, sample_rate: int, output_path: str,
         tags.save()
 
     return str(output_path)
+
+
+def export_mp3(audio: np.ndarray, sample_rate: int, output_path: str,
+                title: Optional[str] = None, artist: Optional[str] = None,
+                fallback_dir: Optional[str] = None) -> Tuple[str, bool]:
+    primary_path = Path(output_path)
+    try:
+        return _export_mp3_to(primary_path, audio, sample_rate, title, artist), False
+    except (OSError, sf.LibsndfileError):
+        if fallback_dir is None:
+            raise
+        fallback_path = Path(fallback_dir) / primary_path.name
+        return _export_mp3_to(fallback_path, audio, sample_rate, title, artist), True

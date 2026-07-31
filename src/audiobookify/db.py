@@ -1,11 +1,14 @@
 import sqlite3
+import sys
 import time
+from pathlib import Path
 from typing import List, Optional
 
 from .models import (
     Book, Chapter, ChapterStatus, Job, JobStatus, LexiconEntry, SourceFormat, TextClip, VoiceProfile,
 )
 from .ingest.base import RawChapter
+from .voice import storage as voice_storage
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS books (
@@ -29,6 +32,7 @@ CREATE TABLE IF NOT EXISTS chapters (
     output_mp3_path TEXT,
     duration REAL,
     error TEXT,
+    used_fallback INTEGER NOT NULL DEFAULT 0,
     UNIQUE(book_id, order_index)
 );
 
@@ -66,7 +70,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at REAL NOT NULL,
     started_at REAL,
     finished_at REAL,
-    error TEXT
+    error TEXT,
+    cancel_requested INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS worker_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    paused INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS text_clips (
@@ -79,7 +89,8 @@ CREATE TABLE IF NOT EXISTS text_clips (
     created_at REAL NOT NULL,
     started_at REAL,
     finished_at REAL,
-    error TEXT
+    error TEXT,
+    used_fallback INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -90,6 +101,60 @@ def _migrate_lexicon_entries_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE lexicon_entries ADD COLUMN phonemes TEXT")
     if "sample_audio_path" not in existing_cols:
         conn.execute("ALTER TABLE lexicon_entries ADD COLUMN sample_audio_path TEXT")
+
+
+def _migrate_fallback_columns(conn: sqlite3.Connection) -> None:
+    chapter_cols = {row["name"] for row in conn.execute("PRAGMA table_info(chapters)")}
+    if "used_fallback" not in chapter_cols:
+        conn.execute("ALTER TABLE chapters ADD COLUMN used_fallback INTEGER NOT NULL DEFAULT 0")
+    clip_cols = {row["name"] for row in conn.execute("PRAGMA table_info(text_clips)")}
+    if "used_fallback" not in clip_cols:
+        conn.execute("ALTER TABLE text_clips ADD COLUMN used_fallback INTEGER NOT NULL DEFAULT 0")
+
+
+def _migrate_cancel_requested_column(conn: sqlite3.Connection) -> None:
+    job_cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "cancel_requested" not in job_cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0")
+
+
+_WARNED_VOICE_MIGRATION_IDS: set = set()
+
+
+def _warn_voice_migration_skipped_once(profile_id: int, message: str) -> None:
+    if profile_id in _WARNED_VOICE_MIGRATION_IDS:
+        return
+    _WARNED_VOICE_MIGRATION_IDS.add(profile_id)
+    print(f"Warning: {message}", file=sys.stderr)
+
+
+def _migrate_voice_reference_audio(conn: sqlite3.Connection) -> None:
+    voices_root = str(Path(voice_storage.VOICES_DIR).resolve())
+    rows = conn.execute("SELECT id, name, reference_audio_path FROM voice_profiles").fetchall()
+    for row in rows:
+        current_path = row["reference_audio_path"]
+        if current_path.startswith(voices_root):
+            continue
+        if not Path(current_path).is_file():
+            _warn_voice_migration_skipped_once(
+                row["id"],
+                f"voice profile {row['id']} ({row['name']})'s reference audio "
+                f"'{current_path}' no longer exists - skipping migration for this profile",
+            )
+            continue
+        try:
+            new_path = voice_storage.store_reference_audio(current_path, row["id"], row["name"])
+        except OSError as exc:
+            _warn_voice_migration_skipped_once(
+                row["id"],
+                f"voice profile {row['id']} ({row['name']})'s reference audio could not be "
+                f"migrated to permanent storage ({exc}) - skipping this profile",
+            )
+            continue
+        conn.execute(
+            "UPDATE voice_profiles SET reference_audio_path = ? WHERE id = ?",
+            (str(new_path), row["id"]),
+        )
 
 
 def _row_to_book(row: sqlite3.Row) -> Book:
@@ -106,6 +171,7 @@ def _row_to_chapter(row: sqlite3.Row) -> Chapter:
         id=row["id"], book_id=row["book_id"], order_index=row["order_index"],
         title=row["title"], text=row["text"], status=ChapterStatus(row["status"]),
         output_mp3_path=row["output_mp3_path"], duration=row["duration"], error=row["error"],
+        used_fallback=bool(row["used_fallback"]),
     )
 
 
@@ -141,7 +207,7 @@ def _row_to_text_clip(row: sqlite3.Row) -> TextClip:
         id=row["id"], text=row["text"], voice_profile_id=row["voice_profile_id"],
         status=JobStatus(row["status"]), progress=row["progress"], output_path=row["output_path"],
         created_at=row["created_at"], started_at=row["started_at"], finished_at=row["finished_at"],
-        error=row["error"],
+        error=row["error"], used_fallback=bool(row["used_fallback"]),
     )
 
 
@@ -156,6 +222,9 @@ class Database:
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.executescript(SCHEMA)
         _migrate_lexicon_entries_columns(self.conn)
+        _migrate_fallback_columns(self.conn)
+        _migrate_cancel_requested_column(self.conn)
+        _migrate_voice_reference_audio(self.conn)
         self.conn.commit()
 
     def create_book(self, title: str, author: Optional[str], source_path: str,
@@ -212,11 +281,12 @@ class Database:
     def update_chapter_status(self, chapter_id: int, status: ChapterStatus,
                                output_mp3_path: Optional[str] = None,
                                duration: Optional[float] = None,
-                               error: Optional[str] = None) -> None:
+                               error: Optional[str] = None,
+                               used_fallback: bool = False) -> None:
         cur = self.conn.execute(
             "UPDATE chapters SET status = ?, output_mp3_path = COALESCE(?, output_mp3_path), "
-            "duration = COALESCE(?, duration), error = ? WHERE id = ?",
-            (status.value, output_mp3_path, duration, error, chapter_id),
+            "duration = COALESCE(?, duration), error = ?, used_fallback = ? WHERE id = ?",
+            (status.value, output_mp3_path, duration, error, int(used_fallback), chapter_id),
         )
         if cur.rowcount == 0:
             raise KeyError(f"no chapter with id {chapter_id}")
@@ -260,6 +330,16 @@ class Database:
             "SELECT * FROM voice_profiles WHERE id = ?", (voice_profile_id,)
         ).fetchone()
         return _row_to_voice_profile(row) if row else None
+
+    def update_voice_profile_reference_audio_path(self, profile_id: int,
+                                                    reference_audio_path: str) -> None:
+        cur = self.conn.execute(
+            "UPDATE voice_profiles SET reference_audio_path = ? WHERE id = ?",
+            (reference_audio_path, profile_id),
+        )
+        if cur.rowcount == 0:
+            raise KeyError(f"no voice profile with id {profile_id}")
+        self.conn.commit()
 
     def delete_voice_profile(self, voice_profile_id: int) -> None:
         cur = self.conn.execute(
@@ -439,12 +519,12 @@ class Database:
         self.conn.commit()
 
     def finish_text_clip(self, clip_id: int, status: JobStatus, output_path: Optional[str] = None,
-                          error: Optional[str] = None) -> None:
+                          error: Optional[str] = None, used_fallback: bool = False) -> None:
         if status == JobStatus.DONE:
             self.conn.execute(
                 "UPDATE text_clips SET status = ?, progress = 1.0, output_path = ?, "
-                "finished_at = ?, error = ? WHERE id = ?",
-                (status.value, output_path, time.time(), error, clip_id),
+                "finished_at = ?, error = ?, used_fallback = ? WHERE id = ?",
+                (status.value, output_path, time.time(), error, int(used_fallback), clip_id),
             )
         else:
             self.conn.execute(
@@ -457,5 +537,36 @@ class Database:
         self.conn.execute(
             "UPDATE text_clips SET status = ?, started_at = NULL WHERE status = ?",
             (JobStatus.QUEUED.value, JobStatus.GENERATING.value),
+        )
+        self.conn.commit()
+
+    def is_paused(self) -> bool:
+        row = self.conn.execute("SELECT paused FROM worker_state WHERE id = 1").fetchone()
+        return bool(row["paused"]) if row else False
+
+    def set_paused(self, paused: bool) -> None:
+        self.conn.execute(
+            "INSERT INTO worker_state (id, paused) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET paused = excluded.paused",
+            (int(paused),),
+        )
+        self.conn.commit()
+
+    def request_job_cancel(self, job_id: int) -> None:
+        self.conn.execute("UPDATE jobs SET cancel_requested = 1 WHERE id = ?", (job_id,))
+        self.conn.commit()
+
+    def is_job_cancel_requested(self, job_id: int) -> bool:
+        row = self.conn.execute(
+            "SELECT cancel_requested FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"no job with id {job_id}")
+        return bool(row["cancel_requested"])
+
+    def requeue_job(self, job_id: int) -> None:
+        self.conn.execute(
+            "UPDATE jobs SET status = ?, started_at = NULL WHERE id = ?",
+            (JobStatus.QUEUED.value, job_id),
         )
         self.conn.commit()

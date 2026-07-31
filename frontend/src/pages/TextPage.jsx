@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, Send, Trash2, Type } from "lucide-react";
+import { AlertTriangle, Download, Send, Trash2, Type } from "lucide-react";
 import { api, textClipInProgress } from "../lib/api.js";
 import Badge from "../components/ui/Badge.jsx";
 import Button from "../components/ui/Button.jsx";
@@ -121,6 +121,15 @@ export default function TextPage() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge status={clip.status} label={clip.status} />
+                    {clip.used_fallback && (
+                      <span
+                        title="The output folder wasn't writable when this clip finished — saved to the backup location instead."
+                        className="inline-flex items-center gap-1 text-xs text-accent"
+                      >
+                        <AlertTriangle className="size-3.5" aria-hidden="true" />
+                        Backup
+                      </span>
+                    )}
                     <button
                       onClick={() => setPendingDelete(clip)}
                       aria-label="Delete text clip"
@@ -134,7 +143,7 @@ export default function TextPage() {
 
                 {clip.status === "generating" && (
                   <div className="max-w-xs">
-                    <ProgressBar value={clip.progress} />
+                    <ProgressBar value={clip.progress} startedAt={clip.started_at} />
                   </div>
                 )}
 

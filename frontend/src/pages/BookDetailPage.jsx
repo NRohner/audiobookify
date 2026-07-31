@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Loader2, Play } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Loader2, Play, Square } from "lucide-react";
 import { api, chapterInProgress } from "../lib/api.js";
 import Badge from "../components/ui/Badge.jsx";
 import Button from "../components/ui/Button.jsx";
@@ -13,6 +13,8 @@ export default function BookDetailPage() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [generatingChapterIds, setGeneratingChapterIds] = useState(new Set());
+  const [cancelingChapterIds, setCancelingChapterIds] = useState(new Set());
+  const [cancelingAll, setCancelingAll] = useState(false);
   const [error, setError] = useState(null);
 
   async function refresh() {
@@ -61,6 +63,34 @@ export default function BookDetailPage() {
     }
   }
 
+  async function handleCancelChapter(chapterId) {
+    setCancelingChapterIds((prev) => new Set(prev).add(chapterId));
+    try {
+      await api.cancelChapter(bookId, chapterId);
+      await refresh();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setCancelingChapterIds((prev) => {
+        const next = new Set(prev);
+        next.delete(chapterId);
+        return next;
+      });
+    }
+  }
+
+  async function handleCancelAll() {
+    setCancelingAll(true);
+    try {
+      await api.cancelBook(bookId);
+      await refresh();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setCancelingAll(false);
+    }
+  }
+
   async function handleVoiceChange(event) {
     const value = event.target.value;
     try {
@@ -97,6 +127,10 @@ export default function BookDetailPage() {
           <Play className="size-4" aria-hidden="true" />
           Generate all
         </Button>
+        <Button variant="secondary" onClick={handleCancelAll} loading={cancelingAll} disabled={!anyInProgress}>
+          <Square className="size-4" aria-hidden="true" />
+          Cancel all
+        </Button>
 
         <label className="flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Voice</span>
@@ -127,12 +161,21 @@ export default function BookDetailPage() {
                 <p className="font-medium truncate">{chapter.title}</p>
                 {chapter.status === "generating" && (
                   <div className="mt-2 max-w-xs">
-                    <ProgressBar value={chapter.progress} />
+                    <ProgressBar value={chapter.progress} startedAt={chapter.started_at} />
                   </div>
                 )}
                 {chapter.error && <p className="text-sm text-destructive mt-1">{chapter.error}</p>}
               </div>
               <Badge status={badgeStatus} label={badgeStatus} />
+              {chapter.used_fallback && (
+                <span
+                  title="The output folder wasn't writable when this chapter finished — saved to the backup location instead."
+                  className="inline-flex items-center gap-1 text-xs text-accent"
+                >
+                  <AlertTriangle className="size-3.5" aria-hidden="true" />
+                  Backup location
+                </span>
+              )}
               {chapter.output_mp3_path && (
                 <span
                   className="text-xs text-muted-foreground font-mono truncate max-w-40"
@@ -141,6 +184,21 @@ export default function BookDetailPage() {
                   {chapter.output_mp3_path.split("/").pop()}
                 </span>
               )}
+              <button
+                onClick={() => handleCancelChapter(chapter.id)}
+                disabled={!inProgress || cancelingChapterIds.has(chapter.id)}
+                aria-label={`Cancel ${chapter.title}`}
+                title={`Cancel ${chapter.title}`}
+                className="cursor-pointer rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive
+                  transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40
+                  focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                {cancelingChapterIds.has(chapter.id) ? (
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Square className="size-4" aria-hidden="true" />
+                )}
+              </button>
               <button
                 onClick={() => handleGenerateChapter(chapter.id)}
                 disabled={chapter.status === "done" || inProgress || generatingChapterIds.has(chapter.id)}

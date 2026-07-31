@@ -165,3 +165,90 @@ def test_run_worker_once_reclones_when_voice_profile_changes(tmp_path):
     assert len(clone_calls) == 2
     assert clone_calls[1] == str(tmp_path / "ref.wav")
     db.close()
+
+
+def test_run_worker_once_returns_false_when_paused(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    _, chapter, job = _make_book_with_job(tmp_path, db)
+    db.set_paused(True)
+    engine = FakeEngine()
+    engine.load("cpu")
+
+    assert run_worker_once(db, engine, {}) is False
+    assert db.get_job(job.id).status == JobStatus.QUEUED
+    db.close()
+
+
+def test_run_worker_once_requeues_job_and_keeps_cache_when_paused_mid_chapter(tmp_path):
+    import audiobookify.synth.chunk_cache as chunk_cache
+
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    sentence1 = "Alpha " * 30 + "beta."
+    sentence2 = "Gamma " * 30 + "delta."
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text=f"{sentence1} {sentence2}")])
+    job = db.create_job(chapter.id)
+
+    class PausesAfterFirstChunkEngine(FakeEngine):
+        def __init__(self, db):
+            super().__init__()
+            self._db = db
+            self.calls = 0
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            self.calls += 1
+            if self.calls == 1:
+                self._db.set_paused(True)
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    engine = PausesAfterFirstChunkEngine(db)
+    engine.load("cpu")
+
+    did_work = run_worker_once(db, engine, {})
+
+    assert did_work is True
+    assert db.get_job(job.id).status == JobStatus.QUEUED
+    assert db.get_chapter(chapter.id).status == ChapterStatus.PENDING
+    assert (chunk_cache.chapter_cache_dir(chapter.id) / "chunk-0000.wav").is_file()
+    db.close()
+
+
+def test_run_worker_once_cancels_job_and_clears_cache_when_cancel_requested_mid_chapter(tmp_path):
+    import audiobookify.synth.chunk_cache as chunk_cache
+
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    sentence1 = "Alpha " * 30 + "beta."
+    sentence2 = "Gamma " * 30 + "delta."
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text=f"{sentence1} {sentence2}")])
+    job = db.create_job(chapter.id)
+
+    class CancelsAfterFirstChunkEngine(FakeEngine):
+        def __init__(self, db, job_id):
+            super().__init__()
+            self._db = db
+            self._job_id = job_id
+            self.calls = 0
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            self.calls += 1
+            if self.calls == 1:
+                self._db.request_job_cancel(self._job_id)
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    engine = CancelsAfterFirstChunkEngine(db, job.id)
+    engine.load("cpu")
+
+    did_work = run_worker_once(db, engine, {})
+
+    assert did_work is True
+    assert db.get_job(job.id).status == JobStatus.CANCELLED
+    assert db.get_chapter(chapter.id).status == ChapterStatus.PENDING
+    assert not chunk_cache.chapter_cache_dir(chapter.id).exists()
+    db.close()

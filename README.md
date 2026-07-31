@@ -92,9 +92,12 @@ running on `localhost`, still fully local.
 make dev    # backend (autoreload) + worker + frontend dev server, hot reload
 ```
 
-Open `http://127.0.0.1:5173`, upload an EPUB or Markdown file, type an output folder
-path, click Import, then click "Generate all". The chapter list polls the backend every
-couple of seconds and shows each chapter's status (`pending` / `generating` / `done` /
+Open `http://127.0.0.1:5173`, upload an EPUB or Markdown file, browse to (or type) an
+output folder, click Import, then click "Generate all". The folder picker checks
+writability live and won't let you import into a folder it can't write to; if a folder
+somehow goes bad *after* import (permissions changed, drive unmounted), that chapter's
+audio is saved under this repo's `output/` folder instead, and the chapter list flags it.
+The chapter list polls the backend every couple of seconds and shows each chapter's status (`pending` / `generating` / `done` /
 `failed`), in-progress percentage, and — once done — the resulting MP3's path.
 
 For a non-hot-reload run (built frontend served by FastAPI itself):
