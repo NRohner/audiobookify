@@ -11,6 +11,8 @@ export const api = {
   listBooks: () => request("/api/books"),
   getBook: (id) => request(`/api/books/${id}`),
   createBook: (formData) => request("/api/books", { method: "POST", body: formData }),
+  browseDir: (path) => request(`/api/browse-dir${path ? `?path=${encodeURIComponent(path)}` : ""}`),
+  validateOutputDir: (path) => request(`/api/validate-output-dir?path=${encodeURIComponent(path)}`),
   generateBook: (id) => request(`/api/books/${id}/generate`, { method: "POST" }),
   generateChapter: (bookId, chapterId) =>
     request(`/api/books/${bookId}/chapters/${chapterId}/generate`, { method: "POST" }),

@@ -5,6 +5,7 @@ import { api, bookStatus, isBookInProgress } from "../lib/api.js";
 import Badge from "../components/ui/Badge.jsx";
 import Button from "../components/ui/Button.jsx";
 import Modal from "../components/ui/Modal.jsx";
+import DirectoryBrowser from "../components/DirectoryBrowser.jsx";
 
 const TILE_COLORS = [
   "bg-primary/10 text-primary",
@@ -23,6 +24,7 @@ function CoverTile({ title }) {
 
 function ImportBookModal({ onClose, onImported }) {
   const [outputDir, setOutputDir] = useState("");
+  const [outputDirWritable, setOutputDirWritable] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
@@ -60,18 +62,11 @@ function ImportBookModal({ onClose, onImported }) {
           />
         </div>
         <div>
-          <label htmlFor="output_dir" className="block text-sm font-medium mb-1">
-            Output folder path
-          </label>
-          <input
-            id="output_dir"
-            type="text"
+          <label className="block text-sm font-medium mb-1">Output folder</label>
+          <DirectoryBrowser
             value={outputDir}
-            onChange={(e) => setOutputDir(e.target.value)}
-            required
-            placeholder="/Users/you/audiobooks/this-book"
-            className="w-full h-10 rounded-lg border border-border bg-background px-3 text-sm
-              focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            onChange={setOutputDir}
+            onValidityChange={setOutputDirWritable}
           />
         </div>
         {error && <p className="text-sm text-destructive">{error}</p>}
@@ -79,7 +74,7 @@ function ImportBookModal({ onClose, onImported }) {
           <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" loading={submitting}>
+          <Button type="submit" loading={submitting} disabled={!outputDirWritable}>
             <Upload className="size-4" aria-hidden="true" />
             Import
           </Button>
