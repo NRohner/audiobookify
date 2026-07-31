@@ -5,7 +5,7 @@ from ..db import Database
 from ..lexicon.substitution import apply_lexicon
 from ..models import Book, Chapter, ChapterStatus, JobStatus, TextClip
 from ..normalize.text import chunk_text
-from ..postprocess.audio import concatenate_chunks, export_chapter_mp3, export_mp3
+from ..postprocess.audio import BACKUP_OUTPUT_DIR, concatenate_chunks, export_chapter_mp3, export_mp3
 
 
 def synthesize_chapter(chapter: Chapter, book: Book, engine, profile_handle, voice_params: dict,
@@ -22,11 +22,13 @@ def synthesize_chapter(chapter: Chapter, book: Book, engine, profile_handle, voi
             if on_chunk_done is not None:
                 on_chunk_done(i + 1, total)
         combined = concatenate_chunks(audio_chunks, engine.sample_rate())
-        mp3_path = export_chapter_mp3(
+        mp3_path, used_fallback = export_chapter_mp3(
             combined, engine.sample_rate(), book.output_dir, chapter.order_index,
             chapter.title, book.title, voice_params.get("voice_name", engine.name),
+            fallback_dir=str(Path(BACKUP_OUTPUT_DIR) / str(book.id)),
         )
-        db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path=mp3_path)
+        db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path=mp3_path,
+                                  used_fallback=used_fallback)
     except Exception as exc:
         db.update_chapter_status(chapter.id, ChapterStatus.FAILED, error=str(exc))
 
@@ -47,11 +49,12 @@ def synthesize_text_clip(clip: TextClip, engine, profile_handle, voice_params: d
                 on_chunk_done(i + 1, total)
         combined = concatenate_chunks(audio_chunks, engine.sample_rate())
         output_path = str(Path(output_dir) / f"text-clip-{clip.id}.mp3")
-        mp3_path = export_mp3(
+        mp3_path, used_fallback = export_mp3(
             combined, engine.sample_rate(), output_path,
             title=f"Text clip #{clip.id}", artist=voice_params.get("voice_name", engine.name),
+            fallback_dir=str(Path(BACKUP_OUTPUT_DIR) / "text-clips"),
         )
-        db.finish_text_clip(clip.id, JobStatus.DONE, output_path=mp3_path)
+        db.finish_text_clip(clip.id, JobStatus.DONE, output_path=mp3_path, used_fallback=used_fallback)
     except Exception as exc:
         db.finish_text_clip(clip.id, JobStatus.FAILED, error=str(exc))
 

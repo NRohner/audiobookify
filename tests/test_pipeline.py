@@ -1,12 +1,14 @@
+import os
 import shutil
 
 import pytest
 
+import audiobookify.synth.pipeline as pipeline
 from audiobookify.db import Database
 from audiobookify.engines.fake import FakeEngine
 from audiobookify.ingest.base import RawChapter
-from audiobookify.models import ChapterStatus, SourceFormat
-from audiobookify.synth.pipeline import generate_book, synthesize_chapter
+from audiobookify.models import ChapterStatus, JobStatus, SourceFormat
+from audiobookify.synth.pipeline import generate_book, synthesize_chapter, synthesize_text_clip
 
 requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
@@ -149,4 +151,56 @@ def test_synthesize_chapter_reports_progress_per_chunk(tmp_path):
     assert result.status == ChapterStatus.DONE
     # "Body of chapter 1." is a single sentence, well under max_chunk_chars -> one chunk
     assert calls == [(1, 1)]
+    db.close()
+
+
+@requires_ffmpeg
+def test_synthesize_chapter_records_used_fallback_when_output_dir_is_unwritable(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "test.db"))
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(locked),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    os.chmod(locked, 0o500)
+    monkeypatch.setattr(pipeline, "BACKUP_OUTPUT_DIR", str(tmp_path / "backup"))
+    engine = FakeEngine()
+    engine.load("cpu")
+    profile_handle = engine.clone_profile(None, None, {})
+
+    try:
+        result = synthesize_chapter(chapter, book, engine, profile_handle, {"voice_name": "fake"},
+                                     [], db)
+    finally:
+        os.chmod(locked, 0o700)
+
+    assert result.status == ChapterStatus.DONE
+    assert result.used_fallback is True
+    assert result.output_mp3_path.startswith(str(tmp_path / "backup"))
+    db.close()
+
+
+@requires_ffmpeg
+def test_synthesize_text_clip_records_used_fallback_when_output_dir_is_unwritable(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "test.db"))
+    clip = db.create_text_clip(text="Hello there.", voice_profile_id=None)
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    os.chmod(locked, 0o500)
+    monkeypatch.setattr(pipeline, "BACKUP_OUTPUT_DIR", str(tmp_path / "backup"))
+    engine = FakeEngine()
+    engine.load("cpu")
+    profile_handle = engine.clone_profile(None, None, {})
+
+    try:
+        result = synthesize_text_clip(clip, engine, profile_handle, {"voice_name": "fake"}, [], db,
+                                       str(locked))
+    finally:
+        os.chmod(locked, 0o700)
+
+    assert result.status == JobStatus.DONE
+    assert result.used_fallback is True
+    assert result.output_path.startswith(str(tmp_path / "backup"))
     db.close()
