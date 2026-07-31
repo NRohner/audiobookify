@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Loader2, Play } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Loader2, Play } from "lucide-react";
 import { api, chapterInProgress } from "../lib/api.js";
 import Badge from "../components/ui/Badge.jsx";
 import Button from "../components/ui/Button.jsx";
@@ -133,6 +133,15 @@ export default function BookDetailPage() {
                 {chapter.error && <p className="text-sm text-destructive mt-1">{chapter.error}</p>}
               </div>
               <Badge status={badgeStatus} label={badgeStatus} />
+              {chapter.used_fallback && (
+                <span
+                  title="The output folder wasn't writable when this chapter finished — saved to the backup location instead."
+                  className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"
+                >
+                  <AlertTriangle className="size-3.5" aria-hidden="true" />
+                  Backup location
+                </span>
+              )}
               {chapter.output_mp3_path && (
                 <span
                   className="text-xs text-muted-foreground font-mono truncate max-w-40"
