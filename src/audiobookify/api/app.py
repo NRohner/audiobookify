@@ -314,8 +314,16 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             shutil.rmtree(staged_dir, ignore_errors=True)
             raise HTTPException(status_code=400, detail=str(exc))
 
-        permanent_path = store_reference_audio(str(staged_path.resolve()), profile.id, profile.name)
-        db.update_voice_profile_reference_audio_path(profile.id, str(permanent_path))
+        try:
+            permanent_path = store_reference_audio(str(staged_path.resolve()), profile.id, profile.name)
+            db.update_voice_profile_reference_audio_path(profile.id, str(permanent_path))
+        except OSError as exc:
+            db.delete_voice_profile(profile.id)
+            shutil.rmtree(staged_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=500, detail=f"failed to store reference audio: {exc}"
+            )
+
         shutil.rmtree(staged_dir, ignore_errors=True)
         profile = db.get_voice_profile_by_id(profile.id)
 

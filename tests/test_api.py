@@ -8,7 +8,6 @@ import pytest
 import soundfile as sf
 from fastapi.testclient import TestClient
 
-import audiobookify.voice.storage as voice_storage
 from audiobookify.api.app import create_app
 from audiobookify.db import Database
 from audiobookify.engines.fake import FakeEngine
@@ -17,14 +16,6 @@ from audiobookify.models import ChapterStatus, JobStatus, SourceFormat
 from audiobookify.worker import run_worker_once
 
 requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
-
-
-@pytest.fixture(autouse=True)
-def _isolate_voices_dir(tmp_path, monkeypatch):
-    # POST /api/voices now copies reference audio into voice_storage.VOICES_DIR - without
-    # this, every test in this file that creates a voice would write into this repo's
-    # real voices/ directory instead of a throwaway tmp_path.
-    monkeypatch.setattr(voice_storage, "VOICES_DIR", str(tmp_path / "voices"))
 
 
 def _client(tmp_path):
@@ -371,6 +362,29 @@ def test_create_voice_rejects_duplicate_name(tmp_path):
 
     assert response.status_code == 400
     assert "dup" in response.json()["detail"]
+
+
+def test_create_voice_rolls_back_the_profile_row_when_permanent_storage_fails(tmp_path, monkeypatch):
+    import audiobookify.api.app as app_module
+
+    def failing_store(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app_module, "store_reference_audio", failing_store)
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/api/voices",
+        files={"file": ("ref.wav", _clean_tone_wav_bytes(), "audio/wav")},
+        data={"name": "narrator-1"},
+    )
+
+    assert response.status_code == 500
+
+    # the row was rolled back - the name is free to retry, not stuck on a duplicate check
+    db = Database(str(tmp_path / "test.db"))
+    assert db.find_voice_profile_by_name("narrator-1") is None
+    db.close()
 
 
 def test_list_voices_returns_all_profiles(tmp_path):
