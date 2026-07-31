@@ -15,7 +15,7 @@ export default function DirectoryBrowser({ value, onChange, onValidityChange }) 
       const result = await api.browseDir(path);
       setBrowsed(result);
     } catch (e) {
-      setBrowseError(e.message);
+      setBrowseError(path ? `Couldn't open ${path}: ${e.message}` : e.message);
     }
   }
 

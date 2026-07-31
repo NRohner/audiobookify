@@ -35,7 +35,7 @@ function ImportBookModal({ onClose, onImported }) {
     try {
       const form = new FormData();
       form.append("file", event.target.elements.file.files[0]);
-      form.append("output_dir", outputDir);
+      form.append("output_dir", outputDir.trim());
       const book = await api.createBook(form);
       onImported(book);
     } catch (e) {

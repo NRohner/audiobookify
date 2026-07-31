@@ -136,7 +136,7 @@ export default function BookDetailPage() {
               {chapter.used_fallback && (
                 <span
                   title="The output folder wasn't writable when this chapter finished — saved to the backup location instead."
-                  className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"
+                  className="inline-flex items-center gap-1 text-xs text-accent"
                 >
                   <AlertTriangle className="size-3.5" aria-hidden="true" />
                   Backup location

@@ -124,7 +124,7 @@ export default function TextPage() {
                     {clip.used_fallback && (
                       <span
                         title="The output folder wasn't writable when this clip finished — saved to the backup location instead."
-                        className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"
+                        className="inline-flex items-center gap-1 text-xs text-accent"
                       >
                         <AlertTriangle className="size-3.5" aria-hidden="true" />
                         Backup

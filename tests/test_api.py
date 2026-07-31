@@ -56,6 +56,20 @@ def test_create_book_ingests_uploaded_markdown_and_returns_chapters(tmp_path):
     assert body["chapters"][0]["progress"] is None
 
 
+def test_create_book_strips_whitespace_from_output_dir(tmp_path):
+    client = _client(tmp_path)
+    target = tmp_path / "out"
+
+    response = client.post(
+        "/api/books",
+        files={"file": ("book.md", b"# Ch\nBody.\n", "text/markdown")},
+        data={"output_dir": f"  {target}  "},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["output_dir"] == str(target.resolve())
+
+
 def test_create_book_rejects_unsupported_format(tmp_path):
     client = _client(tmp_path)
 
@@ -602,7 +616,18 @@ def test_validate_output_dir_reports_writable_for_a_creatable_path(tmp_path):
     body = response.json()
     assert body["writable"] is True
     assert body["error"] is None
-    assert new_dir.is_dir()
+    assert not new_dir.exists()  # validating must NOT create the directory
+
+
+def test_validate_output_dir_does_not_create_intermediate_directories(tmp_path):
+    client = _client(tmp_path)
+    nested = tmp_path / "a" / "b" / "c"
+
+    response = client.get("/api/validate-output-dir", params={"path": str(nested)})
+
+    assert response.status_code == 200
+    assert response.json()["writable"] is True
+    assert not (tmp_path / "a").exists()
 
 
 def test_validate_output_dir_reports_error_for_a_permission_denied_path(tmp_path):

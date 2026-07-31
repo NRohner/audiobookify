@@ -100,7 +100,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         if suffix not in (".epub", ".md"):
             raise HTTPException(status_code=400, detail=f"unsupported input format: {suffix}")
 
-        resolved_output_dir = Path(output_dir).resolve()
+        resolved_output_dir = Path(output_dir.strip()).resolve()
         if not _check_writable(resolved_output_dir):
             raise HTTPException(
                 status_code=400,
@@ -166,7 +166,14 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
     @app.get("/api/validate-output-dir")
     def validate_output_dir(path: str):
         resolved = Path(path).expanduser().resolve()
-        if _check_writable(resolved):
+        existing = resolved
+        while not existing.exists():
+            parent = existing.parent
+            if parent == existing:
+                break
+            existing = parent
+        writable = existing.is_dir() and os.access(existing, os.W_OK | os.X_OK)
+        if writable:
             return {"path": str(resolved), "writable": True, "error": None}
         return {
             "path": str(resolved), "writable": False,

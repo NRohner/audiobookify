@@ -621,4 +621,8 @@ def test_existing_pre_fallback_database_gains_used_fallback_columns_via_migratio
     )
     [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
     assert chapter.used_fallback is False
+
+    clip = db.create_text_clip(text="Hi.", voice_profile_id=None)
+    db.finish_text_clip(clip.id, JobStatus.DONE, output_path="/o.mp3", used_fallback=True)
+    assert db.get_text_clip(clip.id).used_fallback is True
     db.close()
