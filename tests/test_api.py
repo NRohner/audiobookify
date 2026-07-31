@@ -316,7 +316,10 @@ def test_book_detail_reflects_job_progress_after_worker_processes_it(tmp_path):
 
     detail = client.get(f"/api/books/{created['id']}").json()
     assert detail["chapters"][0]["status"] == "done"
-    assert detail["chapters"][0]["progress"] == 1.0
+    # progress is only surfaced for genuinely active (queued/generating) jobs; once a
+    # chapter is done, `status` alone communicates completion and stale progress from
+    # the finished job is no longer reported (see _book_to_dict in app.py).
+    assert detail["chapters"][0]["progress"] is None
 
 
 def test_create_voice_uploads_reference_audio_and_returns_profile(tmp_path):
@@ -783,6 +786,45 @@ def test_cancel_chapter_with_no_active_job_is_a_noop(tmp_path):
     response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
 
     assert response.status_code == 200
+
+
+def test_get_book_does_not_report_stale_progress_after_cancelling_a_queued_job(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.create_job(chapter.id)
+    db.close()
+
+    cancel_response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+    assert cancel_response.status_code == 200
+
+    response = client.get(f"/api/books/{book.id}")
+
+    chapter_dict = response.json()["chapters"][0]
+    assert chapter_dict["status"] == "pending"
+    assert chapter_dict["progress"] is None
+
+
+def test_get_book_still_reports_progress_for_a_genuinely_queued_job(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.create_job(chapter.id)
+    db.close()
+
+    response = client.get(f"/api/books/{book.id}")
+
+    chapter_dict = response.json()["chapters"][0]
+    assert chapter_dict["status"] == "pending"
+    assert chapter_dict["progress"] == 0.0
 
 
 def test_cancel_chapter_returns_404_for_a_chapter_in_a_different_book(tmp_path):

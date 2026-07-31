@@ -84,6 +84,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         chapters = []
         for chapter in db.list_chapters(book.id):
             job = db.latest_job_for_chapter(chapter.id)
+            active_job = job if job and job.status in (JobStatus.QUEUED, JobStatus.GENERATING) else None
             chapters.append({
                 "id": chapter.id,
                 "order_index": chapter.order_index,
@@ -91,7 +92,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
                 "status": chapter.status.value,
                 "output_mp3_path": chapter.output_mp3_path,
                 "error": chapter.error,
-                "progress": job.progress if job else None,
+                "progress": active_job.progress if active_job else None,
                 "used_fallback": chapter.used_fallback,
             })
         return {
