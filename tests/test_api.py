@@ -1,12 +1,14 @@
 import io
 import os
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
 import soundfile as sf
 from fastapi.testclient import TestClient
 
+import audiobookify.voice.storage as voice_storage
 from audiobookify.api.app import create_app
 from audiobookify.db import Database
 from audiobookify.engines.fake import FakeEngine
@@ -15,6 +17,14 @@ from audiobookify.models import ChapterStatus, JobStatus, SourceFormat
 from audiobookify.worker import run_worker_once
 
 requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_voices_dir(tmp_path, monkeypatch):
+    # POST /api/voices now copies reference audio into voice_storage.VOICES_DIR - without
+    # this, every test in this file that creates a voice would write into this repo's
+    # real voices/ directory instead of a throwaway tmp_path.
+    monkeypatch.setattr(voice_storage, "VOICES_DIR", str(tmp_path / "voices"))
 
 
 def _client(tmp_path):
@@ -919,3 +929,38 @@ def test_cancel_book_cancels_every_chapter_with_an_active_job(tmp_path):
     assert db.get_chapter(chapters[0].id).status == ChapterStatus.PENDING
     assert db.get_chapter(chapters[1].id).status == ChapterStatus.PENDING
     db.close()
+
+
+def test_create_voice_stores_reference_audio_under_voices_dir_not_uploads(tmp_path):
+    client = _client(tmp_path)
+
+    created = client.post(
+        "/api/voices",
+        files={"file": ("ref.wav", _clean_tone_wav_bytes(), "audio/wav")},
+        data={"name": "narrator-1"},
+    ).json()
+
+    db = Database(str(tmp_path / "test.db"))
+    profile = db.get_voice_profile_by_id(created["id"])
+    db.close()
+
+    assert profile.reference_audio_path.startswith(str((tmp_path / "voices").resolve()))
+    assert Path(profile.reference_audio_path).is_file()
+    assert list((tmp_path / "uploads").iterdir()) == []  # staging dir cleaned up
+
+
+def test_delete_voice_removes_the_permanent_voice_storage_folder(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/voices",
+        files={"file": ("a.wav", _clean_tone_wav_bytes(), "audio/wav")},
+        data={"name": "a"},
+    ).json()
+    db = Database(str(tmp_path / "test.db"))
+    voice_dir = Path(db.get_voice_profile_by_id(created["id"]).reference_audio_path).parent
+    db.close()
+    assert voice_dir.is_dir()
+
+    client.delete(f"/api/voices/{created['id']}")
+
+    assert not voice_dir.exists()

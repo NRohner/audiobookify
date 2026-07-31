@@ -13,6 +13,7 @@ from ..db import Database
 from ..ingest import ingest_by_path
 from ..models import ChapterStatus, JobStatus
 from ..synth.chunk_cache import clear_cache
+from ..voice.storage import delete_voice_storage, store_reference_audio
 from ..voice.validation import validate_reference_audio
 
 
@@ -313,6 +314,11 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             shutil.rmtree(staged_dir, ignore_errors=True)
             raise HTTPException(status_code=400, detail=str(exc))
 
+        permanent_path = store_reference_audio(str(staged_path.resolve()), profile.id, profile.name)
+        db.update_voice_profile_reference_audio_path(profile.id, str(permanent_path))
+        shutil.rmtree(staged_dir, ignore_errors=True)
+        profile = db.get_voice_profile_by_id(profile.id)
+
         return _voice_to_dict(profile, warnings=info.warnings)
 
     @app.get("/api/voices")
@@ -321,10 +327,11 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
 
     @app.delete("/api/voices/{voice_id}")
     def delete_voice(voice_id: int, db: Database = Depends(get_db)):
-        try:
-            db.delete_voice_profile(voice_id)
-        except KeyError:
+        profile = db.get_voice_profile_by_id(voice_id)
+        if profile is None:
             raise HTTPException(status_code=404, detail="voice profile not found")
+        db.delete_voice_profile(voice_id)
+        delete_voice_storage(voice_id, profile.name)
         return {"ok": True}
 
     @app.get("/api/pronunciations")
