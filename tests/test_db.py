@@ -528,3 +528,97 @@ def test_get_book_raises_keyerror_for_missing_id(tmp_path):
     with pytest.raises(KeyError):
         db.get_book(999)
     db.close()
+
+
+def test_update_chapter_status_sets_used_fallback(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="Test Book", author=None, source_path="/books/test.md",
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+
+    db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path="/out/01 - Ch 1.mp3",
+                              used_fallback=True)
+
+    [reloaded] = db.list_chapters(book.id)
+    assert reloaded.used_fallback is True
+    db.close()
+
+
+def test_update_chapter_status_defaults_used_fallback_to_false(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="Test Book", author=None, source_path="/books/test.md",
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+
+    db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path="/out/01 - Ch 1.mp3")
+
+    [reloaded] = db.list_chapters(book.id)
+    assert reloaded.used_fallback is False
+    db.close()
+
+
+def test_finish_text_clip_sets_used_fallback(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    clip = db.create_text_clip(text="Hello.", voice_profile_id=None)
+
+    db.finish_text_clip(clip.id, JobStatus.DONE, output_path="/out/clip.mp3", used_fallback=True)
+
+    assert db.get_text_clip(clip.id).used_fallback is True
+    db.close()
+
+
+def test_existing_pre_fallback_database_gains_used_fallback_columns_via_migration(tmp_path):
+    # Simulates opening a database file created before this change (no used_fallback
+    # column on chapters/text_clips) - the migration in Database.__init__ must add it
+    # without raising.
+    import sqlite3
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE chapters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id INTEGER NOT NULL,
+            order_index INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            text TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            output_mp3_path TEXT,
+            duration REAL,
+            error TEXT,
+            UNIQUE(book_id, order_index)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE text_clips (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            voice_profile_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'queued',
+            progress REAL,
+            output_path TEXT,
+            created_at REAL NOT NULL,
+            started_at REAL,
+            finished_at REAL,
+            error TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(db_path)  # must not raise
+    book = db.create_book(
+        title="T", author=None, source_path="/books/t.md",
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    assert chapter.used_fallback is False
+    db.close()

@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS chapters (
     output_mp3_path TEXT,
     duration REAL,
     error TEXT,
+    used_fallback INTEGER NOT NULL DEFAULT 0,
     UNIQUE(book_id, order_index)
 );
 
@@ -79,7 +80,8 @@ CREATE TABLE IF NOT EXISTS text_clips (
     created_at REAL NOT NULL,
     started_at REAL,
     finished_at REAL,
-    error TEXT
+    error TEXT,
+    used_fallback INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -90,6 +92,15 @@ def _migrate_lexicon_entries_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE lexicon_entries ADD COLUMN phonemes TEXT")
     if "sample_audio_path" not in existing_cols:
         conn.execute("ALTER TABLE lexicon_entries ADD COLUMN sample_audio_path TEXT")
+
+
+def _migrate_fallback_columns(conn: sqlite3.Connection) -> None:
+    chapter_cols = {row["name"] for row in conn.execute("PRAGMA table_info(chapters)")}
+    if "used_fallback" not in chapter_cols:
+        conn.execute("ALTER TABLE chapters ADD COLUMN used_fallback INTEGER NOT NULL DEFAULT 0")
+    clip_cols = {row["name"] for row in conn.execute("PRAGMA table_info(text_clips)")}
+    if "used_fallback" not in clip_cols:
+        conn.execute("ALTER TABLE text_clips ADD COLUMN used_fallback INTEGER NOT NULL DEFAULT 0")
 
 
 def _row_to_book(row: sqlite3.Row) -> Book:
@@ -106,6 +117,7 @@ def _row_to_chapter(row: sqlite3.Row) -> Chapter:
         id=row["id"], book_id=row["book_id"], order_index=row["order_index"],
         title=row["title"], text=row["text"], status=ChapterStatus(row["status"]),
         output_mp3_path=row["output_mp3_path"], duration=row["duration"], error=row["error"],
+        used_fallback=bool(row["used_fallback"]),
     )
 
 
@@ -141,7 +153,7 @@ def _row_to_text_clip(row: sqlite3.Row) -> TextClip:
         id=row["id"], text=row["text"], voice_profile_id=row["voice_profile_id"],
         status=JobStatus(row["status"]), progress=row["progress"], output_path=row["output_path"],
         created_at=row["created_at"], started_at=row["started_at"], finished_at=row["finished_at"],
-        error=row["error"],
+        error=row["error"], used_fallback=bool(row["used_fallback"]),
     )
 
 
@@ -156,6 +168,7 @@ class Database:
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.executescript(SCHEMA)
         _migrate_lexicon_entries_columns(self.conn)
+        _migrate_fallback_columns(self.conn)
         self.conn.commit()
 
     def create_book(self, title: str, author: Optional[str], source_path: str,
@@ -212,11 +225,12 @@ class Database:
     def update_chapter_status(self, chapter_id: int, status: ChapterStatus,
                                output_mp3_path: Optional[str] = None,
                                duration: Optional[float] = None,
-                               error: Optional[str] = None) -> None:
+                               error: Optional[str] = None,
+                               used_fallback: bool = False) -> None:
         cur = self.conn.execute(
             "UPDATE chapters SET status = ?, output_mp3_path = COALESCE(?, output_mp3_path), "
-            "duration = COALESCE(?, duration), error = ? WHERE id = ?",
-            (status.value, output_mp3_path, duration, error, chapter_id),
+            "duration = COALESCE(?, duration), error = ?, used_fallback = ? WHERE id = ?",
+            (status.value, output_mp3_path, duration, error, int(used_fallback), chapter_id),
         )
         if cur.rowcount == 0:
             raise KeyError(f"no chapter with id {chapter_id}")
@@ -439,12 +453,12 @@ class Database:
         self.conn.commit()
 
     def finish_text_clip(self, clip_id: int, status: JobStatus, output_path: Optional[str] = None,
-                          error: Optional[str] = None) -> None:
+                          error: Optional[str] = None, used_fallback: bool = False) -> None:
         if status == JobStatus.DONE:
             self.conn.execute(
                 "UPDATE text_clips SET status = ?, progress = 1.0, output_path = ?, "
-                "finished_at = ?, error = ? WHERE id = ?",
-                (status.value, output_path, time.time(), error, clip_id),
+                "finished_at = ?, error = ?, used_fallback = ? WHERE id = ?",
+                (status.value, output_path, time.time(), error, int(used_fallback), clip_id),
             )
         else:
             self.conn.execute(
