@@ -11,3 +11,4 @@ frontend/dist/
 .run/
 output/
 .cache/
+voices/

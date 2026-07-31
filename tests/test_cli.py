@@ -1,4 +1,5 @@
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -155,7 +156,10 @@ def test_voice_add_creates_profile_and_reports_reference_info(tmp_path, capsys):
     db = Database(str(db_path))
     profile = db.find_voice_profile_by_name("narrator-1")
     assert profile is not None
-    assert profile.reference_audio_path == str(ref_path.resolve())
+    # The migration copies the reference audio into VOICES_DIR on Database.__init__, so
+    # the path is now VOICES_DIR/{id}_{name}/reference.{suffix}
+    assert profile.reference_audio_path.endswith(f"{profile.id}_narrator-1/reference.wav")
+    assert Path(profile.reference_audio_path).is_file()
     assert profile.engine == "chatterbox"
     db.close()
 
@@ -337,15 +341,21 @@ def test_generate_command_passes_voice_profile_reference_and_params_to_engine(tm
         "--voice-profile", "narrator-1",
     ])
 
-    assert RecordingEngine.clone_calls == [(str(ref_path.resolve()), "Hello there.")]
-    assert RecordingEngine.synthesize_params[0] == {
-        "voice_name": "narrator-1",
-        "reference_audio": str(ref_path.resolve()),
-        "reference_text": "Hello there.",
-        "exaggeration": 0.9,
-        "cfg": 0.2,
-        "temperature": 0.95,
-    }
+    # The migration copies the reference audio into VOICES_DIR on Database.__init__, so
+    # the path is now VOICES_DIR/{id}_{name}/reference.{suffix}
+    clone_call_ref_audio, clone_call_ref_text = RecordingEngine.clone_calls[0]
+    assert clone_call_ref_text == "Hello there."
+    assert clone_call_ref_audio.endswith("_narrator-1/reference.wav")
+    assert Path(clone_call_ref_audio).is_file()
+
+    synth_params = RecordingEngine.synthesize_params[0]
+    assert synth_params["voice_name"] == "narrator-1"
+    assert synth_params["reference_audio"].endswith("_narrator-1/reference.wav")
+    assert Path(synth_params["reference_audio"]).is_file()
+    assert synth_params["reference_text"] == "Hello there."
+    assert synth_params["exaggeration"] == 0.9
+    assert synth_params["cfg"] == 0.2
+    assert synth_params["temperature"] == 0.95
 
 
 @requires_ffmpeg
@@ -470,7 +480,11 @@ def test_generate_command_uses_original_voice_for_new_chapters_after_profile_mis
     assert "narrator-a" in captured.err
     # chapter two (not yet done at the time of the mismatch) was synthesized
     # with the originally-associated voice (narrator-a), not the requested one
-    assert RecordingEngine.clone_calls == [str(ref_path_a.resolve())]
+    # The migration copies the reference audio into VOICES_DIR on Database.__init__, so
+    # the path is now VOICES_DIR/{id}_{name}/reference.{suffix}
+    assert len(RecordingEngine.clone_calls) == 1
+    assert RecordingEngine.clone_calls[0].endswith("_narrator-a/reference.wav")
+    assert Path(RecordingEngine.clone_calls[0]).is_file()
 
 
 @requires_ffmpeg
