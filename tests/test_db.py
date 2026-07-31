@@ -788,3 +788,80 @@ def test_migration_skips_a_voice_profile_whose_source_file_no_longer_exists(tmp_
     profile = reopened.find_voice_profile_by_name("Ghost")
     assert profile.reference_audio_path == missing_path  # left unchanged, nothing to migrate
     reopened.close()
+
+
+def test_migration_of_one_profile_does_not_block_migration_of_others(tmp_path, monkeypatch):
+    monkeypatch.setattr(voice_storage, "VOICES_DIR", str(tmp_path / "voices"))
+    source_audio = tmp_path / "original-upload" / "clip.wav"
+    source_audio.parent.mkdir(parents=True)
+    source_audio.write_bytes(b"fake audio bytes")
+    missing_path = str(tmp_path / "does-not-exist.wav")
+
+    db_path = str(tmp_path / "test.db")
+    db = Database(db_path)
+    db.create_voice_profile(
+        name="Ghost", engine="chatterbox", reference_audio_path=missing_path,
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+    db.create_voice_profile(
+        name="Nova", engine="chatterbox", reference_audio_path=str(source_audio),
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+    db.close()
+
+    reopened = Database(db_path)
+
+    ghost = reopened.find_voice_profile_by_name("Ghost")
+    assert ghost.reference_audio_path == missing_path  # left unchanged
+
+    nova = reopened.find_voice_profile_by_name("Nova")
+    assert nova.reference_audio_path.startswith(str((tmp_path / "voices").resolve()))
+    assert Path(nova.reference_audio_path).is_file()
+    reopened.close()
+
+
+def test_migration_does_not_crash_when_storing_a_profile_raises_an_os_error(tmp_path, monkeypatch, capsys):
+    import audiobookify.db as db_module
+
+    monkeypatch.setattr(voice_storage, "VOICES_DIR", str(tmp_path / "voices"))
+    db_module._WARNED_VOICE_MIGRATION_IDS.clear()
+
+    broken_audio = tmp_path / "original-upload" / "broken.wav"
+    broken_audio.parent.mkdir(parents=True)
+    broken_audio.write_bytes(b"fake audio bytes")
+    fine_audio = tmp_path / "original-upload" / "fine.wav"
+    fine_audio.write_bytes(b"other fake audio bytes")
+
+    db_path = str(tmp_path / "test.db")
+    db = Database(db_path)
+    broken_profile = db.create_voice_profile(
+        name="Broken", engine="chatterbox", reference_audio_path=str(broken_audio),
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+    db.create_voice_profile(
+        name="Fine", engine="chatterbox", reference_audio_path=str(fine_audio),
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+    db.close()
+
+    real_store = voice_storage.store_reference_audio
+
+    def failing_for_broken(staged_path, profile_id, name):
+        if profile_id == broken_profile.id:
+            raise OSError("permission denied")
+        return real_store(staged_path, profile_id, name)
+
+    monkeypatch.setattr(voice_storage, "store_reference_audio", failing_for_broken)
+
+    reopened = Database(db_path)  # must not raise
+
+    broken = reopened.find_voice_profile_by_name("Broken")
+    assert broken.reference_audio_path == str(broken_audio)  # left unchanged after failure
+
+    fine = reopened.find_voice_profile_by_name("Fine")
+    assert fine.reference_audio_path.startswith(str((tmp_path / "voices").resolve()))
+    assert Path(fine.reference_audio_path).is_file()
+
+    captured = capsys.readouterr()
+    assert captured.err.count("could not be migrated") == 1
+    reopened.close()

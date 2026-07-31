@@ -164,6 +164,23 @@ def test_voice_add_creates_profile_and_reports_reference_info(tmp_path, capsys):
     db.close()
 
 
+def test_voice_add_reference_audio_survives_deletion_of_the_original_file(tmp_path):
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main([
+        "voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path),
+    ])
+
+    ref_path.unlink()  # simulate the user cleaning up their original download
+
+    db = Database(str(db_path))
+    profile = db.find_voice_profile_by_name("narrator-1")
+    assert Path(profile.reference_audio_path).is_file()
+    db.close()
+
+
 def test_voice_add_rejects_too_short_reference(tmp_path, capsys):
     ref_path = tmp_path / "tiny.wav"
     sf.write(str(ref_path), np.zeros(1000, dtype="float32"), 22050)
@@ -599,7 +616,16 @@ def test_generate_command_reports_missing_reference_audio(tmp_path, monkeypatch,
     db_path = tmp_path / "test.db"
 
     cli.main(["voice", "add", "--name", "narrator-1", "--reference", str(ref_path), "--db", str(db_path)])
-    ref_path.unlink()  # simulate the user moving/deleting the reference clip
+
+    # `voice add` now copies the reference clip into permanent storage immediately, so
+    # deleting the original upload (ref_path) no longer breaks the profile - that's the
+    # fix this project exists to deliver. To exercise "reference audio genuinely missing"
+    # we instead delete the permanent copy itself, e.g. simulating manual tampering with
+    # the voices/ directory.
+    db = Database(str(db_path))
+    profile = db.find_voice_profile_by_name("narrator-1")
+    Path(profile.reference_audio_path).unlink()
+    db.close()
 
     md_path = tmp_path / "book.md"
     md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")

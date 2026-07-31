@@ -15,6 +15,7 @@ from .phoneme.respelling import phonemes_to_respelling
 from .phoneme.wav2vec2 import Wav2Vec2PhonemeExtractor
 from . import worker
 from .synth.pipeline import generate_book
+from .voice.storage import store_reference_audio
 from .voice.validation import params_from_profile, validate_reference_audio
 
 
@@ -143,6 +144,15 @@ def _handle_voice_add(args) -> None:
         )
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        db.close()
+        sys.exit(1)
+
+    try:
+        permanent_path = store_reference_audio(reference_path, profile.id, profile.name)
+        db.update_voice_profile_reference_audio_path(profile.id, str(permanent_path))
+    except OSError as exc:
+        print(f"Error: could not store reference audio permanently: {exc}", file=sys.stderr)
+        db.delete_voice_profile(profile.id)
         db.close()
         sys.exit(1)
 

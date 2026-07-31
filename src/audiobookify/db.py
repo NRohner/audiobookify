@@ -118,6 +118,16 @@ def _migrate_cancel_requested_column(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0")
 
 
+_WARNED_VOICE_MIGRATION_IDS: set = set()
+
+
+def _warn_voice_migration_skipped_once(profile_id: int, message: str) -> None:
+    if profile_id in _WARNED_VOICE_MIGRATION_IDS:
+        return
+    _WARNED_VOICE_MIGRATION_IDS.add(profile_id)
+    print(f"Warning: {message}", file=sys.stderr)
+
+
 def _migrate_voice_reference_audio(conn: sqlite3.Connection) -> None:
     voices_root = str(Path(voice_storage.VOICES_DIR).resolve())
     rows = conn.execute("SELECT id, name, reference_audio_path FROM voice_profiles").fetchall()
@@ -126,13 +136,21 @@ def _migrate_voice_reference_audio(conn: sqlite3.Connection) -> None:
         if current_path.startswith(voices_root):
             continue
         if not Path(current_path).is_file():
-            print(
-                f"Warning: voice profile {row['id']} ({row['name']})'s reference audio "
+            _warn_voice_migration_skipped_once(
+                row["id"],
+                f"voice profile {row['id']} ({row['name']})'s reference audio "
                 f"'{current_path}' no longer exists - skipping migration for this profile",
-                file=sys.stderr,
             )
             continue
-        new_path = voice_storage.store_reference_audio(current_path, row["id"], row["name"])
+        try:
+            new_path = voice_storage.store_reference_audio(current_path, row["id"], row["name"])
+        except OSError as exc:
+            _warn_voice_migration_skipped_once(
+                row["id"],
+                f"voice profile {row['id']} ({row['name']})'s reference audio could not be "
+                f"migrated to permanent storage ({exc}) - skipping this profile",
+            )
+            continue
         conn.execute(
             "UPDATE voice_profiles SET reference_audio_path = ? WHERE id = ?",
             (str(new_path), row["id"]),
