@@ -162,8 +162,21 @@ def test_validate_output_dir_reports_writable_for_a_creatable_path(tmp_path):
     assert body["writable"] is True
     assert body["error"] is None
     assert new_dir.is_dir()
+```
 
+**Superseded by the whole-branch review fix pass:** this endpoint's original
+`_check_writable`-based implementation (shown above) turned out to have a real bug —
+called from a 400ms-debounced text-field `onChange`, it silently created real,
+permanent directories on every keystroke pause. The fix (commit `2c9b314`) rewrote
+`validate_output_dir` to walk up to the nearest existing ancestor and check
+`os.access(existing, os.W_OK | os.X_OK)` instead — non-mutating, matching the
+hint-vs-decision-point split already established for `browse-dir`'s per-child entries.
+`POST /api/books`'s own `_check_writable` call remains the one genuine mutating
+decision point. This test's final assertion was inverted to `assert not
+new_dir.exists()` to match. See
+`.superpowers/sdd/final-review-fix-report.md` for the full fix.
 
+```python
 def test_validate_output_dir_reports_error_for_a_permission_denied_path(tmp_path):
     client = _client(tmp_path)
     locked = tmp_path / "locked"
