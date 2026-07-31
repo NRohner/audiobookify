@@ -619,3 +619,26 @@ def test_validate_output_dir_reports_error_for_a_permission_denied_path(tmp_path
         assert body["error"] is not None
     finally:
         os.chmod(locked, 0o700)
+
+
+def test_create_book_rejects_an_unwritable_output_dir(tmp_path):
+    client = _client(tmp_path)
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    os.chmod(locked, 0o500)
+
+    try:
+        response = client.post(
+            "/api/books",
+            files={"file": ("book.md", b"# Ch\nBody.\n", "text/markdown")},
+            data={"output_dir": str(locked)},
+        )
+
+        assert response.status_code == 400
+        assert "cannot write to" in response.json()["detail"]
+    finally:
+        os.chmod(locked, 0o700)
+
+    db = Database(str(tmp_path / "test.db"))
+    assert db.list_books() == []
+    db.close()

@@ -98,6 +98,14 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         if suffix not in (".epub", ".md"):
             raise HTTPException(status_code=400, detail=f"unsupported input format: {suffix}")
 
+        resolved_output_dir = Path(output_dir).resolve()
+        if not _check_writable(resolved_output_dir):
+            raise HTTPException(
+                status_code=400,
+                detail=f"cannot write to '{resolved_output_dir}' — check the folder exists "
+                        "and you have permission to write to it",
+            )
+
         staged_dir = Path(upload_dir) / uuid.uuid4().hex
         staged_dir.mkdir(parents=True, exist_ok=True)
         staged_path = staged_dir / filename
@@ -111,7 +119,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
 
         book = db.create_book(
             title=parsed.title, author=parsed.author, source_path=str(staged_path.resolve()),
-            source_format=source_format, output_dir=str(Path(output_dir).resolve()),
+            source_format=source_format, output_dir=str(resolved_output_dir),
         )
         db.add_chapters(book.id, parsed.chapters)
 
