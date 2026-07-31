@@ -26,6 +26,17 @@ def _check_writable(path: Path) -> bool:
         return False
 
 
+def _cancel_active_job_for_chapter(db: Database, chapter) -> None:
+    latest = db.latest_job_for_chapter(chapter.id)
+    if latest is None or latest.status not in (JobStatus.QUEUED, JobStatus.GENERATING):
+        return
+    if latest.status == JobStatus.QUEUED:
+        db.finish_job(latest.id, JobStatus.CANCELLED)
+        db.update_chapter_status(chapter.id, ChapterStatus.PENDING)
+    else:
+        db.request_job_cancel(latest.id)
+
+
 def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
                 frontend_dist: Optional[str] = None) -> FastAPI:
     app = FastAPI()
@@ -221,6 +232,48 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
 
         job = db.create_job(chapter.id)
         return {"job_id": job.id}
+
+    @app.get("/api/worker/status")
+    def worker_status(db: Database = Depends(get_db)):
+        return {"paused": db.is_paused()}
+
+    @app.post("/api/worker/pause")
+    def worker_pause(db: Database = Depends(get_db)):
+        db.set_paused(True)
+        return {"paused": True}
+
+    @app.post("/api/worker/resume")
+    def worker_resume(db: Database = Depends(get_db)):
+        db.set_paused(False)
+        return {"paused": False}
+
+    @app.post("/api/books/{book_id}/chapters/{chapter_id}/cancel")
+    def cancel_chapter(book_id: int, chapter_id: int, db: Database = Depends(get_db)):
+        try:
+            db.get_book(book_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="book not found")
+
+        try:
+            chapter = db.get_chapter(chapter_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="chapter not found")
+        if chapter.book_id != book_id:
+            raise HTTPException(status_code=404, detail="chapter not found")
+
+        _cancel_active_job_for_chapter(db, chapter)
+        return {"ok": True}
+
+    @app.post("/api/books/{book_id}/cancel")
+    def cancel_book(book_id: int, db: Database = Depends(get_db)):
+        try:
+            book = db.get_book(book_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="book not found")
+
+        for chapter in db.list_chapters(book.id):
+            _cancel_active_job_for_chapter(db, chapter)
+        return {"ok": True}
 
     @app.patch("/api/books/{book_id}/voice")
     def assign_voice(book_id: int, payload: dict = Body(...), db: Database = Depends(get_db)):

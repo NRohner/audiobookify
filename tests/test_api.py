@@ -697,3 +697,132 @@ def test_get_text_clip_surfaces_used_fallback(tmp_path):
     response = client.get(f"/api/text-clips/{clip.id}")
 
     assert response.json()["used_fallback"] is True
+
+
+def test_worker_status_reports_not_paused_by_default(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.get("/api/worker/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"paused": False}
+
+
+def test_worker_pause_then_status_reports_paused(tmp_path):
+    client = _client(tmp_path)
+
+    pause_response = client.post("/api/worker/pause")
+    status_response = client.get("/api/worker/status")
+
+    assert pause_response.json() == {"paused": True}
+    assert status_response.json() == {"paused": True}
+
+
+def test_worker_resume_after_pause_reports_not_paused(tmp_path):
+    client = _client(tmp_path)
+    client.post("/api/worker/pause")
+
+    resume_response = client.post("/api/worker/resume")
+    status_response = client.get("/api/worker/status")
+
+    assert resume_response.json() == {"paused": False}
+    assert status_response.json() == {"paused": False}
+
+
+def test_cancel_chapter_with_a_queued_job_marks_it_cancelled_and_resets_the_chapter(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+    db = Database(str(tmp_path / "test.db"))
+    assert db.get_job(job.id).status == JobStatus.CANCELLED
+    assert db.get_chapter(chapter.id).status == ChapterStatus.PENDING
+    db.close()
+
+
+def test_cancel_chapter_with_a_generating_job_sets_cancel_requested_without_changing_status_yet(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    db.pop_next_queued_job()  # -> generating, simulating a worker mid-chapter
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+    db = Database(str(tmp_path / "test.db"))
+    assert db.is_job_cancel_requested(job.id) is True
+    assert db.get_job(job.id).status == JobStatus.GENERATING  # not yet transitioned - worker's job
+    db.close()
+
+
+def test_cancel_chapter_with_no_active_job_is_a_noop(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+
+
+def test_cancel_chapter_returns_404_for_a_chapter_in_a_different_book(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book_a = db.create_book(
+        title="A", author=None, source_path=str(tmp_path / "a.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    book_b = db.create_book(
+        title="B", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter_b] = db.add_chapters(book_b.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.close()
+
+    response = client.post(f"/api/books/{book_a.id}/chapters/{chapter_b.id}/cancel")
+
+    assert response.status_code == 404
+
+
+def test_cancel_book_cancels_every_chapter_with_an_active_job(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    chapters = db.add_chapters(book.id, [RawChapter(title=f"Ch {i}", text=f"Body {i}.")
+                                          for i in range(2)])
+    job0 = db.create_job(chapters[0].id)
+    job1 = db.create_job(chapters[1].id)
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/cancel")
+
+    assert response.status_code == 200
+    db = Database(str(tmp_path / "test.db"))
+    assert db.get_job(job0.id).status == JobStatus.CANCELLED
+    assert db.get_job(job1.id).status == JobStatus.CANCELLED
+    assert db.get_chapter(chapters[0].id).status == ChapterStatus.PENDING
+    assert db.get_chapter(chapters[1].id).status == ChapterStatus.PENDING
+    db.close()
