@@ -6,6 +6,15 @@ from ..lexicon.substitution import apply_lexicon
 from ..models import Book, Chapter, ChapterStatus, JobStatus, TextClip
 from ..normalize.text import chunk_text
 from ..postprocess.audio import BACKUP_OUTPUT_DIR, concatenate_chunks, export_chapter_mp3, export_mp3
+from .chunk_cache import clear_cache, compute_cache_key, load_cached_chunks, save_chunk, write_manifest
+
+
+class GenerationPaused(Exception):
+    pass
+
+
+class GenerationCancelled(Exception):
+    pass
 
 
 def synthesize_chapter(chapter: Chapter, book: Book, engine, profile_handle, voice_params: dict,
@@ -16,11 +25,20 @@ def synthesize_chapter(chapter: Chapter, book: Book, engine, profile_handle, voi
         text = apply_lexicon(chapter.text, lexicon_entries)
         chunks = chunk_text(text, engine.max_chunk_chars())
         total = len(chunks)
-        audio_chunks = []
-        for i, c in enumerate(chunks):
-            audio_chunks.append(engine.synthesize(c, profile_handle, voice_params))
+
+        cache_key = compute_cache_key(text, engine.max_chunk_chars(), voice_params)
+        audio_chunks = load_cached_chunks(chapter.id, cache_key)
+        if not audio_chunks:
+            clear_cache(chapter.id)
+            write_manifest(chapter.id, cache_key)
+
+        for i in range(len(audio_chunks), total):
+            chunk_audio = engine.synthesize(chunks[i], profile_handle, voice_params)
+            save_chunk(chapter.id, i, chunk_audio, engine.sample_rate())
+            audio_chunks.append(chunk_audio)
             if on_chunk_done is not None:
                 on_chunk_done(i + 1, total)
+
         combined = concatenate_chunks(audio_chunks, engine.sample_rate())
         mp3_path, used_fallback = export_chapter_mp3(
             combined, engine.sample_rate(), book.output_dir, chapter.order_index,
@@ -29,6 +47,9 @@ def synthesize_chapter(chapter: Chapter, book: Book, engine, profile_handle, voi
         )
         db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path=mp3_path,
                                   used_fallback=used_fallback)
+        clear_cache(chapter.id)
+    except (GenerationPaused, GenerationCancelled):
+        raise
     except Exception as exc:
         db.update_chapter_status(chapter.id, ChapterStatus.FAILED, error=str(exc))
 
