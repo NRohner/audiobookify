@@ -67,7 +67,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at REAL NOT NULL,
     started_at REAL,
     finished_at REAL,
-    error TEXT
+    error TEXT,
+    cancel_requested INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS worker_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    paused INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS text_clips (
@@ -101,6 +107,12 @@ def _migrate_fallback_columns(conn: sqlite3.Connection) -> None:
     clip_cols = {row["name"] for row in conn.execute("PRAGMA table_info(text_clips)")}
     if "used_fallback" not in clip_cols:
         conn.execute("ALTER TABLE text_clips ADD COLUMN used_fallback INTEGER NOT NULL DEFAULT 0")
+
+
+def _migrate_cancel_requested_column(conn: sqlite3.Connection) -> None:
+    job_cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "cancel_requested" not in job_cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0")
 
 
 def _row_to_book(row: sqlite3.Row) -> Book:
@@ -169,6 +181,7 @@ class Database:
         self.conn.executescript(SCHEMA)
         _migrate_lexicon_entries_columns(self.conn)
         _migrate_fallback_columns(self.conn)
+        _migrate_cancel_requested_column(self.conn)
         self.conn.commit()
 
     def create_book(self, title: str, author: Optional[str], source_path: str,
@@ -471,5 +484,36 @@ class Database:
         self.conn.execute(
             "UPDATE text_clips SET status = ?, started_at = NULL WHERE status = ?",
             (JobStatus.QUEUED.value, JobStatus.GENERATING.value),
+        )
+        self.conn.commit()
+
+    def is_paused(self) -> bool:
+        row = self.conn.execute("SELECT paused FROM worker_state WHERE id = 1").fetchone()
+        return bool(row["paused"]) if row else False
+
+    def set_paused(self, paused: bool) -> None:
+        self.conn.execute(
+            "INSERT INTO worker_state (id, paused) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET paused = excluded.paused",
+            (int(paused),),
+        )
+        self.conn.commit()
+
+    def request_job_cancel(self, job_id: int) -> None:
+        self.conn.execute("UPDATE jobs SET cancel_requested = 1 WHERE id = ?", (job_id,))
+        self.conn.commit()
+
+    def is_job_cancel_requested(self, job_id: int) -> bool:
+        row = self.conn.execute(
+            "SELECT cancel_requested FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"no job with id {job_id}")
+        return bool(row["cancel_requested"])
+
+    def requeue_job(self, job_id: int) -> None:
+        self.conn.execute(
+            "UPDATE jobs SET status = ?, started_at = NULL WHERE id = ?",
+            (JobStatus.QUEUED.value, job_id),
         )
         self.conn.commit()

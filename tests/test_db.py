@@ -626,3 +626,102 @@ def test_existing_pre_fallback_database_gains_used_fallback_columns_via_migratio
     db.finish_text_clip(clip.id, JobStatus.DONE, output_path="/o.mp3", used_fallback=True)
     assert db.get_text_clip(clip.id).used_fallback is True
     db.close()
+
+
+def test_is_paused_defaults_to_false(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    assert db.is_paused() is False
+    db.close()
+
+
+def test_set_paused_toggles_the_flag(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+
+    db.set_paused(True)
+    assert db.is_paused() is True
+
+    db.set_paused(False)
+    assert db.is_paused() is False
+    db.close()
+
+
+def test_is_job_cancel_requested_defaults_to_false(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+
+    assert db.is_job_cancel_requested(job.id) is False
+    db.close()
+
+
+def test_request_job_cancel_sets_the_flag(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+
+    db.request_job_cancel(job.id)
+
+    assert db.is_job_cancel_requested(job.id) is True
+    db.close()
+
+
+def test_requeue_job_resets_status_and_clears_started_at(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    db.pop_next_queued_job()  # -> generating, started_at set
+
+    db.requeue_job(job.id)
+
+    requeued = db.get_job(job.id)
+    assert requeued.status == JobStatus.QUEUED
+    assert requeued.started_at is None
+    db.close()
+
+
+def test_existing_pre_cancel_database_gains_cancel_requested_column_via_migration(tmp_path):
+    # Simulates opening a database file created before this change (no
+    # cancel_requested column on jobs) - the migration in Database.__init__ must add
+    # it without raising.
+    import sqlite3
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chapter_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            progress REAL,
+            created_at REAL NOT NULL,
+            started_at REAL,
+            finished_at REAL,
+            error TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(db_path)  # must not raise
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    assert db.is_job_cancel_requested(job.id) is False
+    db.close()
