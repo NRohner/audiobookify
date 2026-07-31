@@ -66,6 +66,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             "progress": clip.progress,
             "error": clip.error,
             "created_at": clip.created_at,
+            "used_fallback": clip.used_fallback,
         }
 
     def _book_to_dict(db: Database, book) -> dict:
@@ -80,6 +81,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
                 "output_mp3_path": chapter.output_mp3_path,
                 "error": chapter.error,
                 "progress": job.progress if job else None,
+                "used_fallback": chapter.used_fallback,
             })
         return {
             "id": book.id,

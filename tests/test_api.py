@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 from audiobookify.api.app import create_app
 from audiobookify.db import Database
 from audiobookify.engines.fake import FakeEngine
-from audiobookify.models import JobStatus
+from audiobookify.ingest.base import RawChapter
+from audiobookify.models import ChapterStatus, JobStatus, SourceFormat
 from audiobookify.worker import run_worker_once
 
 requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
@@ -642,3 +643,32 @@ def test_create_book_rejects_an_unwritable_output_dir(tmp_path):
     db = Database(str(tmp_path / "test.db"))
     assert db.list_books() == []
     db.close()
+
+
+def test_get_book_surfaces_used_fallback_per_chapter(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path="/backup/ch1.mp3",
+                              used_fallback=True)
+    db.close()
+
+    response = client.get(f"/api/books/{book.id}")
+
+    assert response.json()["chapters"][0]["used_fallback"] is True
+
+
+def test_get_text_clip_surfaces_used_fallback(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    clip = db.create_text_clip(text="Hi.", voice_profile_id=None)
+    db.finish_text_clip(clip.id, JobStatus.DONE, output_path="/backup/clip.mp3", used_fallback=True)
+    db.close()
+
+    response = client.get(f"/api/text-clips/{clip.id}")
+
+    assert response.json()["used_fallback"] is True
