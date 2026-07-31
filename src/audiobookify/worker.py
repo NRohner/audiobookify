@@ -3,7 +3,10 @@ import time
 
 from .db import Database
 from .models import ChapterStatus, JobStatus
-from .synth.pipeline import synthesize_chapter, synthesize_text_clip
+from .synth.chunk_cache import clear_cache
+from .synth.pipeline import (
+    GenerationCancelled, GenerationPaused, synthesize_chapter, synthesize_text_clip,
+)
 from .voice.validation import params_from_profile
 
 DEFAULT_TEXT_CLIP_OUTPUT_DIR = "text_clips"
@@ -44,12 +47,23 @@ def _process_next_chapter_job(db: Database, engine, profile_cache: dict) -> bool
 
         def on_chunk_done(done: int, total: int) -> None:
             db.update_job_progress(job.id, done / total)
+            if db.is_paused():
+                raise GenerationPaused()
+            if db.is_job_cancel_requested(job.id):
+                raise GenerationCancelled()
 
         result = synthesize_chapter(chapter, book, engine, profile_cache["handle"], voice_params,
                                      lexicon_entries, db, on_chunk_done=on_chunk_done)
 
         status = JobStatus.DONE if result.status == ChapterStatus.DONE else JobStatus.FAILED
         db.finish_job(job.id, status, error=result.error)
+    except GenerationPaused:
+        db.update_chapter_status(job.chapter_id, ChapterStatus.PENDING)
+        db.requeue_job(job.id)
+    except GenerationCancelled:
+        db.update_chapter_status(job.chapter_id, ChapterStatus.PENDING)
+        db.finish_job(job.id, JobStatus.CANCELLED)
+        clear_cache(job.chapter_id)
     except Exception as exc:
         db.finish_job(job.id, JobStatus.FAILED, error=str(exc))
 
@@ -81,6 +95,8 @@ def _process_next_text_clip(db: Database, engine, profile_cache: dict, output_di
 
 def run_worker_once(db: Database, engine, profile_cache: dict,
                      text_clip_output_dir: str = DEFAULT_TEXT_CLIP_OUTPUT_DIR) -> bool:
+    if db.is_paused():
+        return False
     if _process_next_chapter_job(db, engine, profile_cache):
         return True
     return _process_next_text_clip(db, engine, profile_cache, text_clip_output_dir)
