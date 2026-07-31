@@ -1,4 +1,4 @@
-.venv/
+uploads.venv/
 __pycache__/
 *.egg-info/
 .pytest_cache/
@@ -10,3 +10,7 @@ frontend/node_modules/
 frontend/dist/
 .run/
 output/
+.cache/
+voices/
+text_clips/
+uploads/

@@ -1,6 +1,7 @@
 import io
 import os
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -316,7 +317,10 @@ def test_book_detail_reflects_job_progress_after_worker_processes_it(tmp_path):
 
     detail = client.get(f"/api/books/{created['id']}").json()
     assert detail["chapters"][0]["status"] == "done"
-    assert detail["chapters"][0]["progress"] == 1.0
+    # progress is only surfaced for genuinely active (queued/generating) jobs; once a
+    # chapter is done, `status` alone communicates completion and stale progress from
+    # the finished job is no longer reported (see _book_to_dict in app.py).
+    assert detail["chapters"][0]["progress"] is None
 
 
 def test_create_voice_uploads_reference_audio_and_returns_profile(tmp_path):
@@ -358,6 +362,29 @@ def test_create_voice_rejects_duplicate_name(tmp_path):
 
     assert response.status_code == 400
     assert "dup" in response.json()["detail"]
+
+
+def test_create_voice_rolls_back_the_profile_row_when_permanent_storage_fails(tmp_path, monkeypatch):
+    import audiobookify.api.app as app_module
+
+    def failing_store(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app_module, "store_reference_audio", failing_store)
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/api/voices",
+        files={"file": ("ref.wav", _clean_tone_wav_bytes(), "audio/wav")},
+        data={"name": "narrator-1"},
+    )
+
+    assert response.status_code == 500
+
+    # the row was rolled back - the name is free to retry, not stuck on a duplicate check
+    db = Database(str(tmp_path / "test.db"))
+    assert db.find_voice_profile_by_name("narrator-1") is None
+    db.close()
 
 
 def test_list_voices_returns_all_profiles(tmp_path):
@@ -687,6 +714,23 @@ def test_get_book_surfaces_used_fallback_per_chapter(tmp_path):
     assert response.json()["chapters"][0]["used_fallback"] is True
 
 
+def test_get_book_surfaces_started_at_for_a_generating_chapter(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.create_job(chapter.id)
+    job = db.pop_next_queued_job()
+    db.close()
+
+    response = client.get(f"/api/books/{book.id}")
+
+    assert response.json()["chapters"][0]["started_at"] == pytest.approx(job.started_at)
+
+
 def test_get_text_clip_surfaces_used_fallback(tmp_path):
     client = _client(tmp_path)
     db = Database(str(tmp_path / "test.db"))
@@ -697,3 +741,269 @@ def test_get_text_clip_surfaces_used_fallback(tmp_path):
     response = client.get(f"/api/text-clips/{clip.id}")
 
     assert response.json()["used_fallback"] is True
+
+
+def test_get_text_clip_surfaces_started_at_while_generating(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    clip = db.create_text_clip(text="Hi.", voice_profile_id=None)
+    clip = db.pop_next_queued_text_clip()
+    db.close()
+
+    response = client.get(f"/api/text-clips/{clip.id}")
+
+    assert response.json()["started_at"] == pytest.approx(clip.started_at)
+
+
+def test_worker_status_reports_not_paused_by_default(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.get("/api/worker/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"paused": False}
+
+
+def test_worker_pause_then_status_reports_paused(tmp_path):
+    client = _client(tmp_path)
+
+    pause_response = client.post("/api/worker/pause")
+    status_response = client.get("/api/worker/status")
+
+    assert pause_response.json() == {"paused": True}
+    assert status_response.json() == {"paused": True}
+
+
+def test_worker_resume_after_pause_reports_not_paused(tmp_path):
+    client = _client(tmp_path)
+    client.post("/api/worker/pause")
+
+    resume_response = client.post("/api/worker/resume")
+    status_response = client.get("/api/worker/status")
+
+    assert resume_response.json() == {"paused": False}
+    assert status_response.json() == {"paused": False}
+
+
+def test_cancel_chapter_with_a_queued_job_marks_it_cancelled_and_resets_the_chapter(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+    db = Database(str(tmp_path / "test.db"))
+    assert db.get_job(job.id).status == JobStatus.CANCELLED
+    assert db.get_chapter(chapter.id).status == ChapterStatus.PENDING
+    db.close()
+
+
+def test_cancel_chapter_with_a_generating_job_sets_cancel_requested_without_changing_status_yet(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    db.pop_next_queued_job()  # -> generating, simulating a worker mid-chapter
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+    db = Database(str(tmp_path / "test.db"))
+    assert db.is_job_cancel_requested(job.id) is True
+    assert db.get_job(job.id).status == JobStatus.GENERATING  # not yet transitioned - worker's job
+    db.close()
+
+
+def test_cancel_chapter_with_no_active_job_is_a_noop(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+
+
+def test_get_book_does_not_report_stale_progress_after_cancelling_a_queued_job(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.create_job(chapter.id)
+    db.close()
+
+    cancel_response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+    assert cancel_response.status_code == 200
+
+    response = client.get(f"/api/books/{book.id}")
+
+    chapter_dict = response.json()["chapters"][0]
+    assert chapter_dict["status"] == "pending"
+    assert chapter_dict["progress"] is None
+
+
+def test_get_book_still_reports_progress_for_a_genuinely_queued_job(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.create_job(chapter.id)
+    db.close()
+
+    response = client.get(f"/api/books/{book.id}")
+
+    chapter_dict = response.json()["chapters"][0]
+    assert chapter_dict["status"] == "pending"
+    assert chapter_dict["progress"] == 0.0
+
+
+def test_cancel_chapter_clears_the_cache_for_a_paused_then_cancelled_job(tmp_path):
+    import audiobookify.synth.chunk_cache as chunk_cache
+
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    # Simulate a chunk already cached from a paused attempt (the reachable scenario:
+    # the worker requeues a paused job to QUEUED while deliberately keeping its cache).
+    chunk_cache.save_chunk(chapter.id, 0, __import__("numpy").zeros(10, dtype="float32"), sample_rate=22050)
+    chunk_cache.write_manifest(chapter.id, "irrelevant-key-for-this-test")
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+    assert not chunk_cache.chapter_cache_dir(chapter.id).exists()
+
+
+def test_cancel_chapter_is_a_noop_for_an_already_cancelled_job(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    db.finish_job(job.id, JobStatus.CANCELLED)
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+    db = Database(str(tmp_path / "test.db"))
+    assert db.get_job(job.id).status == JobStatus.CANCELLED  # unchanged, not re-finished
+    db.close()
+
+
+def test_cancel_book_returns_404_for_an_unknown_book(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.post("/api/books/999/cancel")
+
+    assert response.status_code == 404
+
+
+def test_cancel_chapter_returns_404_for_a_chapter_in_a_different_book(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book_a = db.create_book(
+        title="A", author=None, source_path=str(tmp_path / "a.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    book_b = db.create_book(
+        title="B", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter_b] = db.add_chapters(book_b.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.close()
+
+    response = client.post(f"/api/books/{book_a.id}/chapters/{chapter_b.id}/cancel")
+
+    assert response.status_code == 404
+
+
+def test_cancel_book_cancels_every_chapter_with_an_active_job(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    chapters = db.add_chapters(book.id, [RawChapter(title=f"Ch {i}", text=f"Body {i}.")
+                                          for i in range(2)])
+    job0 = db.create_job(chapters[0].id)
+    job1 = db.create_job(chapters[1].id)
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/cancel")
+
+    assert response.status_code == 200
+    db = Database(str(tmp_path / "test.db"))
+    assert db.get_job(job0.id).status == JobStatus.CANCELLED
+    assert db.get_job(job1.id).status == JobStatus.CANCELLED
+    assert db.get_chapter(chapters[0].id).status == ChapterStatus.PENDING
+    assert db.get_chapter(chapters[1].id).status == ChapterStatus.PENDING
+    db.close()
+
+
+def test_create_voice_stores_reference_audio_under_voices_dir_not_uploads(tmp_path):
+    client = _client(tmp_path)
+
+    created = client.post(
+        "/api/voices",
+        files={"file": ("ref.wav", _clean_tone_wav_bytes(), "audio/wav")},
+        data={"name": "narrator-1"},
+    ).json()
+
+    db = Database(str(tmp_path / "test.db"))
+    profile = db.get_voice_profile_by_id(created["id"])
+    db.close()
+
+    assert profile.reference_audio_path.startswith(str((tmp_path / "voices").resolve()))
+    assert Path(profile.reference_audio_path).is_file()
+    assert list((tmp_path / "uploads").iterdir()) == []  # staging dir cleaned up
+
+
+def test_delete_voice_removes_the_permanent_voice_storage_folder(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/voices",
+        files={"file": ("a.wav", _clean_tone_wav_bytes(), "audio/wav")},
+        data={"name": "a"},
+    ).json()
+    db = Database(str(tmp_path / "test.db"))
+    voice_dir = Path(db.get_voice_profile_by_id(created["id"]).reference_audio_path).parent
+    db.close()
+    assert voice_dir.is_dir()
+
+    client.delete(f"/api/voices/{created['id']}")
+
+    assert not voice_dir.exists()

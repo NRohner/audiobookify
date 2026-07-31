@@ -74,6 +74,7 @@ class JobStatus(str, Enum):
     GENERATING = "generating"
     DONE = "done"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass

@@ -12,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from ..db import Database
 from ..ingest import ingest_by_path
 from ..models import ChapterStatus, JobStatus
+from ..synth.chunk_cache import clear_cache
+from ..voice.storage import delete_voice_storage, store_reference_audio
 from ..voice.validation import validate_reference_audio
 
 
@@ -24,6 +26,18 @@ def _check_writable(path: Path) -> bool:
         return True
     except OSError:
         return False
+
+
+def _cancel_active_job_for_chapter(db: Database, chapter) -> None:
+    latest = db.latest_job_for_chapter(chapter.id)
+    if latest is None or latest.status not in (JobStatus.QUEUED, JobStatus.GENERATING):
+        return
+    if latest.status == JobStatus.QUEUED:
+        db.finish_job(latest.id, JobStatus.CANCELLED)
+        db.update_chapter_status(chapter.id, ChapterStatus.PENDING)
+        clear_cache(chapter.id)
+    else:
+        db.request_job_cancel(latest.id)
 
 
 def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
@@ -64,6 +78,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             "voice_profile_id": clip.voice_profile_id,
             "status": clip.status.value,
             "progress": clip.progress,
+            "started_at": clip.started_at,
             "error": clip.error,
             "created_at": clip.created_at,
             "used_fallback": clip.used_fallback,
@@ -73,6 +88,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         chapters = []
         for chapter in db.list_chapters(book.id):
             job = db.latest_job_for_chapter(chapter.id)
+            active_job = job if job and job.status in (JobStatus.QUEUED, JobStatus.GENERATING) else None
             chapters.append({
                 "id": chapter.id,
                 "order_index": chapter.order_index,
@@ -80,7 +96,8 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
                 "status": chapter.status.value,
                 "output_mp3_path": chapter.output_mp3_path,
                 "error": chapter.error,
-                "progress": job.progress if job else None,
+                "progress": active_job.progress if active_job else None,
+                "started_at": active_job.started_at if active_job else None,
                 "used_fallback": chapter.used_fallback,
             })
         return {
@@ -222,6 +239,48 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         job = db.create_job(chapter.id)
         return {"job_id": job.id}
 
+    @app.get("/api/worker/status")
+    def worker_status(db: Database = Depends(get_db)):
+        return {"paused": db.is_paused()}
+
+    @app.post("/api/worker/pause")
+    def worker_pause(db: Database = Depends(get_db)):
+        db.set_paused(True)
+        return {"paused": True}
+
+    @app.post("/api/worker/resume")
+    def worker_resume(db: Database = Depends(get_db)):
+        db.set_paused(False)
+        return {"paused": False}
+
+    @app.post("/api/books/{book_id}/chapters/{chapter_id}/cancel")
+    def cancel_chapter(book_id: int, chapter_id: int, db: Database = Depends(get_db)):
+        try:
+            db.get_book(book_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="book not found")
+
+        try:
+            chapter = db.get_chapter(chapter_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="chapter not found")
+        if chapter.book_id != book_id:
+            raise HTTPException(status_code=404, detail="chapter not found")
+
+        _cancel_active_job_for_chapter(db, chapter)
+        return {"ok": True}
+
+    @app.post("/api/books/{book_id}/cancel")
+    def cancel_book(book_id: int, db: Database = Depends(get_db)):
+        try:
+            book = db.get_book(book_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="book not found")
+
+        for chapter in db.list_chapters(book.id):
+            _cancel_active_job_for_chapter(db, chapter)
+        return {"ok": True}
+
     @app.patch("/api/books/{book_id}/voice")
     def assign_voice(book_id: int, payload: dict = Body(...), db: Database = Depends(get_db)):
         try:
@@ -257,6 +316,19 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             shutil.rmtree(staged_dir, ignore_errors=True)
             raise HTTPException(status_code=400, detail=str(exc))
 
+        try:
+            permanent_path = store_reference_audio(str(staged_path.resolve()), profile.id, profile.name)
+            db.update_voice_profile_reference_audio_path(profile.id, str(permanent_path))
+        except OSError as exc:
+            db.delete_voice_profile(profile.id)
+            shutil.rmtree(staged_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=500, detail=f"failed to store reference audio: {exc}"
+            )
+
+        shutil.rmtree(staged_dir, ignore_errors=True)
+        profile = db.get_voice_profile_by_id(profile.id)
+
         return _voice_to_dict(profile, warnings=info.warnings)
 
     @app.get("/api/voices")
@@ -265,10 +337,11 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
 
     @app.delete("/api/voices/{voice_id}")
     def delete_voice(voice_id: int, db: Database = Depends(get_db)):
-        try:
-            db.delete_voice_profile(voice_id)
-        except KeyError:
+        profile = db.get_voice_profile_by_id(voice_id)
+        if profile is None:
             raise HTTPException(status_code=404, detail="voice profile not found")
+        db.delete_voice_profile(voice_id)
+        delete_voice_storage(voice_id, profile.name)
         return {"ok": True}
 
     @app.get("/api/pronunciations")

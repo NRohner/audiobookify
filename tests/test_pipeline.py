@@ -3,6 +3,7 @@ import shutil
 
 import pytest
 
+import audiobookify.synth.chunk_cache as chunk_cache
 import audiobookify.synth.pipeline as pipeline
 from audiobookify.db import Database
 from audiobookify.engines.fake import FakeEngine
@@ -203,4 +204,220 @@ def test_synthesize_text_clip_records_used_fallback_when_output_dir_is_unwritabl
     assert result.status == JobStatus.DONE
     assert result.used_fallback is True
     assert result.output_path.startswith(str(tmp_path / "backup"))
+    db.close()
+
+
+@requires_ffmpeg
+def test_synthesize_chapter_writes_each_chunk_to_disk_as_it_is_synthesized(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    sentence1 = "Alpha " * 30 + "beta."
+    sentence2 = "Gamma " * 30 + "delta."
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text=f"{sentence1} {sentence2}")])
+    engine = FakeEngine()
+    engine.load("cpu")
+    profile_handle = engine.clone_profile(None, None, {})
+
+    seen = {}
+
+    def check_disk_after_first_chunk(done, total):
+        if done == 1:
+            cache_dir = chunk_cache.chapter_cache_dir(chapter.id)
+            seen["chunk_0_exists"] = (cache_dir / "chunk-0000.wav").is_file()
+            seen["chunk_1_exists"] = (cache_dir / "chunk-0001.wav").is_file()
+
+    result = synthesize_chapter(chapter, book, engine, profile_handle, {"voice_name": "fake"}, [], db,
+                                 on_chunk_done=check_disk_after_first_chunk)
+
+    assert result.status == ChapterStatus.DONE
+    assert seen == {"chunk_0_exists": True, "chunk_1_exists": False}
+    db.close()
+
+
+@requires_ffmpeg
+def test_synthesize_chapter_resumes_from_cached_chunks_after_a_pause(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    sentence1 = "Alpha " * 30 + "beta."
+    sentence2 = "Gamma " * 30 + "delta."
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text=f"{sentence1} {sentence2}")])
+    engine = FakeEngine()
+    engine.load("cpu")
+    profile_handle = engine.clone_profile(None, None, {})
+
+    calls = []
+
+    def pause_after_first_chunk(done, total):
+        calls.append((done, total))
+        if done == 1:
+            raise pipeline.GenerationPaused()
+
+    with pytest.raises(pipeline.GenerationPaused):
+        synthesize_chapter(chapter, book, engine, profile_handle, {"voice_name": "fake"}, [], db,
+                            on_chunk_done=pause_after_first_chunk)
+
+    assert calls == [(1, 2)]
+    assert db.get_chapter(chapter.id).status == ChapterStatus.GENERATING
+
+    class CountingEngine(FakeEngine):
+        def __init__(self):
+            super().__init__()
+            self.call_count = 0
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            self.call_count += 1
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    second_engine = CountingEngine()
+    second_engine.load("cpu")
+    second_profile_handle = second_engine.clone_profile(None, None, {})
+
+    result = synthesize_chapter(chapter, book, second_engine, second_profile_handle,
+                                 {"voice_name": "fake"}, [], db)
+
+    assert result.status == ChapterStatus.DONE
+    assert second_engine.call_count == 1  # only the second (uncached) chunk needed synthesis
+    db.close()
+
+
+@requires_ffmpeg
+def test_synthesize_chapter_resumes_cleanly_when_the_cache_is_already_fully_populated(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    sentence1 = "Alpha " * 30 + "beta."
+    sentence2 = "Gamma " * 30 + "delta."
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text=f"{sentence1} {sentence2}")])
+    engine = FakeEngine()
+    engine.load("cpu")
+    profile_handle = engine.clone_profile(None, None, {})
+
+    def pause_after_last_chunk(done, total):
+        if done == total:
+            raise pipeline.GenerationPaused()
+
+    with pytest.raises(pipeline.GenerationPaused):
+        synthesize_chapter(chapter, book, engine, profile_handle, {"voice_name": "fake"}, [], db,
+                            on_chunk_done=pause_after_last_chunk)
+
+    class CountingEngine(FakeEngine):
+        def __init__(self):
+            super().__init__()
+            self.call_count = 0
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            self.call_count += 1
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    second_engine = CountingEngine()
+    second_engine.load("cpu")
+    second_profile_handle = second_engine.clone_profile(None, None, {})
+
+    result = synthesize_chapter(chapter, book, second_engine, second_profile_handle,
+                                 {"voice_name": "fake"}, [], db)
+
+    assert result.status == ChapterStatus.DONE
+    assert second_engine.call_count == 0  # every chunk was already cached, nothing to re-synthesize
+    db.close()
+
+
+@requires_ffmpeg
+def test_synthesize_chapter_discards_stale_cache_when_the_lexicon_changes(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = _make_book(tmp_path, db, n_chapters=1)
+    [chapter] = db.list_chapters(book.id)
+    engine = FakeEngine()
+    engine.load("cpu")
+    profile_handle = engine.clone_profile(None, None, {})
+
+    def raise_paused(done, total):
+        raise pipeline.GenerationPaused()
+
+    with pytest.raises(pipeline.GenerationPaused):
+        synthesize_chapter(chapter, book, engine, profile_handle, {"voice_name": "fake"}, [], db,
+                            on_chunk_done=raise_paused)
+
+    db.create_lexicon_entry(term="chapter", override_value="CHAP-ter", scope="global")
+    lexicon_entries = db.list_lexicon_entries(book.id)
+
+    class CountingEngine(FakeEngine):
+        def __init__(self):
+            super().__init__()
+            self.call_count = 0
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            self.call_count += 1
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    second_engine = CountingEngine()
+    second_engine.load("cpu")
+    second_profile_handle = second_engine.clone_profile(None, None, {})
+
+    result = synthesize_chapter(chapter, book, second_engine, second_profile_handle,
+                                 {"voice_name": "fake"}, lexicon_entries, db)
+
+    assert result.status == ChapterStatus.DONE
+    assert second_engine.call_count == 1  # the stale-key cache was discarded, not reused
+    db.close()
+
+
+@requires_ffmpeg
+def test_synthesize_chapter_deletes_cache_dir_after_successful_export(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = _make_book(tmp_path, db, n_chapters=1)
+    [chapter] = db.list_chapters(book.id)
+    engine = FakeEngine()
+    engine.load("cpu")
+    profile_handle = engine.clone_profile(None, None, {})
+
+    result = synthesize_chapter(chapter, book, engine, profile_handle, {"voice_name": "fake"}, [], db)
+
+    assert result.status == ChapterStatus.DONE
+    assert not chunk_cache.chapter_cache_dir(chapter.id).exists()
+    db.close()
+
+
+def test_synthesize_chapter_reraises_generation_paused_instead_of_marking_failed(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = _make_book(tmp_path, db, n_chapters=1)
+    [chapter] = db.list_chapters(book.id)
+    engine = FakeEngine()
+    engine.load("cpu")
+    profile_handle = engine.clone_profile(None, None, {})
+
+    def raise_paused(done, total):
+        raise pipeline.GenerationPaused()
+
+    with pytest.raises(pipeline.GenerationPaused):
+        synthesize_chapter(chapter, book, engine, profile_handle, {"voice_name": "fake"}, [], db,
+                            on_chunk_done=raise_paused)
+
+    assert db.get_chapter(chapter.id).status != ChapterStatus.FAILED
+    db.close()
+
+
+def test_synthesize_chapter_reraises_generation_cancelled_instead_of_marking_failed(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = _make_book(tmp_path, db, n_chapters=1)
+    [chapter] = db.list_chapters(book.id)
+    engine = FakeEngine()
+    engine.load("cpu")
+    profile_handle = engine.clone_profile(None, None, {})
+
+    def raise_cancelled(done, total):
+        raise pipeline.GenerationCancelled()
+
+    with pytest.raises(pipeline.GenerationCancelled):
+        synthesize_chapter(chapter, book, engine, profile_handle, {"voice_name": "fake"}, [], db,
+                            on_chunk_done=raise_cancelled)
+
+    assert db.get_chapter(chapter.id).status != ChapterStatus.FAILED
     db.close()

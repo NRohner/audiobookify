@@ -13,9 +13,15 @@ export const api = {
   createBook: (formData) => request("/api/books", { method: "POST", body: formData }),
   browseDir: (path) => request(`/api/browse-dir${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   validateOutputDir: (path) => request(`/api/validate-output-dir?path=${encodeURIComponent(path)}`),
+  getWorkerStatus: () => request("/api/worker/status"),
+  pauseWorker: () => request("/api/worker/pause", { method: "POST" }),
+  resumeWorker: () => request("/api/worker/resume", { method: "POST" }),
   generateBook: (id) => request(`/api/books/${id}/generate`, { method: "POST" }),
   generateChapter: (bookId, chapterId) =>
     request(`/api/books/${bookId}/chapters/${chapterId}/generate`, { method: "POST" }),
+  cancelChapter: (bookId, chapterId) =>
+    request(`/api/books/${bookId}/chapters/${chapterId}/cancel`, { method: "POST" }),
+  cancelBook: (bookId) => request(`/api/books/${bookId}/cancel`, { method: "POST" }),
   assignVoice: (bookId, voiceProfileId) =>
     request(`/api/books/${bookId}/voice`, {
       method: "PATCH",
