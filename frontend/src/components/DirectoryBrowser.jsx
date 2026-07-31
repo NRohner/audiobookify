@@ -113,7 +113,7 @@ export default function DirectoryBrowser({ value, onChange, onValidityChange }) 
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="/Users/you/audiobooks/this-book"
+          placeholder="e.g. ~/audiobooks/this-book"
           className="w-full h-10 rounded-lg border border-border bg-background px-3 text-sm font-mono
             focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         />

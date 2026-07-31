@@ -2,7 +2,15 @@ VENV := .venv
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: setup models build up dev down clean
+# On WSL, npm/node on PATH can resolve to a Windows install (via interop with
+# /mnt/c/...), which fails on WSL-style paths. Prefer a native nvm-installed node
+# when present so `make build`/`make dev` work the same on WSL as on macOS/Linux.
+NVM_NODE_BIN := $(firstword $(wildcard $(HOME)/.nvm/versions/node/*/bin))
+ifneq ($(NVM_NODE_BIN),)
+export PATH := $(NVM_NODE_BIN):$(PATH)
+endif
+
+.PHONY: setup models build up dev down clean check-not-running
 
 setup:
 	python3 -m venv $(VENV)
@@ -19,13 +27,25 @@ models:
 build:
 	cd frontend && npm run build
 
-up: build
+# Refuses to start a second stack on top of a live one: a prior `make up`/`make dev`
+# whose port was already taken fails silently, leaving the *old* (possibly stale-code)
+# process as the one actually serving requests while its pidfile gets overwritten by
+# the new, dead one. That masks code changes behind a server that never picked them up.
+check-not-running:
+	@for f in .run/api.pid .run/worker.pid .run/frontend.pid; do \
+		if [ -f "$$f" ] && kill -0 "$$(cat "$$f")" 2>/dev/null; then \
+			echo "audiobookify already running (pid $$(cat "$$f") from $$f) - run 'make down' first."; \
+			exit 1; \
+		fi; \
+	done
+
+up: check-not-running build
 	mkdir -p .run
 	HF_HUB_OFFLINE=1 $(VENV)/bin/uvicorn audiobookify.api.app:create_app --factory --host 127.0.0.1 --port 8000 & echo $$! > .run/api.pid
 	HF_HUB_OFFLINE=1 $(VENV)/bin/audiobookify worker & echo $$! > .run/worker.pid
 	@echo "audiobookify running at http://127.0.0.1:8000 - 'make down' to stop."
 
-dev:
+dev: check-not-running
 	mkdir -p .run
 	HF_HUB_OFFLINE=1 $(VENV)/bin/uvicorn audiobookify.api.app:create_app --factory --reload --host 127.0.0.1 --port 8000 & echo $$! > .run/api.pid
 	HF_HUB_OFFLINE=1 $(VENV)/bin/audiobookify worker & echo $$! > .run/worker.pid
