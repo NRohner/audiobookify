@@ -15,6 +15,7 @@ const navItems = [
 export default function AppShell() {
   const [paused, setPaused] = useState(false);
   const [toggling, setToggling] = useState(false);
+  const [error, setError] = useState(null);
 
   async function refreshStatus() {
     const status = await api.getWorkerStatus();
@@ -29,6 +30,7 @@ export default function AppShell() {
 
   async function handleToggle() {
     setToggling(true);
+    setError(null);
     try {
       if (paused) {
         await api.resumeWorker();
@@ -36,6 +38,8 @@ export default function AppShell() {
         await api.pauseWorker();
       }
       await refreshStatus();
+    } catch (e) {
+      setError(e.message);
     } finally {
       setToggling(false);
     }
@@ -73,6 +77,7 @@ export default function AppShell() {
       </aside>
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-16 border-b border-border flex items-center justify-end gap-3 px-6">
+          {error && <p className="text-sm text-destructive">{error}</p>}
           <Button variant="secondary" onClick={handleToggle} loading={toggling}>
             {paused ? (
               <Play className="size-4" aria-hidden="true" />
