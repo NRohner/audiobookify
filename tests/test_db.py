@@ -1,8 +1,10 @@
 import pytest
+from pathlib import Path
 
 from audiobookify.db import Database
 from audiobookify.models import SourceFormat, ChapterStatus, JobStatus
 from audiobookify.ingest.base import RawChapter
+import audiobookify.voice.storage as voice_storage
 
 
 def test_create_book_and_add_chapters(tmp_path):
@@ -725,3 +727,64 @@ def test_existing_pre_cancel_database_gains_cancel_requested_column_via_migratio
     job = db.create_job(chapter.id)
     assert db.is_job_cancel_requested(job.id) is False
     db.close()
+
+
+def test_update_voice_profile_reference_audio_path_updates_the_path(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    profile = db.create_voice_profile(
+        name="Nova", engine="chatterbox", reference_audio_path=str(tmp_path / "old.wav"),
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+
+    db.update_voice_profile_reference_audio_path(profile.id, str(tmp_path / "new.wav"))
+
+    assert db.get_voice_profile_by_id(profile.id).reference_audio_path == str(tmp_path / "new.wav")
+    db.close()
+
+
+def test_update_voice_profile_reference_audio_path_raises_keyerror_for_missing_id(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    with pytest.raises(KeyError):
+        db.update_voice_profile_reference_audio_path(999, "/some/path.wav")
+    db.close()
+
+
+def test_existing_voice_profile_gets_migrated_to_permanent_voices_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(voice_storage, "VOICES_DIR", str(tmp_path / "voices"))
+    source_audio = tmp_path / "original-upload" / "clip.wav"
+    source_audio.parent.mkdir(parents=True)
+    source_audio.write_bytes(b"fake audio bytes")
+
+    db_path = str(tmp_path / "test.db")
+    db = Database(db_path)
+    db.create_voice_profile(
+        name="Nova", engine="chatterbox", reference_audio_path=str(source_audio),
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+    db.close()
+
+    reopened = Database(db_path)  # a fresh open triggers the migration
+
+    profile = reopened.find_voice_profile_by_name("Nova")
+    assert profile.reference_audio_path.startswith(str((tmp_path / "voices").resolve()))
+    assert Path(profile.reference_audio_path).is_file()
+    reopened.close()
+
+
+def test_migration_skips_a_voice_profile_whose_source_file_no_longer_exists(tmp_path, monkeypatch):
+    monkeypatch.setattr(voice_storage, "VOICES_DIR", str(tmp_path / "voices"))
+    missing_path = str(tmp_path / "does-not-exist.wav")
+
+    db_path = str(tmp_path / "test.db")
+    db = Database(db_path)
+    db.create_voice_profile(
+        name="Ghost", engine="chatterbox", reference_audio_path=missing_path,
+        reference_transcript=None, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+    )
+    db.close()
+
+    reopened = Database(db_path)  # must not raise even though the source file is gone
+
+    profile = reopened.find_voice_profile_by_name("Ghost")
+    assert profile.reference_audio_path == missing_path  # left unchanged, nothing to migrate
+    reopened.close()

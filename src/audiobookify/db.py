@@ -1,11 +1,14 @@
 import sqlite3
+import sys
 import time
+from pathlib import Path
 from typing import List, Optional
 
 from .models import (
     Book, Chapter, ChapterStatus, Job, JobStatus, LexiconEntry, SourceFormat, TextClip, VoiceProfile,
 )
 from .ingest.base import RawChapter
+from .voice import storage as voice_storage
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS books (
@@ -115,6 +118,27 @@ def _migrate_cancel_requested_column(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0")
 
 
+def _migrate_voice_reference_audio(conn: sqlite3.Connection) -> None:
+    voices_root = str(Path(voice_storage.VOICES_DIR).resolve())
+    rows = conn.execute("SELECT id, name, reference_audio_path FROM voice_profiles").fetchall()
+    for row in rows:
+        current_path = row["reference_audio_path"]
+        if current_path.startswith(voices_root):
+            continue
+        if not Path(current_path).is_file():
+            print(
+                f"Warning: voice profile {row['id']} ({row['name']})'s reference audio "
+                f"'{current_path}' no longer exists - skipping migration for this profile",
+                file=sys.stderr,
+            )
+            continue
+        new_path = voice_storage.store_reference_audio(current_path, row["id"], row["name"])
+        conn.execute(
+            "UPDATE voice_profiles SET reference_audio_path = ? WHERE id = ?",
+            (str(new_path), row["id"]),
+        )
+
+
 def _row_to_book(row: sqlite3.Row) -> Book:
     return Book(
         id=row["id"], title=row["title"], author=row["author"],
@@ -182,6 +206,7 @@ class Database:
         _migrate_lexicon_entries_columns(self.conn)
         _migrate_fallback_columns(self.conn)
         _migrate_cancel_requested_column(self.conn)
+        _migrate_voice_reference_audio(self.conn)
         self.conn.commit()
 
     def create_book(self, title: str, author: Optional[str], source_path: str,
@@ -287,6 +312,16 @@ class Database:
             "SELECT * FROM voice_profiles WHERE id = ?", (voice_profile_id,)
         ).fetchone()
         return _row_to_voice_profile(row) if row else None
+
+    def update_voice_profile_reference_audio_path(self, profile_id: int,
+                                                    reference_audio_path: str) -> None:
+        cur = self.conn.execute(
+            "UPDATE voice_profiles SET reference_audio_path = ? WHERE id = ?",
+            (reference_audio_path, profile_id),
+        )
+        if cur.rowcount == 0:
+            raise KeyError(f"no voice profile with id {profile_id}")
+        self.conn.commit()
 
     def delete_voice_profile(self, voice_profile_id: int) -> None:
         cur = self.conn.execute(
