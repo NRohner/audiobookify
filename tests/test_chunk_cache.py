@@ -31,6 +31,12 @@ def test_compute_cache_key_differs_when_voice_params_change():
     assert key1 != key2
 
 
+def test_compute_cache_key_differs_when_max_chunk_chars_changes():
+    key1 = compute_cache_key("Hello.", 300, {"voice_name": "fake"})
+    key2 = compute_cache_key("Hello.", 150, {"voice_name": "fake"})
+    assert key1 != key2
+
+
 def test_save_chunk_and_load_cached_chunks_round_trips(tmp_path):
     chunk0 = np.linspace(-0.5, 0.5, 1000, dtype=np.float32)
     chunk1 = np.linspace(0.5, -0.5, 500, dtype=np.float32)

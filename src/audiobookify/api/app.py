@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from ..db import Database
 from ..ingest import ingest_by_path
 from ..models import ChapterStatus, JobStatus
+from ..synth.chunk_cache import clear_cache
 from ..voice.validation import validate_reference_audio
 
 
@@ -33,6 +34,7 @@ def _cancel_active_job_for_chapter(db: Database, chapter) -> None:
     if latest.status == JobStatus.QUEUED:
         db.finish_job(latest.id, JobStatus.CANCELLED)
         db.update_chapter_status(chapter.id, ChapterStatus.PENDING)
+        clear_cache(chapter.id)
     else:
         db.request_job_cancel(latest.id)
 

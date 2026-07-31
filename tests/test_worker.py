@@ -179,7 +179,6 @@ def test_run_worker_once_returns_false_when_paused(tmp_path):
     db.close()
 
 
-@requires_ffmpeg
 def test_run_worker_once_requeues_job_and_keeps_cache_when_paused_mid_chapter(tmp_path):
     import audiobookify.synth.chunk_cache as chunk_cache
 
@@ -217,7 +216,6 @@ def test_run_worker_once_requeues_job_and_keeps_cache_when_paused_mid_chapter(tm
     db.close()
 
 
-@requires_ffmpeg
 def test_run_worker_once_cancels_job_and_clears_cache_when_cancel_requested_mid_chapter(tmp_path):
     import audiobookify.synth.chunk_cache as chunk_cache
 

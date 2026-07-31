@@ -827,6 +827,57 @@ def test_get_book_still_reports_progress_for_a_genuinely_queued_job(tmp_path):
     assert chapter_dict["progress"] == 0.0
 
 
+def test_cancel_chapter_clears_the_cache_for_a_paused_then_cancelled_job(tmp_path):
+    import audiobookify.synth.chunk_cache as chunk_cache
+
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    # Simulate a chunk already cached from a paused attempt (the reachable scenario:
+    # the worker requeues a paused job to QUEUED while deliberately keeping its cache).
+    chunk_cache.save_chunk(chapter.id, 0, __import__("numpy").zeros(10, dtype="float32"), sample_rate=22050)
+    chunk_cache.write_manifest(chapter.id, "irrelevant-key-for-this-test")
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+    assert not chunk_cache.chapter_cache_dir(chapter.id).exists()
+
+
+def test_cancel_chapter_is_a_noop_for_an_already_cancelled_job(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    job = db.create_job(chapter.id)
+    db.finish_job(job.id, JobStatus.CANCELLED)
+    db.close()
+
+    response = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/cancel")
+
+    assert response.status_code == 200
+    db = Database(str(tmp_path / "test.db"))
+    assert db.get_job(job.id).status == JobStatus.CANCELLED  # unchanged, not re-finished
+    db.close()
+
+
+def test_cancel_book_returns_404_for_an_unknown_book(tmp_path):
+    client = _client(tmp_path)
+
+    response = client.post("/api/books/999/cancel")
+
+    assert response.status_code == 404
+
+
 def test_cancel_chapter_returns_404_for_a_chapter_in_a_different_book(tmp_path):
     client = _client(tmp_path)
     db = Database(str(tmp_path / "test.db"))
