@@ -19,6 +19,9 @@ export const api = {
   generateBook: (id) => request(`/api/books/${id}/generate`, { method: "POST" }),
   generateChapter: (bookId, chapterId) =>
     request(`/api/books/${bookId}/chapters/${chapterId}/generate`, { method: "POST" }),
+  cancelChapter: (bookId, chapterId) =>
+    request(`/api/books/${bookId}/chapters/${chapterId}/cancel`, { method: "POST" }),
+  cancelBook: (bookId) => request(`/api/books/${bookId}/cancel`, { method: "POST" }),
   assignVoice: (bookId, voiceProfileId) =>
     request(`/api/books/${bookId}/voice`, {
       method: "PATCH",
