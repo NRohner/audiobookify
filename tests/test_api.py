@@ -714,6 +714,23 @@ def test_get_book_surfaces_used_fallback_per_chapter(tmp_path):
     assert response.json()["chapters"][0]["used_fallback"] is True
 
 
+def test_get_book_surfaces_started_at_for_a_generating_chapter(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    db.create_job(chapter.id)
+    job = db.pop_next_queued_job()
+    db.close()
+
+    response = client.get(f"/api/books/{book.id}")
+
+    assert response.json()["chapters"][0]["started_at"] == pytest.approx(job.started_at)
+
+
 def test_get_text_clip_surfaces_used_fallback(tmp_path):
     client = _client(tmp_path)
     db = Database(str(tmp_path / "test.db"))
@@ -724,6 +741,18 @@ def test_get_text_clip_surfaces_used_fallback(tmp_path):
     response = client.get(f"/api/text-clips/{clip.id}")
 
     assert response.json()["used_fallback"] is True
+
+
+def test_get_text_clip_surfaces_started_at_while_generating(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    clip = db.create_text_clip(text="Hi.", voice_profile_id=None)
+    clip = db.pop_next_queued_text_clip()
+    db.close()
+
+    response = client.get(f"/api/text-clips/{clip.id}")
+
+    assert response.json()["started_at"] == pytest.approx(clip.started_at)
 
 
 def test_worker_status_reports_not_paused_by_default(tmp_path):

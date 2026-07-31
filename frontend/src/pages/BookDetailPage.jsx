@@ -161,7 +161,7 @@ export default function BookDetailPage() {
                 <p className="font-medium truncate">{chapter.title}</p>
                 {chapter.status === "generating" && (
                   <div className="mt-2 max-w-xs">
-                    <ProgressBar value={chapter.progress} />
+                    <ProgressBar value={chapter.progress} startedAt={chapter.started_at} />
                   </div>
                 )}
                 {chapter.error && <p className="text-sm text-destructive mt-1">{chapter.error}</p>}

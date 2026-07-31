@@ -143,7 +143,7 @@ export default function TextPage() {
 
                 {clip.status === "generating" && (
                   <div className="max-w-xs">
-                    <ProgressBar value={clip.progress} />
+                    <ProgressBar value={clip.progress} startedAt={clip.started_at} />
                   </div>
                 )}
 
