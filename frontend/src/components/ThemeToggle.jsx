@@ -1,24 +1,35 @@
 import { useState } from "react";
 import { Moon, Sun } from "lucide-react";
 
+function currentlyDark() {
+  const explicit = document.documentElement.dataset.theme;
+  if (explicit) return explicit === "dark";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
 export default function ThemeToggle() {
-  const [isDark, setIsDark] = useState(document.documentElement.classList.contains("dark"));
+  const [isDark, setIsDark] = useState(currentlyDark);
 
   function toggle() {
-    const next = !isDark;
-    setIsDark(next);
-    document.documentElement.classList.toggle("dark", next);
-    localStorage.setItem("theme", next ? "dark" : "light");
+    const next = isDark ? "light" : "dark";
+    setIsDark(!isDark);
+    document.documentElement.dataset.theme = next;
+    try {
+      localStorage.setItem("theme", next);
+    } catch {
+      // Private mode: the choice just won't persist.
+    }
   }
 
+  const Icon = isDark ? Sun : Moon;
   return (
     <button
+      type="button"
       onClick={toggle}
-      aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-      className="cursor-pointer rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground
-        transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      className="flex h-10 w-full items-center gap-3 rounded-input px-3 text-ui text-ink-muted hover:bg-card/60 hover:text-ink"
     >
-      {isDark ? <Sun className="size-5" aria-hidden="true" /> : <Moon className="size-5" aria-hidden="true" />}
+      <Icon className="size-[18px]" strokeWidth={1.7} aria-hidden="true" />
+      {isDark ? "Light mode" : "Dark mode"}
     </button>
   );
 }

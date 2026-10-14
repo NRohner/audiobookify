@@ -54,29 +54,28 @@ export default function DirectoryBrowser({ value, onChange, onValidityChange }) 
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="rounded-lg border border-border overflow-hidden">
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/40 text-sm">
+      <div className="rounded-input border border-line overflow-hidden">
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-line bg-oat text-meta">
           <button
             type="button"
             onClick={() => browsed?.parent && browse(browsed.parent)}
             disabled={!browsed?.parent}
             aria-label="Go up one folder"
-            className="cursor-pointer rounded p-1 text-muted-foreground hover:bg-muted
-              disabled:cursor-not-allowed disabled:opacity-40
-              focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="cursor-pointer rounded p-1 text-ink-muted hover:bg-oat
+              disabled:cursor-not-allowed disabled:opacity-40"
           >
             <ArrowUp className="size-4" aria-hidden="true" />
           </button>
-          <span className="truncate font-mono text-xs" title={browsed?.path}>
+          <span className="truncate font-mono text-[12px]" title={browsed?.path}>
             {browsed?.path || "Loading…"}
           </span>
         </div>
 
-        {browseError && <p className="text-sm text-destructive px-3 py-2">{browseError}</p>}
+        {browseError && <p className="text-meta text-accent-text px-3 py-2">{browseError}</p>}
 
-        <div className="max-h-48 overflow-y-auto divide-y divide-border">
+        <div className="max-h-48 overflow-y-auto divide-y divide-line">
           {browsed && browsed.entries.length === 0 && (
-            <p className="text-sm text-muted-foreground px-3 py-2">No subfolders here.</p>
+            <p className="text-meta text-ink-muted px-3 py-2">No subfolders here.</p>
           )}
           {browsed?.entries.map((entry) => (
             <button
@@ -85,22 +84,21 @@ export default function DirectoryBrowser({ value, onChange, onValidityChange }) 
               disabled={!entry.writable}
               onClick={() => browse(`${browsed.path}/${entry.name}`)}
               title={entry.writable ? undefined : "You don't have permission to write here"}
-              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left cursor-pointer
-                hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent
-                focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              className="w-full flex items-center gap-2 px-3 py-2 text-meta text-left cursor-pointer
+                hover:bg-oat disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
             >
-              <Folder className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <Folder className="size-4 shrink-0 text-ink-muted" aria-hidden="true" />
               <span className="truncate">{entry.name}</span>
             </button>
           ))}
         </div>
 
-        <div className="px-3 py-2 border-t border-border">
+        <div className="px-3 py-2 border-t border-line">
           <button
             type="button"
             onClick={() => browsed && selectFolder(browsed.path)}
             disabled={!browsed?.writable}
-            className="text-sm font-medium text-primary hover:underline cursor-pointer
+            className="text-meta font-medium text-accent-text hover:underline cursor-pointer
               disabled:cursor-not-allowed disabled:opacity-40 disabled:no-underline"
           >
             Use this folder
@@ -114,26 +112,25 @@ export default function DirectoryBrowser({ value, onChange, onValidityChange }) 
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="e.g. ~/audiobooks/this-book"
-          className="w-full h-10 rounded-lg border border-border bg-background px-3 text-sm font-mono
-            focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className="rr-input"
         />
-        <div className="mt-1 min-h-5 flex items-center gap-1.5 text-xs">
+        <div className="mt-1 min-h-5 flex items-center gap-1.5 text-[12px]">
           {checking && (
             <>
-              <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-hidden="true" />
-              <span className="text-muted-foreground">Checking…</span>
+              <Loader2 className="size-3.5 animate-spin text-ink-muted" aria-hidden="true" />
+              <span className="text-ink-muted">Checking…</span>
             </>
           )}
           {!checking && status?.writable === true && (
             <>
-              <Check className="size-3.5 text-success" aria-hidden="true" />
-              <span className="text-success">This folder is writable</span>
+              <Check className="size-3.5 text-sage" aria-hidden="true" />
+              <span className="text-sage">This folder is writable</span>
             </>
           )}
           {!checking && status?.writable === false && (
             <>
-              <AlertCircle className="size-3.5 text-destructive" aria-hidden="true" />
-              <span className="text-destructive">{status.error || "Can't write here"}</span>
+              <AlertCircle className="size-3.5 text-accent-text" aria-hidden="true" />
+              <span className="text-accent-text">{status.error || "Can't write here"}</span>
             </>
           )}
         </div>

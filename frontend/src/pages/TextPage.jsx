@@ -1,12 +1,22 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Download, Send, Trash2, Type } from "lucide-react";
+import { ChevronRight, Download, Trash2 } from "lucide-react";
 import { api, textClipInProgress } from "../lib/api.js";
-import Badge from "../components/ui/Badge.jsx";
-import Button from "../components/ui/Button.jsx";
+import Button, { ErrorNote, PageHeader } from "../components/ui/Button.jsx";
 import ProgressBar from "../components/ui/ProgressBar.jsx";
 import ConfirmDialog from "../components/ui/ConfirmDialog.jsx";
 import EnginePicker from "../components/EnginePicker.jsx";
 import { effectiveEngine, engineLabel } from "../lib/engines.js";
+import { formatEta } from "../lib/eta.js";
+
+function clipStatus(clip) {
+  if (clip.status === "generating") {
+    const eta = formatEta(clip.progress, clip.started_at);
+    return { text: `Reading · ${Math.round((clip.progress ?? 0) * 100)}%${eta ? ` · about ${eta} left` : ""}`, tone: "text-accent-text font-bold" };
+  }
+  if (clip.status === "queued") return { text: "Queued", tone: "text-ink-muted" };
+  if (clip.status === "failed") return { text: "Didn't finish", tone: "text-accent-text font-bold" };
+  return null;
+}
 
 export default function TextPage() {
   const [text, setText] = useState("");
@@ -64,36 +74,38 @@ export default function TextPage() {
     }
   }
 
-  if (loading) return <p className="text-muted-foreground">Loading…</p>;
+  if (loading) return <p className="text-ink-muted">Loading…</p>;
 
   return (
     <div className="max-w-3xl">
-      <h1 className="text-2xl font-semibold mb-6">Text to speech</h1>
+      <PageHeader title="Try a line" />
+      <p className="-mt-4 mb-6 text-ui text-ink-muted">
+        Hear any passage in any voice. Handy for checking a narrator before you render a whole book.
+      </p>
 
-      {error && <p className="text-sm text-destructive mb-4">{error}</p>}
+      <ErrorNote>{error}</ErrorNote>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4 mb-8">
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Type or paste some text to convert to speech…"
+          placeholder="It was the best of times, it was the worst of times…"
+          aria-label="Text to read aloud"
           required
           rows={6}
-          className="w-full rounded-lg border border-border bg-background p-3 text-sm resize-y
-            focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className="rr-input font-serif text-list! leading-relaxed!"
         />
 
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex flex-wrap items-start gap-4">
-          <label className="flex items-center gap-2 text-sm">
-            <span className="text-muted-foreground">Voice</span>
+          <label className="flex items-center gap-2 text-meta">
+            <span className="text-ink-muted">Narrator</span>
             <select
               value={voiceProfileId}
               onChange={(e) => setVoiceProfileId(e.target.value)}
-              className="h-10 rounded-lg border border-border bg-background px-3 text-sm cursor-pointer
-                focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              className="rr-input w-auto!"
             >
-              <option value="">Default</option>
+              <option value="">Default voice</option>
               {voices.map((v) => (
                 <option key={v.id} value={v.id}>
                   {v.name}
@@ -101,64 +113,74 @@ export default function TextPage() {
               ))}
             </select>
           </label>
-          <EnginePicker engines={engines} value={engine} onChange={setChosenEngine} hasVoice={Boolean(voiceProfileId)} />
+          <details className="group">
+            <summary className="inline-flex h-10 items-center gap-1 text-meta font-semibold text-ink-muted hover:text-ink list-none [&::-webkit-details-marker]:hidden">
+              Advanced
+              <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+            </summary>
+            <div className="mt-1">
+              <EnginePicker engines={engines} value={engine} onChange={setChosenEngine} hasVoice={Boolean(voiceProfileId)} />
+            </div>
+          </details>
           </div>
 
           <Button type="submit" loading={submitting} disabled={!text.trim()}>
-            <Send className="size-4" aria-hidden="true" />
-            Convert to audio
+            Read it aloud
           </Button>
         </div>
       </form>
 
       {clips.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-24 text-center">
-          <Type className="size-10 text-muted-foreground mb-3" aria-hidden="true" />
-          <p className="text-muted-foreground">No text conversions yet.</p>
-        </div>
+        <p className="pt-8 text-center font-serif text-[19px] text-ink-muted">Lines you try will appear here.</p>
       ) : (
-        <div className="rounded-xl border border-border divide-y divide-border overflow-hidden">
+        <div className="border-t border-line divide-y divide-line">
           {clips.map((clip) => {
             const voiceName = voices.find((v) => v.id === clip.voice_profile_id)?.name || "Default";
             const engineName = engineLabel(clip.engine, engines);
             return (
-              <div key={clip.id} className="p-4 flex flex-col gap-3">
+              <div key={clip.id} className="py-4 flex flex-col gap-3">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm line-clamp-2">{clip.text}</p>
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className="font-serif text-[17px] leading-snug line-clamp-2">{clip.text}</p>
+                    <p className="text-[12px] text-ink-muted mt-1">
                       {voiceName} · {engineName}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <Badge status={clip.status} label={clip.status} />
+                    {clipStatus(clip) && <span className={`text-meta ${clipStatus(clip).tone}`}>{clipStatus(clip).text}</span>}
                     {clip.used_fallback && (
                       <span
                         title="The output folder wasn't writable when this clip finished — saved to the backup location instead."
-                        className="inline-flex items-center gap-1 text-xs text-accent"
+                        className="text-[12px] text-accent-text"
                       >
-                        <AlertTriangle className="size-3.5" aria-hidden="true" />
-                        Backup
+                        saved to backup folder
                       </span>
                     )}
                     <button
                       onClick={() => setPendingDelete(clip)}
-                      aria-label="Delete text clip"
-                      className="cursor-pointer rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive
-                        focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                      aria-label="Delete this line"
+                      className="rounded-full p-1.5 text-ink-muted hover:bg-accent-soft hover:text-accent-text"
                     >
-                      <Trash2 className="size-4" aria-hidden="true" />
+                      <Trash2 className="size-4" strokeWidth={1.7} aria-hidden="true" />
                     </button>
                   </div>
                 </div>
 
                 {clip.status === "generating" && (
                   <div className="max-w-xs">
-                    <ProgressBar value={clip.progress} startedAt={clip.started_at} />
+                    <ProgressBar value={clip.progress} label="Progress" />
                   </div>
                 )}
 
-                {clip.error && <p className="text-sm text-destructive">{clip.error}</p>}
+                {clip.error && (
+                  <details className="group text-meta">
+                    <summary className="inline-flex items-center gap-1 font-semibold text-ink-muted hover:text-ink list-none [&::-webkit-details-marker]:hidden">
+                      Advanced
+                      <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+                    </summary>
+                    <pre className="mt-2 rounded-input bg-oat p-3 font-mono text-[12px] whitespace-pre-wrap text-ink-muted">{clip.error}</pre>
+                  </details>
+                )}
 
                 {clip.status === "done" && (
                   <div className="flex items-center gap-3">
@@ -166,10 +188,9 @@ export default function TextPage() {
                     <a
                       href={`/api/text-clips/${clip.id}/audio`}
                       download={`text-clip-${clip.id}.mp3`}
-                      className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground
-                        focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring rounded"
+                      className="inline-flex items-center gap-1.5 text-meta text-ink-muted hover:text-ink rounded"
                     >
-                      <Download className="size-4" aria-hidden="true" />
+                      <Download className="size-4" strokeWidth={1.7} aria-hidden="true" />
                       Download
                     </a>
                   </div>
@@ -182,8 +203,8 @@ export default function TextPage() {
 
       {pendingDelete && (
         <ConfirmDialog
-          title="Delete text clip"
-          message="Delete this text-to-speech conversion?"
+          title="Delete this line"
+          message="Delete this line and its audio?"
           onConfirm={handleDelete}
           onCancel={() => setPendingDelete(null)}
         />

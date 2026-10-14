@@ -1,60 +1,317 @@
 @import "tailwindcss";
+@import "./styles/tokens.css";
 
-@custom-variant dark (&:where(.dark, .dark *));
+/* Tailwind names that point straight at the Reading Room tokens. Components use these
+   utilities (bg-card, text-ink-muted, rounded-tile …) and never hard-code values. */
+@theme inline {
+  --font-sans: var(--rr-font-ui);
+  --font-serif: var(--rr-font-serif);
+  --font-mono: var(--rr-font-mono);
 
-@theme {
-  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --color-paper: var(--rr-paper);
+  --color-oat: var(--rr-oat);
+  --color-card: var(--rr-card);
+  --color-line: var(--rr-line);
+  --color-line-strong: var(--rr-line-strong);
+  --color-ink: var(--rr-ink);
+  --color-ink-muted: var(--rr-ink-muted);
+  --color-accent: var(--rr-accent);
+  --color-accent-text: var(--rr-accent-text);
+  --color-accent-deco: var(--rr-accent-deco);
+  --color-accent-soft: var(--rr-accent-soft);
+  --color-on-accent: var(--rr-on-accent);
+  --color-periwinkle: var(--rr-periwinkle);
+  --color-periwinkle-soft: var(--rr-periwinkle-soft);
+  --color-periwinkle-ink: var(--rr-periwinkle-ink);
+  --color-sage: var(--rr-sage);
+  --color-sage-deco: var(--rr-sage-deco);
+  --color-tag: var(--rr-tag-bg);
+  --color-tag-ink: var(--rr-tag-ink);
 
-  --color-primary: #2563eb;
-  --color-on-primary: #ffffff;
-  --color-secondary: #3b82f6;
-  --color-accent: #d97706;
-  --color-background: #f8fafc;
-  --color-foreground: #0f172a;
-  --color-muted: #f1f5fd;
-  --color-muted-foreground: #64748b;
-  --color-border: #e4ecfc;
-  --color-surface: #ffffff;
-  --color-destructive: #dc2626;
-  --color-success: #16a34a;
-  --color-ring: #2563eb;
-}
+  --radius-book: var(--rr-radius-book);
+  --radius-input: var(--rr-radius-sm);
+  --radius-tile: var(--rr-radius-md);
+  --radius-panel: var(--rr-radius-lg);
+  --radius-hero: var(--rr-radius-xl);
 
-.dark {
-  --color-primary: #3b82f6;
-  --color-on-primary: #ffffff;
-  --color-secondary: #60a5fa;
-  --color-accent: #f59e0b;
-  --color-background: #0b1220;
-  --color-foreground: #e2e8f0;
-  --color-muted: #131b2e;
-  --color-muted-foreground: #94a3b8;
-  --color-border: #1e293b;
-  --color-surface: #111a2e;
-  --color-destructive: #f87171;
-  --color-success: #4ade80;
-  --color-ring: #60a5fa;
+  --shadow-cover: var(--rr-shadow-cover);
+  --shadow-cover-hero: var(--rr-shadow-cover-hero);
+  --shadow-panel: var(--rr-shadow-panel);
+  --shadow-popover: var(--rr-shadow-popover);
+  --shadow-tag: var(--rr-shadow-tag);
+
+  --text-title: var(--rr-text-34);
+  --text-section: var(--rr-text-24);
+  --text-list: var(--rr-text-18);
+  --text-ui: var(--rr-text-15);
+  --text-meta: var(--rr-text-13);
+  --text-eyebrow: var(--rr-text-11);
+  --text-reading: var(--rr-reading-size);
+
+  --ease-settle: var(--rr-ease-settle);
 }
 
 @layer base {
-  html {
-    color-scheme: light dark;
-  }
-  body {
-    @apply bg-background text-foreground font-sans;
-  }
   * {
-    @apply border-border;
+    border-color: var(--rr-line);
   }
-  :focus-visible {
-    @apply outline-2 outline-offset-2 outline-ring;
+  button:not(:disabled),
+  summary {
+    cursor: pointer;
+  }
+  h1,
+  h2,
+  h3 {
+    font-family: var(--rr-font-serif);
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+}
+
+@layer components {
+  .rr-eyebrow {
+    font-size: var(--rr-text-11);
+    font-weight: 700;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--rr-ink-muted);
+  }
+
+  .rr-input {
+    width: 100%;
+    min-height: var(--rr-control-h);
+    border: 1px solid var(--rr-line);
+    border-radius: var(--rr-radius-sm);
+    background: var(--rr-card);
+    color: var(--rr-ink);
+    padding: 0 12px;
+    font-size: var(--rr-text-15);
+  }
+  textarea.rr-input {
+    padding: 10px 12px;
+    line-height: 1.5;
+    resize: vertical;
+  }
+  .rr-input::placeholder {
+    color: var(--rr-ink-muted);
+  }
+
+  /* ---------- Shelf ---------- */
+  .rr-ledge {
+    height: 7px;
+    background: var(--rr-ledge);
+    border-bottom: 2px solid var(--rr-ledge-edge);
+    border-radius: 2px;
+    box-shadow: var(--rr-shadow-ledge);
+  }
+
+  .rr-spine {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 12px 0 10px;
+    border-radius: 3px 3px 2px 2px;
+    box-shadow: var(--rr-shadow-spine);
+    transform-origin: bottom left;
+    transition:
+      transform var(--rr-dur-hover) var(--rr-ease-settle),
+      box-shadow var(--rr-dur-hover) var(--rr-ease-settle);
+  }
+  .rr-spine[data-lean="true"] {
+    transform: rotate(4.5deg);
+  }
+  .rr-spine:hover,
+  .rr-spine:focus-visible {
+    transform: translateY(-6px);
+    box-shadow: var(--rr-shadow-spine-lift);
+    z-index: 2;
+  }
+  .rr-spine[data-lean="true"]:hover,
+  .rr-spine[data-lean="true"]:focus-visible {
+    transform: rotate(4.5deg) translateY(-6px);
+  }
+
+  .rr-spine__title {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    writing-mode: vertical-rl;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-family: var(--rr-font-serif);
+    font-size: 15px;
+    font-weight: 500;
+    padding: 8px 0;
+  }
+
+  /* Rising accent strip on the left edge while a book renders. */
+  .rr-spine__fill {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 4px;
+    background: var(--rr-accent);
+    border-radius: 0 0 0 2px;
+    transition: height var(--rr-dur-move) var(--rr-ease-settle);
+  }
+  .rr-spine__dot {
+    position: absolute;
+    top: -20px;
+    left: 50%;
+    width: 8px;
+    height: 8px;
+    margin-left: -4px;
+    border-radius: 50%;
+    background: var(--rr-accent);
+    box-shadow: 0 0 0 4px var(--rr-accent-soft);
+    animation: rr-pulse 2.4s ease-in-out infinite;
+  }
+
+  /* Dog-eared top-right corner on books that need attention. */
+  .rr-spine[data-attention="true"]::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 14px;
+    height: 14px;
+    background: linear-gradient(225deg, var(--rr-paper) 50%, rgba(0, 0, 0, 0.28) 50%);
+  }
+
+  /* Tag hanging from the spine over the ledge. */
+  .rr-tag {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform: translateX(-50%) rotate(var(--tilt, 2deg));
+    transform-origin: top center;
+    pointer-events: none;
+  }
+  .rr-tag::before {
+    content: "";
+    width: 1px;
+    height: var(--string, 8px);
+    background: var(--rr-ink-muted);
+  }
+  .rr-tag__label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    padding: 3px 7px;
+    border-radius: 3px;
+    border: 1px solid var(--rr-line);
+    background: var(--rr-tag-bg);
+    color: var(--rr-tag-ink);
+    box-shadow: var(--rr-shadow-tag);
+    font-size: var(--rr-text-11);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .rr-tag__label::before {
+    content: "";
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    border: 1px solid currentColor;
+  }
+  .rr-tag[data-tone="attention"] .rr-tag__label {
+    background: var(--rr-accent-soft);
+    color: var(--rr-accent-text);
+  }
+
+  .rr-spine-wrap {
+    position: relative;
+    z-index: 1;
+  }
+  .rr-spine-wrap:hover,
+  .rr-spine-wrap:focus-within {
+    z-index: 5;
+  }
+
+  .rr-spine-tip {
+    position: absolute;
+    bottom: calc(100% + 14px);
+    left: 50%;
+    width: 236px;
+    transform: translateX(-50%);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity var(--rr-dur-fade) var(--rr-ease-settle);
+    pointer-events: none;
+    z-index: 10;
+  }
+  .rr-spine-wrap:hover .rr-spine-tip,
+  .rr-spine-wrap:focus-within .rr-spine-tip {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  /* ---------- Covers ---------- */
+  .rr-cover {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    border-radius: var(--rr-radius-book);
+    box-shadow:
+      inset 6px 0 0 rgba(0, 0, 0, 0.18),
+      var(--rr-shadow-cover);
+    font-family: var(--rr-font-serif);
+  }
+  .rr-rule {
+    width: 58%;
+    height: 4px;
+    border-top: 1px solid currentColor;
+    border-bottom: 1px solid currentColor;
+    opacity: 0.45;
+  }
+  .rr-diamond {
+    width: 5px;
+    height: 5px;
+    border: 1px solid currentColor;
+    transform: rotate(45deg);
+    opacity: 0.5;
+  }
+
+  .rr-library-card {
+    border: 1px solid var(--rr-line);
+    border-top: 3px solid var(--rr-accent-deco);
+    border-radius: 4px 4px 14px 14px;
+    background: var(--rr-card);
+    padding: 12px 20px 8px;
+  }
+}
+
+@keyframes rr-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+@keyframes rr-drift {
+  50% {
+    transform: scaleY(0.7);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition-property: opacity !important;
+    transition-duration: var(--rr-dur-fade) !important;
+  }
+  .rr-spine:hover,
+  .rr-spine:focus-visible,
+  .rr-spine[data-lean="true"]:hover,
+  .rr-spine[data-lean="true"]:focus-visible {
+    transform: none;
   }
 }
