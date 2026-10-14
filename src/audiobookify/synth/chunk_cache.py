@@ -10,11 +10,10 @@ import soundfile as sf
 CHUNK_CACHE_DIR = str(Path(__file__).resolve().parents[3] / ".cache" / "synth")
 
 
-def compute_cache_key(text: str, max_chunk_chars: int, voice_params: dict) -> str:
-    payload = json.dumps(
-        {"text": text, "max_chunk_chars": max_chunk_chars, "voice_params": voice_params},
-        sort_keys=True,
-    )
+def compute_cache_key(chunk_texts: List[str], voice_params: dict) -> str:
+    # Keyed on the chunks themselves, not the source text, so any chunking change
+    # (chunker logic, engine min/max) invalidates audio cached under old boundaries.
+    payload = json.dumps({"chunks": chunk_texts, "voice_params": voice_params}, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

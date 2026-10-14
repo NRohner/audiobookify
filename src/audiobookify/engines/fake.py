@@ -24,6 +24,9 @@ class FakeEngine:
     def max_chunk_chars(self) -> int:
         return 300
 
+    def min_chunk_chars(self) -> int:
+        return 20
+
     def preferred_phoneme_scheme(self):
         return None
 

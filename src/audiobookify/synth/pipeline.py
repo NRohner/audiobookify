@@ -23,23 +23,23 @@ def synthesize_chapter(chapter: Chapter, book: Book, engine, profile_handle, voi
     db.update_chapter_status(chapter.id, ChapterStatus.GENERATING)
     try:
         text = apply_lexicon(chapter.text, lexicon_entries)
-        chunks = chunk_text(text, engine.max_chunk_chars())
+        chunks = chunk_text(text, engine.max_chunk_chars(), engine.min_chunk_chars())
         total = len(chunks)
 
-        cache_key = compute_cache_key(text, engine.max_chunk_chars(), voice_params)
+        cache_key = compute_cache_key([c.text for c in chunks], voice_params)
         audio_chunks = load_cached_chunks(chapter.id, cache_key)
         if not audio_chunks:
             clear_cache(chapter.id)
             write_manifest(chapter.id, cache_key)
 
         for i in range(len(audio_chunks), total):
-            chunk_audio = engine.synthesize(chunks[i], profile_handle, voice_params)
+            chunk_audio = engine.synthesize(chunks[i].text, profile_handle, voice_params)
             save_chunk(chapter.id, i, chunk_audio, engine.sample_rate())
             audio_chunks.append(chunk_audio)
             if on_chunk_done is not None:
                 on_chunk_done(i + 1, total)
 
-        combined = concatenate_chunks(audio_chunks, engine.sample_rate())
+        combined = concatenate_chunks(audio_chunks, [c.ends_with for c in chunks], engine.sample_rate())
         mp3_path, used_fallback = export_chapter_mp3(
             combined, engine.sample_rate(), book.output_dir, chapter.order_index,
             chapter.title, book.title, voice_params.get("voice_name", engine.name),
@@ -61,14 +61,14 @@ def synthesize_text_clip(clip: TextClip, engine, profile_handle, voice_params: d
                           on_chunk_done: Optional[Callable[[int, int], None]] = None) -> TextClip:
     try:
         text = apply_lexicon(clip.text, lexicon_entries)
-        chunks = chunk_text(text, engine.max_chunk_chars())
+        chunks = chunk_text(text, engine.max_chunk_chars(), engine.min_chunk_chars())
         total = len(chunks)
         audio_chunks = []
         for i, c in enumerate(chunks):
-            audio_chunks.append(engine.synthesize(c, profile_handle, voice_params))
+            audio_chunks.append(engine.synthesize(c.text, profile_handle, voice_params))
             if on_chunk_done is not None:
                 on_chunk_done(i + 1, total)
-        combined = concatenate_chunks(audio_chunks, engine.sample_rate())
+        combined = concatenate_chunks(audio_chunks, [c.ends_with for c in chunks], engine.sample_rate())
         output_path = str(Path(output_dir) / f"text-clip-{clip.id}.mp3")
         mp3_path, used_fallback = export_mp3(
             combined, engine.sample_rate(), output_path,
