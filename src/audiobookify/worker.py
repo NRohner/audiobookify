@@ -2,11 +2,13 @@ import sys
 import time
 
 from .db import Database
+from .engines import ENGINES
 from .models import ChapterStatus, JobStatus
 from .synth.chunk_cache import clear_cache
 from .synth.pipeline import (
     GenerationCancelled, GenerationPaused, synthesize_chapter, synthesize_text_clip,
 )
+from .voice import analysis
 from .voice.validation import params_from_profile
 
 DEFAULT_TEXT_CLIP_OUTPUT_DIR = "text_clips"
@@ -19,20 +21,72 @@ def _voice_params_for_profile(profile) -> dict:
     return voice_params
 
 
-def _voice_params_for_book(db: Database, book) -> tuple:
-    profile = db.get_voice_profile_by_id(book.voice_profile_id) if book.voice_profile_id else None
-    return _voice_params_for_profile(profile), profile
+class EngineSlot:
+    """At most one loaded TTS engine: Qwen3 (~12 GB) and Turbo (~5 GB) together
+    don't fit comfortably in 18 GB, and MLX reloads take only seconds."""
+
+    def __init__(self, make=lambda name: ENGINES[name].cls()):
+        self._make = make
+        self.name = None
+        self.engine = None
+        self.profile_cache: dict = {}  # voice handles belong to the engine that made them
+
+    def get(self, name: str):
+        if name != self.name:
+            self.teardown()
+            print(f"Loading TTS engine '{name}'", file=sys.stderr)
+            engine = self._make(name)
+            engine.load()
+            self.name, self.engine = name, engine
+        return self.engine
+
+    def teardown(self) -> None:
+        engine = self.engine
+        # Drop voice handles first: Turbo's hold GPU arrays the engine's teardown should free.
+        self.name, self.engine, self.profile_cache = None, None, {}
+        if engine is not None:
+            engine.teardown()
 
 
-def _ensure_profile_cached(engine, profile_cache: dict, voice_profile_id, profile, voice_params: dict) -> None:
-    if "voice_profile_id" not in profile_cache or profile_cache["voice_profile_id"] != voice_profile_id:
-        reference_audio = profile.reference_audio_path if profile else None
-        reference_text = profile.reference_transcript if profile else None
-        profile_cache["voice_profile_id"] = voice_profile_id
-        profile_cache["handle"] = engine.clone_profile(reference_audio, reference_text, voice_params)
+def transcribe_voice(db: Database, profile) -> None:
+    """One Whisper pass: transcript, word timings, and the reference trim."""
+    try:
+        result = analysis.transcribe(profile.reference_audio_path)
+        cut = analysis.trim_point(result["words"])
+        trim_end, text = cut if cut else (None, result["text"])
+        db.save_voice_transcript(profile.id, text, words=result["words"], trim_end=trim_end)
+    except Exception as exc:
+        db.fail_voice_transcription(profile.id, str(exc))
 
 
-def _process_next_chapter_job(db: Database, engine, profile_cache: dict) -> bool:
+def load_voice(db: Database, voice_profile_id, engine):
+    """The voice profile, transcribed first if this engine needs a transcript and
+    the voice has none yet (voices made before transcripts existed)."""
+    profile = db.get_voice_profile_by_id(voice_profile_id) if voice_profile_id else None
+    if profile and engine.needs_transcript and not (profile.reference_transcript or "").strip():
+        transcribe_voice(db, profile)
+        profile = db.get_voice_profile_by_id(voice_profile_id)
+    return profile
+
+
+def _ensure_profile_cached(engine, profile_cache: dict, voice_profile_id, voice_params: dict) -> None:
+    # Keyed on the params too, so an edited transcript or trim takes effect.
+    key = (voice_profile_id, voice_params.get("reference_audio"), voice_params.get("reference_text"))
+    if profile_cache.get("key") != key:
+        profile_cache["key"] = key
+        profile_cache["handle"] = engine.clone_profile(
+            voice_params.get("reference_audio"), voice_params.get("reference_text"), voice_params)
+
+
+def _process_next_transcription(db: Database) -> bool:
+    profile = db.next_pending_transcription()
+    if profile is None:
+        return False
+    transcribe_voice(db, profile)
+    return True
+
+
+def _process_next_chapter_job(db: Database, engines: EngineSlot) -> bool:
     job = db.pop_next_queued_job()
     if job is None:
         return False
@@ -40,8 +94,9 @@ def _process_next_chapter_job(db: Database, engine, profile_cache: dict) -> bool
     try:
         chapter = db.get_chapter(job.chapter_id)
         book = db.get_book(chapter.book_id)
-        voice_params, profile = _voice_params_for_book(db, book)
-        _ensure_profile_cached(engine, profile_cache, book.voice_profile_id, profile, voice_params)
+        engine, profile_cache = engines.get(book.engine), engines.profile_cache
+        voice_params = _voice_params_for_profile(load_voice(db, book.voice_profile_id, engine))
+        _ensure_profile_cached(engine, profile_cache, book.voice_profile_id, voice_params)
 
         lexicon_entries = db.list_lexicon_entries(book.id)
 
@@ -70,15 +125,15 @@ def _process_next_chapter_job(db: Database, engine, profile_cache: dict) -> bool
     return True
 
 
-def _process_next_text_clip(db: Database, engine, profile_cache: dict, output_dir: str) -> bool:
+def _process_next_text_clip(db: Database, engines: EngineSlot, output_dir: str) -> bool:
     clip = db.pop_next_queued_text_clip()
     if clip is None:
         return False
 
     try:
-        profile = db.get_voice_profile_by_id(clip.voice_profile_id) if clip.voice_profile_id else None
-        voice_params = _voice_params_for_profile(profile)
-        _ensure_profile_cached(engine, profile_cache, clip.voice_profile_id, profile, voice_params)
+        engine, profile_cache = engines.get(clip.engine), engines.profile_cache
+        voice_params = _voice_params_for_profile(load_voice(db, clip.voice_profile_id, engine))
+        _ensure_profile_cached(engine, profile_cache, clip.voice_profile_id, voice_params)
 
         lexicon_entries = db.list_lexicon_entries()
 
@@ -93,23 +148,24 @@ def _process_next_text_clip(db: Database, engine, profile_cache: dict, output_di
     return True
 
 
-def run_worker_once(db: Database, engine, profile_cache: dict,
+def run_worker_once(db: Database, engines: EngineSlot,
                      text_clip_output_dir: str = DEFAULT_TEXT_CLIP_OUTPUT_DIR) -> bool:
     if db.is_paused():
         return False
-    if _process_next_chapter_job(db, engine, profile_cache):
+    if _process_next_transcription(db):  # seconds each, and the Voices page is waiting on it
         return True
-    return _process_next_text_clip(db, engine, profile_cache, text_clip_output_dir)
+    if _process_next_chapter_job(db, engines):
+        return True
+    return _process_next_text_clip(db, engines, text_clip_output_dir)
 
 
-def run_forever(db: Database, engine, poll_interval: float = 2.0,
+def run_forever(db: Database, engines: EngineSlot, poll_interval: float = 2.0,
                  text_clip_output_dir: str = DEFAULT_TEXT_CLIP_OUTPUT_DIR) -> None:
     db.reset_stale_generating_jobs()
     db.reset_stale_generating_text_clips()
-    profile_cache: dict = {}
     while True:
         try:
-            did_work = run_worker_once(db, engine, profile_cache, text_clip_output_dir)
+            did_work = run_worker_once(db, engines, text_clip_output_dir)
         except Exception as exc:
             print(f"Error: worker loop iteration failed: {exc}", file=sys.stderr)
             did_work = False

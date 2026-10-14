@@ -15,7 +15,7 @@ requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffm
 
 @requires_ffmpeg
 def test_generate_command_produces_mp3s_per_chapter(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     md_path = tmp_path / "book.md"
     md_path.write_text("# Chapter One\nFirst chapter body.\n\n# Chapter Two\nSecond chapter body.\n",
@@ -33,7 +33,7 @@ def test_generate_command_produces_mp3s_per_chapter(tmp_path, monkeypatch, capsy
 
 @requires_ffmpeg
 def test_generate_command_is_resumable_across_invocations(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     md_path = tmp_path / "book.md"
     md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
@@ -57,7 +57,7 @@ def test_generate_command_exits_nonzero_and_reports_failed_chapters(tmp_path, mo
                 raise RuntimeError("synthesis blew up")
             return super().synthesize(text_chunk, profile_handle, params)
 
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FailingEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FailingEngine())
 
     md_path = tmp_path / "book.md"
     md_path.write_text("# Chapter One\nFine body.\n\n# Chapter Two\nThis one explodes.\n",
@@ -77,7 +77,7 @@ def test_generate_command_exits_nonzero_and_reports_failed_chapters(tmp_path, mo
 
 @requires_ffmpeg
 def test_generate_command_resumes_when_the_input_path_is_spelled_differently(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     md_path = tmp_path / "book.md"
     md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
@@ -99,7 +99,7 @@ def test_generate_command_resumes_when_the_input_path_is_spelled_differently(tmp
 
 @requires_ffmpeg
 def test_generate_command_warns_when_out_dir_differs_on_resume(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     md_path = tmp_path / "book.md"
     md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
@@ -230,7 +230,7 @@ def test_voice_list_reports_when_empty(tmp_path, capsys):
 
 
 def test_voice_preview_writes_audio_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     ref_path = tmp_path / "narrator.wav"
     _write_reference_wav(ref_path)
@@ -249,7 +249,7 @@ def test_voice_preview_writes_audio_file(tmp_path, monkeypatch):
 
 
 def test_voice_preview_defaults_output_filename_to_profile_name(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
     monkeypatch.chdir(tmp_path)
 
     ref_path = tmp_path / "narrator.wav"
@@ -288,7 +288,7 @@ def test_voice_preview_tears_down_engine_even_if_load_fails(tmp_path, monkeypatc
         def teardown(self):
             type(self).teardown_called = True
 
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FailingLoadEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FailingLoadEngine())
 
     with pytest.raises(RuntimeError, match="device unavailable"):
         cli.main(["voice", "preview", "--name", "narrator-1", "--text", "Hi.", "--db", str(db_path)])
@@ -298,7 +298,7 @@ def test_voice_preview_tears_down_engine_even_if_load_fails(tmp_path, monkeypatc
 
 @requires_ffmpeg
 def test_generate_command_uses_voice_profile_reference_and_params(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     ref_path = tmp_path / "narrator.wav"
     _write_reference_wav(ref_path)
@@ -351,7 +351,7 @@ def test_generate_command_passes_voice_profile_reference_and_params_to_engine(tm
             type(self).synthesize_params.append(params)
             return super().synthesize(text_chunk, profile_handle, params)
 
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", RecordingEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: RecordingEngine())
 
     cli.main([
         "generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path),
@@ -377,7 +377,7 @@ def test_generate_command_passes_voice_profile_reference_and_params_to_engine(tm
 
 @requires_ffmpeg
 def test_generate_command_voice_flag_overrides_profile_name_as_narrator_tag(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     ref_path = tmp_path / "narrator.wav"
     _write_reference_wav(ref_path)
@@ -401,7 +401,7 @@ def test_generate_command_voice_flag_overrides_profile_name_as_narrator_tag(tmp_
 
 @requires_ffmpeg
 def test_generate_command_reports_missing_voice_profile(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     md_path = tmp_path / "book.md"
     md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
@@ -420,7 +420,7 @@ def test_generate_command_reports_missing_voice_profile(tmp_path, monkeypatch, c
 
 @requires_ffmpeg
 def test_generate_command_persists_voice_profile_association_on_first_run(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     ref_path = tmp_path / "narrator.wav"
     _write_reference_wav(ref_path)
@@ -471,7 +471,7 @@ def test_generate_command_uses_original_voice_for_new_chapters_after_profile_mis
                 raise RuntimeError("pause before chapter two")
             return super().synthesize(text_chunk, profile_handle, params)
 
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FlakyOnce)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FlakyOnce())
     with pytest.raises(SystemExit):
         cli.main([
             "generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path),
@@ -486,7 +486,7 @@ def test_generate_command_uses_original_voice_for_new_chapters_after_profile_mis
             type(self).clone_calls.append(reference_audio)
             return super().clone_profile(reference_audio, reference_text, params)
 
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", RecordingEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: RecordingEngine())
     cli.main([
         "generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path),
         "--voice-profile", "narrator-b",
@@ -524,7 +524,7 @@ def test_generate_command_keeps_default_voice_for_new_chapters_after_later_profi
                 raise RuntimeError("pause before chapter two")
             return super().synthesize(text_chunk, profile_handle, params)
 
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FlakyOnce)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FlakyOnce())
     with pytest.raises(SystemExit):
         cli.main(["generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path)])
     capsys.readouterr()
@@ -536,7 +536,7 @@ def test_generate_command_keeps_default_voice_for_new_chapters_after_later_profi
             type(self).clone_calls.append(reference_audio)
             return super().clone_profile(reference_audio, reference_text, params)
 
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", RecordingEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: RecordingEngine())
     cli.main([
         "generate", "--input", str(md_path), "--out", str(out_dir), "--db", str(db_path),
         "--voice-profile", "narrator-a",
@@ -591,7 +591,7 @@ def test_voice_add_does_not_print_warnings_on_duplicate_name_rejection(tmp_path,
 
 
 def test_voice_preview_creates_output_directory_if_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     ref_path = tmp_path / "narrator.wav"
     _write_reference_wav(ref_path)
@@ -609,7 +609,7 @@ def test_voice_preview_creates_output_directory_if_missing(tmp_path, monkeypatch
 
 @requires_ffmpeg
 def test_generate_command_reports_missing_reference_audio(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     ref_path = tmp_path / "narrator.wav"
     _write_reference_wav(ref_path)
@@ -662,7 +662,7 @@ def test_lexicon_add_creates_global_entry(tmp_path, capsys):
 def test_lexicon_add_creates_book_scoped_entry(tmp_path, monkeypatch):
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg not installed")
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     md_path = tmp_path / "book.md"
     md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
@@ -739,7 +739,7 @@ def test_lexicon_list_shows_global_entries(tmp_path, capsys):
 def test_lexicon_list_shows_book_scoped_and_global_entries(tmp_path, capsys, monkeypatch):
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg not installed")
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     md_path = tmp_path / "book.md"
     md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
@@ -800,7 +800,7 @@ def test_lexicon_preview_writes_audio_with_substitution_applied(tmp_path, monkey
             type(self).synthesized_texts.append(text_chunk)
             return super().synthesize(text_chunk, profile_handle, params)
 
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", RecordingEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: RecordingEngine())
 
     db_path = tmp_path / "test.db"
     out_path = tmp_path / "preview.wav"
@@ -822,7 +822,7 @@ def test_lexicon_preview_uses_custom_sentence_when_given(tmp_path, monkeypatch):
             type(self).synthesized_texts.append(text_chunk)
             return super().synthesize(text_chunk, profile_handle, params)
 
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", RecordingEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: RecordingEngine())
     monkeypatch.chdir(tmp_path)
 
     db_path = tmp_path / "test.db"
@@ -837,7 +837,7 @@ def test_lexicon_preview_uses_custom_sentence_when_given(tmp_path, monkeypatch):
 
 
 def test_lexicon_preview_supports_voice_profile(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     ref_path = tmp_path / "narrator.wav"
     _write_reference_wav(ref_path)
@@ -895,7 +895,7 @@ def test_lexicon_remove_strips_whitespace_from_term(tmp_path):
 
 
 def test_lexicon_preview_sanitizes_term_for_default_filename(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
     monkeypatch.chdir(tmp_path)
 
     db_path = tmp_path / "test.db"
@@ -918,7 +918,7 @@ def test_lexicon_preview_prefers_book_scoped_entry_over_global(tmp_path, monkeyp
             type(self).synthesized_texts.append(text_chunk)
             return super().synthesize(text_chunk, profile_handle, params)
 
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", RecordingEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: RecordingEngine())
 
     md_path = tmp_path / "book.md"
     md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
@@ -948,7 +948,7 @@ def test_lexicon_preview_falls_back_to_global_entry_when_book_scope_has_none(tmp
             type(self).synthesized_texts.append(text_chunk)
             return super().synthesize(text_chunk, profile_handle, params)
 
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", RecordingEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: RecordingEngine())
 
     md_path = tmp_path / "book.md"
     md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
@@ -992,7 +992,7 @@ def test_lexicon_add_from_audio_creates_book_scoped_entry(tmp_path, monkeypatch)
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg not installed")
     monkeypatch.setattr(cli, "Wav2Vec2PhonemeExtractor", FakePhonemeExtractor)
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     md_path = tmp_path / "book.md"
     md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
@@ -1128,7 +1128,7 @@ def test_lexicon_edit_rejects_empty_respelling(tmp_path, capsys):
 def test_lexicon_edit_respects_book_scope(tmp_path, monkeypatch):
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg not installed")
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
 
     md_path = tmp_path / "book.md"
     md_path.write_text("# Chapter One\nBody one.\n", encoding="utf-8")
@@ -1288,12 +1288,13 @@ def test_lexicon_add_from_audio_rejects_empty_audio_file(tmp_path, monkeypatch, 
     assert "contains no audio" in capsys.readouterr().err
 
 
-def test_worker_command_loads_engine_once_and_runs_forever(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "ChatterboxTurboEngine", FakeEngine)
+def test_worker_command_runs_forever_loading_engines_on_demand(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_make_engine", lambda name: FakeEngine())
     calls = []
 
-    def fake_run_forever(db, engine, poll_interval, text_clip_output_dir):
-        calls.append((db, engine, poll_interval))
+    def fake_run_forever(db, engines, poll_interval, text_clip_output_dir):
+        calls.append((db, engines, poll_interval))
+        engines.get("chatterbox-turbo")
 
     monkeypatch.setattr(cli.worker, "run_forever", fake_run_forever)
 
@@ -1301,7 +1302,69 @@ def test_worker_command_loads_engine_once_and_runs_forever(tmp_path, monkeypatch
     cli.main(["worker", "--db", str(db_path), "--poll-interval", "5"])
 
     assert len(calls) == 1
-    db, engine, poll_interval = calls[0]
-    assert isinstance(engine, FakeEngine)
-    assert engine.device == "auto"
+    db, engines, poll_interval = calls[0]
+    assert engines.engine is None  # torn down on exit; nothing was loaded up front
     assert poll_interval == 5.0
+
+
+class _NamedFake(FakeEngine):
+    """Fake standing in for whichever engine was asked for, by name."""
+    made = []
+
+    def __init__(self, name):
+        super().__init__()
+        self.name = name
+        self.needs_transcript = name == "qwen3"
+        _NamedFake.made.append(name)
+
+
+def _named_engines(monkeypatch):
+    _NamedFake.made = []
+    monkeypatch.setattr(cli, "_make_engine", _NamedFake)
+    from audiobookify.voice import analysis
+    monkeypatch.setattr(analysis, "transcribe", lambda path: {
+        "text": "Words.", "words": [{"word": " Words.", "start": 0.0, "end": 1.0}]})
+
+
+def test_voice_add_queues_whisper_unless_a_transcript_is_typed(tmp_path):
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+
+    cli.main(["voice", "add", "--name", "a", "--reference", str(ref_path), "--db", str(db_path)])
+    cli.main(["voice", "add", "--name", "b", "--reference", str(ref_path), "--db", str(db_path),
+              "--transcript", "Typed words."])
+
+    db = Database(str(db_path))
+    assert db.find_voice_profile_by_name("a").transcript_status == "pending"
+    assert db.find_voice_profile_by_name("b").transcript_status == "done"
+    db.close()
+
+
+def test_voice_preview_uses_the_chosen_engine_and_transcribes_for_qwen3(tmp_path, monkeypatch):
+    _named_engines(monkeypatch)
+    ref_path = tmp_path / "narrator.wav"
+    _write_reference_wav(ref_path)
+    db_path = tmp_path / "test.db"
+    cli.main(["voice", "add", "--name", "n", "--reference", str(ref_path), "--db", str(db_path)])
+
+    cli.main(["voice", "preview", "--name", "n", "--text", "Hello.", "--engine", "qwen3",
+              "--out", str(tmp_path / "p.wav"), "--db", str(db_path)])
+
+    assert _NamedFake.made == ["qwen3"]
+    db = Database(str(db_path))
+    assert db.find_voice_profile_by_name("n").reference_transcript == "Words."
+    db.close()
+
+
+def test_generate_rejects_qwen3_without_a_voice_profile(tmp_path, monkeypatch, capsys):
+    _named_engines(monkeypatch)
+    book_path = tmp_path / "book.md"
+    book_path.write_text("# Ch 1\n\nSome words here.\n")
+
+    with pytest.raises(SystemExit):
+        cli.main(["generate", "--input", str(book_path), "--out", str(tmp_path / "out"),
+                  "--db", str(tmp_path / "test.db"), "--engine", "qwen3"])
+
+    assert "needs a voice" in capsys.readouterr().err
+    assert _NamedFake.made == []

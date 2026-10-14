@@ -6,6 +6,7 @@ from .base import VoiceProfileHandle
 class FakeEngine:
     name = "fake"
     supports_cloning = True
+    needs_transcript = False
 
     def __init__(self):
         self._sr = 24000

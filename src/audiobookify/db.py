@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import sys
 import time
@@ -19,7 +20,8 @@ CREATE TABLE IF NOT EXISTS books (
     source_format TEXT NOT NULL,
     output_dir TEXT NOT NULL,
     created_at REAL NOT NULL,
-    voice_profile_id INTEGER
+    voice_profile_id INTEGER,
+    engine TEXT NOT NULL DEFAULT 'chatterbox-turbo'
 );
 
 CREATE TABLE IF NOT EXISTS chapters (
@@ -33,6 +35,7 @@ CREATE TABLE IF NOT EXISTS chapters (
     duration REAL,
     error TEXT,
     used_fallback INTEGER NOT NULL DEFAULT 0,
+    engine TEXT,
     UNIQUE(book_id, order_index)
 );
 
@@ -45,7 +48,11 @@ CREATE TABLE IF NOT EXISTS voice_profiles (
     exaggeration REAL NOT NULL,
     cfg_weight REAL NOT NULL,
     temperature REAL NOT NULL,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    transcript_status TEXT,
+    transcript_error TEXT,
+    reference_words TEXT,
+    reference_trim_end REAL
 );
 
 CREATE TABLE IF NOT EXISTS lexicon_entries (
@@ -90,7 +97,8 @@ CREATE TABLE IF NOT EXISTS text_clips (
     started_at REAL,
     finished_at REAL,
     error TEXT,
-    used_fallback INTEGER NOT NULL DEFAULT 0
+    used_fallback INTEGER NOT NULL DEFAULT 0,
+    engine TEXT NOT NULL DEFAULT 'chatterbox-turbo'
 );
 """
 
@@ -116,6 +124,24 @@ def _migrate_cancel_requested_column(conn: sqlite3.Connection) -> None:
     job_cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
     if "cancel_requested" not in job_cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0")
+
+
+def _migrate_engine_and_transcript_columns(conn: sqlite3.Connection) -> None:
+    def cols(table):
+        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+    for table in ("books", "text_clips"):
+        if "engine" not in cols(table):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN engine TEXT NOT NULL DEFAULT 'chatterbox-turbo'")
+    if "engine" not in cols("chapters"):
+        conn.execute("ALTER TABLE chapters ADD COLUMN engine TEXT")
+        # Audio finished before engines were recorded came from PyTorch Chatterbox.
+        conn.execute("UPDATE chapters SET engine = 'chatterbox' WHERE status = 'done'")
+    voice_cols = cols("voice_profiles")
+    for col, kind in [("transcript_status", "TEXT"), ("transcript_error", "TEXT"),
+                      ("reference_words", "TEXT"), ("reference_trim_end", "REAL")]:
+        if col not in voice_cols:
+            conn.execute(f"ALTER TABLE voice_profiles ADD COLUMN {col} {kind}")
 
 
 _WARNED_VOICE_MIGRATION_IDS: set = set()
@@ -162,7 +188,7 @@ def _row_to_book(row: sqlite3.Row) -> Book:
         id=row["id"], title=row["title"], author=row["author"],
         source_path=row["source_path"], source_format=SourceFormat(row["source_format"]),
         output_dir=row["output_dir"], created_at=row["created_at"],
-        voice_profile_id=row["voice_profile_id"],
+        voice_profile_id=row["voice_profile_id"], engine=row["engine"],
     )
 
 
@@ -171,7 +197,7 @@ def _row_to_chapter(row: sqlite3.Row) -> Chapter:
         id=row["id"], book_id=row["book_id"], order_index=row["order_index"],
         title=row["title"], text=row["text"], status=ChapterStatus(row["status"]),
         output_mp3_path=row["output_mp3_path"], duration=row["duration"], error=row["error"],
-        used_fallback=bool(row["used_fallback"]),
+        used_fallback=bool(row["used_fallback"]), engine=row["engine"],
     )
 
 
@@ -182,6 +208,9 @@ def _row_to_voice_profile(row: sqlite3.Row) -> VoiceProfile:
         reference_transcript=row["reference_transcript"],
         exaggeration=row["exaggeration"], cfg_weight=row["cfg_weight"],
         temperature=row["temperature"], created_at=row["created_at"],
+        transcript_status=row["transcript_status"], transcript_error=row["transcript_error"],
+        reference_words=json.loads(row["reference_words"]) if row["reference_words"] else None,
+        reference_trim_end=row["reference_trim_end"],
     )
 
 
@@ -207,7 +236,7 @@ def _row_to_text_clip(row: sqlite3.Row) -> TextClip:
         id=row["id"], text=row["text"], voice_profile_id=row["voice_profile_id"],
         status=JobStatus(row["status"]), progress=row["progress"], output_path=row["output_path"],
         created_at=row["created_at"], started_at=row["started_at"], finished_at=row["finished_at"],
-        error=row["error"], used_fallback=bool(row["used_fallback"]),
+        error=row["error"], used_fallback=bool(row["used_fallback"]), engine=row["engine"],
     )
 
 
@@ -224,6 +253,7 @@ class Database:
         _migrate_lexicon_entries_columns(self.conn)
         _migrate_fallback_columns(self.conn)
         _migrate_cancel_requested_column(self.conn)
+        _migrate_engine_and_transcript_columns(self.conn)
         _migrate_voice_reference_audio(self.conn)
         self.conn.commit()
 
@@ -282,11 +312,12 @@ class Database:
                                output_mp3_path: Optional[str] = None,
                                duration: Optional[float] = None,
                                error: Optional[str] = None,
-                               used_fallback: bool = False) -> None:
+                               used_fallback: bool = False, engine: Optional[str] = None) -> None:
         cur = self.conn.execute(
             "UPDATE chapters SET status = ?, output_mp3_path = COALESCE(?, output_mp3_path), "
-            "duration = COALESCE(?, duration), error = ?, used_fallback = ? WHERE id = ?",
-            (status.value, output_mp3_path, duration, error, int(used_fallback), chapter_id),
+            "duration = COALESCE(?, duration), error = ?, used_fallback = ?, "
+            "engine = COALESCE(?, engine) WHERE id = ?",
+            (status.value, output_mp3_path, duration, error, int(used_fallback), engine, chapter_id),
         )
         if cur.rowcount == 0:
             raise KeyError(f"no chapter with id {chapter_id}")
@@ -297,13 +328,15 @@ class Database:
 
     def create_voice_profile(self, name: str, engine: str, reference_audio_path: str,
                               reference_transcript: Optional[str], exaggeration: float,
-                              cfg_weight: float, temperature: float) -> VoiceProfile:
+                              cfg_weight: float, temperature: float,
+                              transcript_status: Optional[str] = None) -> VoiceProfile:
         try:
             self.conn.execute(
                 "INSERT INTO voice_profiles (name, engine, reference_audio_path, reference_transcript, "
-                "exaggeration, cfg_weight, temperature, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "exaggeration, cfg_weight, temperature, created_at, transcript_status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (name, engine, reference_audio_path, reference_transcript, exaggeration, cfg_weight,
-                 temperature, time.time()),
+                 temperature, time.time(), transcript_status),
             )
         except sqlite3.IntegrityError:
             raise ValueError(f"a voice profile named '{name}' already exists")
@@ -317,6 +350,10 @@ class Database:
     def list_voice_profiles(self) -> List[VoiceProfile]:
         rows = self.conn.execute("SELECT * FROM voice_profiles ORDER BY id").fetchall()
         return [_row_to_voice_profile(row) for row in rows]
+
+    def update_book_engine(self, book_id: int, engine: str) -> None:
+        self.conn.execute("UPDATE books SET engine = ? WHERE id = ?", (engine, book_id))
+        self.conn.commit()
 
     def update_book_voice_profile(self, book_id: int, voice_profile_id: Optional[int]) -> None:
         self.conn.execute(
@@ -337,6 +374,36 @@ class Database:
             "UPDATE voice_profiles SET reference_audio_path = ? WHERE id = ?",
             (reference_audio_path, profile_id),
         )
+        if cur.rowcount == 0:
+            raise KeyError(f"no voice profile with id {profile_id}")
+        self.conn.commit()
+
+    def next_pending_transcription(self) -> Optional[VoiceProfile]:
+        row = self.conn.execute(
+            "SELECT * FROM voice_profiles WHERE transcript_status = 'pending' ORDER BY id LIMIT 1"
+        ).fetchone()
+        return _row_to_voice_profile(row) if row else None
+
+    def request_voice_transcription(self, profile_id: int) -> None:
+        self._update_voice(profile_id, "transcript_status = 'pending', transcript_error = NULL", ())
+
+    def fail_voice_transcription(self, profile_id: int, error: str) -> None:
+        self._update_voice(profile_id, "transcript_status = 'failed', transcript_error = ?", (error,))
+
+    def save_voice_transcript(self, profile_id: int, text: str, words: Optional[list] = None,
+                               trim_end: Optional[float] = None) -> None:
+        """A Whisper result (words given: replaces timings and trim) or a user edit
+        of the text alone (keeps them)."""
+        if words is None:
+            self._update_voice(profile_id, "reference_transcript = ?, transcript_status = 'done', "
+                               "transcript_error = NULL", (text,))
+        else:
+            self._update_voice(profile_id, "reference_transcript = ?, transcript_status = 'done', "
+                               "transcript_error = NULL, reference_words = ?, reference_trim_end = ?",
+                               (text, json.dumps(words), trim_end))
+
+    def _update_voice(self, profile_id: int, assignments: str, params: tuple) -> None:
+        cur = self.conn.execute(f"UPDATE voice_profiles SET {assignments} WHERE id = ?", (*params, profile_id))
         if cur.rowcount == 0:
             raise KeyError(f"no voice profile with id {profile_id}")
         self.conn.commit()
@@ -472,11 +539,12 @@ class Database:
         )
         self.conn.commit()
 
-    def create_text_clip(self, text: str, voice_profile_id: Optional[int]) -> TextClip:
+    def create_text_clip(self, text: str, voice_profile_id: Optional[int],
+                          engine: str = "chatterbox-turbo") -> TextClip:
         cur = self.conn.execute(
-            "INSERT INTO text_clips (text, voice_profile_id, status, progress, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (text, voice_profile_id, JobStatus.QUEUED.value, 0.0, time.time()),
+            "INSERT INTO text_clips (text, voice_profile_id, status, progress, created_at, engine) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (text, voice_profile_id, JobStatus.QUEUED.value, 0.0, time.time(), engine),
         )
         self.conn.commit()
         return self.get_text_clip(cur.lastrowid)

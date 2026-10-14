@@ -5,14 +5,17 @@ from pathlib import Path
 
 from typing import Optional
 
+import soundfile as sf
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..db import Database
+from ..engines import DEFAULT_ENGINE, ENGINES
 from ..ingest import ingest_by_path
 from ..models import ChapterStatus, JobStatus
 from ..synth.chunk_cache import clear_cache
+from ..voice.analysis import reference_clip
 from ..voice.storage import delete_voice_storage, store_reference_audio
 from ..voice.validation import validate_reference_audio
 
@@ -52,12 +55,22 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         finally:
             db.close()
 
+    def _reference_seconds(path: str) -> Optional[float]:
+        try:
+            return sf.info(path).duration
+        except Exception:
+            return None  # missing or unreadable file; generation reports it properly
+
     def _voice_to_dict(profile, warnings: Optional[list] = None) -> dict:
         return {
             "id": profile.id,
             "name": profile.name,
             "engine": profile.engine,
             "reference_transcript": profile.reference_transcript,
+            "transcript_status": profile.transcript_status,
+            "transcript_error": profile.transcript_error,
+            "reference_seconds": _reference_seconds(profile.reference_audio_path),
+            "reference_trim_end": profile.reference_trim_end,
             "exaggeration": profile.exaggeration,
             "cfg_weight": profile.cfg_weight,
             "temperature": profile.temperature,
@@ -82,6 +95,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             "error": clip.error,
             "created_at": clip.created_at,
             "used_fallback": clip.used_fallback,
+            "engine": clip.engine,
         }
 
     def _book_to_dict(db: Database, book) -> dict:
@@ -99,14 +113,36 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
                 "progress": active_job.progress if active_job else None,
                 "started_at": active_job.started_at if active_job else None,
                 "used_fallback": chapter.used_fallback,
+                "engine": chapter.engine,
             })
+        done_engines = {c["engine"] for c in chapters if c["status"] == ChapterStatus.DONE.value}
         return {
             "id": book.id,
             "title": book.title,
             "author": book.author,
             "output_dir": book.output_dir,
             "voice_profile_id": book.voice_profile_id,
+            "engine": book.engine,
+            "mixed_engines": len(done_engines) > 1,
             "chapters": chapters,
+        }
+
+    def _chosen_engine(payload: Optional[dict], current: str, voice_profile_id) -> str:
+        """The engine a request asks for (or the stored one), validated."""
+        engine = (payload or {}).get("engine") or current
+        spec = ENGINES.get(engine)
+        if spec is None:
+            raise HTTPException(status_code=400, detail=f"unknown engine '{engine}'")
+        if spec.cls.needs_transcript and voice_profile_id is None:
+            raise HTTPException(status_code=400, detail=f"{spec.label} needs a voice: pick one first")
+        return engine
+
+    @app.get("/api/engines")
+    def list_engines():
+        return {
+            "default": DEFAULT_ENGINE,
+            "engines": [{"id": name, "label": spec.label, "description": spec.description,
+                         "needs_voice": spec.cls.needs_transcript} for name, spec in ENGINES.items()],
         }
 
     @app.post("/api/books")
@@ -198,11 +234,12 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         }
 
     @app.post("/api/books/{book_id}/generate")
-    def generate(book_id: int, db: Database = Depends(get_db)):
+    def generate(book_id: int, payload: Optional[dict] = Body(None), db: Database = Depends(get_db)):
         try:
             book = db.get_book(book_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="book not found")
+        db.update_book_engine(book.id, _chosen_engine(payload, book.engine, book.voice_profile_id))
 
         queued_job_ids = []
         for chapter in db.list_chapters(book.id):
@@ -217,9 +254,10 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         return {"queued_job_ids": queued_job_ids}
 
     @app.post("/api/books/{book_id}/chapters/{chapter_id}/generate")
-    def generate_chapter(book_id: int, chapter_id: int, db: Database = Depends(get_db)):
+    def generate_chapter(book_id: int, chapter_id: int, payload: Optional[dict] = Body(None),
+                          db: Database = Depends(get_db)):
         try:
-            db.get_book(book_id)
+            book = db.get_book(book_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="book not found")
 
@@ -229,6 +267,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             raise HTTPException(status_code=404, detail="chapter not found")
         if chapter.book_id != book_id:
             raise HTTPException(status_code=404, detail="chapter not found")
+        engine = _chosen_engine(payload, book.engine, book.voice_profile_id)
 
         if chapter.status == ChapterStatus.DONE:
             return {"job_id": None}
@@ -236,6 +275,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         if latest is not None and latest.status in (JobStatus.QUEUED, JobStatus.GENERATING):
             return {"job_id": None}
 
+        db.update_book_engine(book.id, engine)  # the book's chapters all use one engine
         job = db.create_job(chapter.id)
         return {"job_id": job.id}
 
@@ -306,11 +346,14 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             shutil.rmtree(staged_dir, ignore_errors=True)
             raise HTTPException(status_code=400, detail=str(exc))
 
+        # A typed transcript is used as-is; otherwise the worker runs Whisper.
+        reference_transcript = (reference_transcript or "").strip() or None
         try:
             profile = db.create_voice_profile(
                 name=name, engine="chatterbox-turbo", reference_audio_path=str(staged_path.resolve()),
                 reference_transcript=reference_transcript, exaggeration=exaggeration,
                 cfg_weight=cfg_weight, temperature=temperature,
+                transcript_status="done" if reference_transcript else "pending",
             )
         except ValueError as exc:
             shutil.rmtree(staged_dir, ignore_errors=True)
@@ -334,6 +377,39 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
     @app.get("/api/voices")
     def list_voices(db: Database = Depends(get_db)):
         return [_voice_to_dict(p) for p in db.list_voice_profiles()]
+
+    def _existing_voice(db: Database, voice_id: int):
+        profile = db.get_voice_profile_by_id(voice_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="voice profile not found")
+        return profile
+
+    @app.patch("/api/voices/{voice_id}")
+    def update_voice(voice_id: int, payload: dict = Body(...), db: Database = Depends(get_db)):
+        _existing_voice(db, voice_id)
+        text = (payload.get("reference_transcript") or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="transcript must not be empty")
+        db.save_voice_transcript(voice_id, text)
+        return _voice_to_dict(db.get_voice_profile_by_id(voice_id))
+
+    @app.get("/api/voices/{voice_id}/audio")
+    def get_voice_audio(voice_id: int, db: Database = Depends(get_db)):
+        """The clip engines clone from: the trimmed part when the voice is trimmed."""
+        profile = _existing_voice(db, voice_id)
+        try:
+            path = reference_clip(profile.reference_audio_path, profile.reference_trim_end)
+        except (OSError, RuntimeError):
+            raise HTTPException(status_code=404, detail="reference audio missing")
+        if not Path(path).is_file():
+            raise HTTPException(status_code=404, detail="reference audio missing")
+        return FileResponse(path)
+
+    @app.post("/api/voices/{voice_id}/transcribe")
+    def transcribe_voice(voice_id: int, db: Database = Depends(get_db)):
+        _existing_voice(db, voice_id)
+        db.request_voice_transcription(voice_id)
+        return _voice_to_dict(db.get_voice_profile_by_id(voice_id))
 
     @app.delete("/api/voices/{voice_id}")
     def delete_voice(voice_id: int, db: Database = Depends(get_db)):
@@ -385,7 +461,8 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         if voice_profile_id is not None and db.get_voice_profile_by_id(voice_profile_id) is None:
             raise HTTPException(status_code=404, detail="voice profile not found")
 
-        clip = db.create_text_clip(text=text, voice_profile_id=voice_profile_id)
+        engine = _chosen_engine(payload, DEFAULT_ENGINE, voice_profile_id)
+        clip = db.create_text_clip(text=text, voice_profile_id=voice_profile_id, engine=engine)
         return _text_clip_to_dict(clip)
 
     @app.get("/api/text-clips")

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, ChevronDown, Mic, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Mic, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { api } from "../lib/api.js";
+import { transcriptState } from "../lib/engines.js";
 import Button from "../components/ui/Button.jsx";
 import Modal from "../components/ui/Modal.jsx";
 import ConfirmDialog from "../components/ui/ConfirmDialog.jsx";
@@ -8,10 +9,6 @@ import ConfirmDialog from "../components/ui/ConfirmDialog.jsx";
 function CloneVoiceModal({ onClose, onCloned }) {
   const [name, setName] = useState("");
   const [transcript, setTranscript] = useState("");
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [exaggeration, setExaggeration] = useState(0.5);
-  const [cfgWeight, setCfgWeight] = useState(0.5);
-  const [temperature, setTemperature] = useState(0.8);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
@@ -23,10 +20,7 @@ function CloneVoiceModal({ onClose, onCloned }) {
       const form = new FormData();
       form.append("file", event.target.elements.file.files[0]);
       form.append("name", name);
-      if (transcript) form.append("reference_transcript", transcript);
-      form.append("exaggeration", String(exaggeration));
-      form.append("cfg_weight", String(cfgWeight));
-      form.append("temperature", String(temperature));
+      if (transcript.trim()) form.append("reference_transcript", transcript.trim());
       const voice = await api.createVoice(form);
       onCloned(voice);
     } catch (e) {
@@ -70,36 +64,18 @@ function CloneVoiceModal({ onClose, onCloned }) {
 
         <div>
           <label htmlFor="transcript" className="block text-sm font-medium mb-1">
-            Reference transcript <span className="text-muted-foreground font-normal">(optional)</span>
+            Reference transcript{" "}
+            <span className="text-muted-foreground font-normal">(optional: leave empty to transcribe automatically)</span>
           </label>
-          <input
+          <textarea
             id="transcript"
-            type="text"
+            rows={3}
             value={transcript}
             onChange={(e) => setTranscript(e.target.value)}
-            className="w-full h-10 rounded-lg border border-border bg-background px-3 text-sm
+            className="w-full rounded-lg border border-border bg-background p-3 text-sm resize-y
               focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
           />
         </div>
-
-        <button
-          type="button"
-          onClick={() => setShowAdvanced((v) => !v)}
-          aria-expanded={showAdvanced}
-          className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground
-            cursor-pointer self-start focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring rounded"
-        >
-          <ChevronDown className={`size-4 transition-transform duration-150 ${showAdvanced ? "rotate-180" : ""}`} aria-hidden="true" />
-          Advanced settings
-        </button>
-
-        {showAdvanced && (
-          <div className="flex flex-col gap-3 rounded-lg bg-muted p-3">
-            <SliderField label="Exaggeration" value={exaggeration} onChange={setExaggeration} />
-            <SliderField label="CFG weight" value={cfgWeight} onChange={setCfgWeight} />
-            <SliderField label="Temperature" value={temperature} onChange={setTemperature} max={2} />
-          </div>
-        )}
 
         {error && <p className="text-sm text-destructive">{error}</p>}
 
@@ -116,23 +92,114 @@ function CloneVoiceModal({ onClose, onCloned }) {
   );
 }
 
-function SliderField({ label, value, onChange, max = 1 }) {
+function VoiceCard({ voice, onDelete, onChanged, onError }) {
+  const [draft, setDraft] = useState(voice.reference_transcript || "");
+  const [saving, setSaving] = useState(false);
+  const [confirmRetranscribe, setConfirmRetranscribe] = useState(false);
+  const state = transcriptState(voice);
+
+  // Pick up a new server transcript (Whisper finished) unless the user is mid-edit.
+  const [lastSeen, setLastSeen] = useState(voice.reference_transcript);
+  if (voice.reference_transcript !== lastSeen) {
+    setLastSeen(voice.reference_transcript);
+    setDraft(voice.reference_transcript || "");
+  }
+  const dirty = draft.trim() !== (voice.reference_transcript || "") && draft.trim() !== "";
+
+  async function save() {
+    setSaving(true);
+    try {
+      await api.updateVoiceTranscript(voice.id, draft.trim());
+      await onChanged();
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function transcribe() {
+    setConfirmRetranscribe(false);
+    try {
+      await api.transcribeVoice(voice.id);
+      await onChanged();
+    } catch (e) {
+      onError(e.message);
+    }
+  }
+
   return (
-    <label className="flex flex-col gap-1 text-sm">
-      <span className="flex justify-between">
-        <span className="text-muted-foreground">{label}</span>
-        <span className="font-mono">{value.toFixed(2)}</span>
-      </span>
-      <input
-        type="range"
-        min={0}
-        max={max}
-        step={0.05}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="cursor-pointer accent-primary"
-      />
-    </label>
+    <div className="rounded-xl border border-border bg-surface p-4 flex flex-col gap-3">
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-2">
+          <Mic className="size-5 text-primary" aria-hidden="true" />
+          <h2 className="font-semibold">{voice.name}</h2>
+        </div>
+        <button
+          onClick={() => onDelete(voice)}
+          aria-label={`Delete voice ${voice.name}`}
+          className="cursor-pointer rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive
+            focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
+          <Trash2 className="size-4" aria-hidden="true" />
+        </button>
+      </div>
+
+      <audio controls src={`/api/voices/${voice.id}/audio`} className="h-9 w-full" />
+
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor={`transcript-${voice.id}`} className="text-xs font-medium text-muted-foreground">
+          Transcript
+        </label>
+        {state.key === "pending" ? (
+          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            {state.label}
+          </p>
+        ) : (
+          <>
+            {state.key !== "done" && (
+              <p className={`text-sm ${state.key === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
+                {state.label}
+              </p>
+            )}
+            <textarea
+              id={`transcript-${voice.id}`}
+              rows={4}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="What the reference clip says, word for word"
+              className="w-full rounded-lg border border-border bg-background p-2 text-sm resize-y
+                focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            />
+            {state.note && <p className="text-xs text-muted-foreground">{state.note}</p>}
+            <div className="flex flex-wrap items-center gap-2 [&>button]:whitespace-nowrap">
+              <Button onClick={save} loading={saving} disabled={!dirty} className="h-8 px-3">
+                <Save className="size-4" aria-hidden="true" />
+                Save
+              </Button>
+              <Button
+                variant="ghost"
+                className="h-8 px-3"
+                onClick={() => (voice.reference_transcript ? setConfirmRetranscribe(true) : transcribe())}
+              >
+                <RotateCcw className="size-4" aria-hidden="true" />
+                {voice.reference_transcript ? "Transcribe again" : "Transcribe"}
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {confirmRetranscribe && (
+        <ConfirmDialog
+          title="Transcribe again"
+          message="Replace this transcript (including your edits) with a fresh automatic one?"
+          onConfirm={transcribe}
+          onCancel={() => setConfirmRetranscribe(false)}
+        />
+      )}
+    </div>
   );
 }
 
@@ -153,6 +220,14 @@ export default function VoicesPage() {
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
+
+  const anyTranscribing = voices.some((v) => v.transcript_status === "pending");
+
+  useEffect(() => {
+    if (!anyTranscribing) return;
+    const id = setInterval(() => refresh().catch((e) => setError(e.message)), 2000);
+    return () => clearInterval(id);
+  }, [anyTranscribing]);
 
   async function handleCloned(voice) {
     setShowClone(false);
@@ -207,25 +282,7 @@ export default function VoicesPage() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
           {voices.map((voice) => (
-            <div key={voice.id} className="rounded-xl border border-border bg-surface p-4">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2">
-                  <Mic className="size-5 text-primary" aria-hidden="true" />
-                  <h2 className="font-semibold">{voice.name}</h2>
-                </div>
-                <button
-                  onClick={() => setPendingDelete(voice)}
-                  aria-label={`Delete voice ${voice.name}`}
-                  className="cursor-pointer rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive
-                    focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                >
-                  <Trash2 className="size-4" aria-hidden="true" />
-                </button>
-              </div>
-              <p className="text-xs text-muted-foreground mt-2 font-mono">
-                exaggeration {voice.exaggeration} · cfg {voice.cfg_weight} · temp {voice.temperature}
-              </p>
-            </div>
+            <VoiceCard key={voice.id} voice={voice} onDelete={setPendingDelete} onChanged={refresh} onError={setError} />
           ))}
         </div>
       )}

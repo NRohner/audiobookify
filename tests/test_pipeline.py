@@ -468,3 +468,33 @@ def test_synthesize_text_clip_chunks_by_paragraph(tmp_path):
     assert result.status == JobStatus.DONE
     assert engine.texts == [LONG, LONG]
     db.close()
+
+
+@requires_ffmpeg
+def test_synthesize_chapter_records_the_engine_and_never_reuses_another_engines_audio(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = _make_book(tmp_path, db, n_chapters=1)
+    [chapter] = db.list_chapters(book.id)
+
+    def raise_paused(done, total):
+        raise pipeline.GenerationPaused()
+
+    first = FakeEngine()
+    with pytest.raises(pipeline.GenerationPaused):  # leaves chunks cached under "fake"
+        synthesize_chapter(chapter, book, first, first.clone_profile(None, None, {}), {"voice_name": "v"}, [], db,
+                            on_chunk_done=raise_paused)
+
+    class OtherEngine(FakeEngine):
+        name = "other"
+        calls = 0
+
+        def synthesize(self, text_chunk, profile_handle, params):
+            OtherEngine.calls += 1
+            return super().synthesize(text_chunk, profile_handle, params)
+
+    other = OtherEngine()
+    result = synthesize_chapter(chapter, book, other, other.clone_profile(None, None, {}), {"voice_name": "v"}, [], db)
+
+    assert OtherEngine.calls == 1  # same chunks and voice, different engine: regenerated
+    assert result.status == ChapterStatus.DONE and result.engine == "other"
+    db.close()

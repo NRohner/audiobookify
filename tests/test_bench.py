@@ -85,11 +85,14 @@ def test_mlx_audio_engine_passes_reference_transcript_when_the_model_needs_it():
     assert engine.model.generate.call_args.kwargs["ref_text"] == "ref words"
 
 
-def test_turbo_variant_benchmarks_the_apps_engine():
+def test_app_engine_variants_benchmark_the_apps_engines():
     from audiobookify.bench import VARIANTS
     from audiobookify.engines.turbo import ChatterboxTurboEngine
 
+    from audiobookify.engines.qwen3 import Qwen3Engine
+
     assert VARIANTS["chatterbox-turbo"] is ChatterboxTurboEngine
+    assert VARIANTS["qwen3-tts-1.7b"] is Qwen3Engine
 
 
 def test_reference_transcript_is_transcribed_once_and_cached(tmp_path):
@@ -132,14 +135,6 @@ def test_run_variant_hands_the_reference_transcript_to_the_engine(tmp_path):
     run_variant("fake", Recording(), "A sentence long enough to be one chunk.", None, tmp_path,
                 reference_text="ref words")
     assert seen["text"] == "ref words"
-
-
-def test_qwen3_variant_needs_the_reference_transcript():
-    from audiobookify.bench import VARIANTS, MLXAudioEngine
-
-    qwen = VARIANTS["qwen3-tts-1.7b"]
-    assert issubclass(qwen, MLXAudioEngine) and qwen.NEEDS_REF_TEXT
-    assert qwen.REPO == "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
 
 
 def test_score_run_adds_word_error_rate_to_each_result(tmp_path):

@@ -865,3 +865,116 @@ def test_migration_does_not_crash_when_storing_a_profile_raises_an_os_error(tmp_
     captured = capsys.readouterr()
     assert captured.err.count("could not be migrated") == 1
     reopened.close()
+
+
+def _voice(db, tmp_path, name="Nova", transcript=None, transcript_status=None):
+    return db.create_voice_profile(
+        name=name, engine="chatterbox-turbo", reference_audio_path=str(tmp_path / f"{name}.wav"),
+        reference_transcript=transcript, exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+        transcript_status=transcript_status,
+    )
+
+
+def test_voice_transcription_queue_hands_out_pending_voices_oldest_first(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    typed = _voice(db, tmp_path, "Typed", transcript="I typed this.", transcript_status="done")
+    first = _voice(db, tmp_path, "First", transcript_status="pending")
+    _voice(db, tmp_path, "Second", transcript_status="pending")
+
+    assert typed.transcript_status == "done" and first.transcript_status == "pending"
+    assert db.next_pending_transcription().name == "First"
+
+
+def test_saving_a_whisper_transcript_stores_words_and_trim_and_finishes_the_voice(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    voice = _voice(db, tmp_path, transcript_status="pending")
+    words = [{"word": " Hi", "start": 0.0, "end": 0.4}]
+
+    db.save_voice_transcript(voice.id, "Hi", words=words, trim_end=14.95)
+
+    saved = db.get_voice_profile_by_id(voice.id)
+    assert (saved.reference_transcript, saved.transcript_status) == ("Hi", "done")
+    assert saved.reference_words == words and saved.reference_trim_end == 14.95
+    assert db.next_pending_transcription() is None
+
+
+def test_editing_a_transcript_keeps_the_word_timings_and_trim(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    voice = _voice(db, tmp_path, transcript_status="pending")
+    db.save_voice_transcript(voice.id, "a small son cold", words=[{"word": " a", "start": 0, "end": 1}],
+                              trim_end=12.0)
+
+    db.save_voice_transcript(voice.id, "a small son called")
+
+    saved = db.get_voice_profile_by_id(voice.id)
+    assert saved.reference_transcript == "a small son called"
+    assert saved.reference_words == [{"word": " a", "start": 0, "end": 1}] and saved.reference_trim_end == 12.0
+
+
+def test_a_failed_transcription_is_recorded_and_can_be_retried(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    voice = _voice(db, tmp_path, transcript_status="pending")
+
+    db.fail_voice_transcription(voice.id, "unreadable audio")
+    failed = db.get_voice_profile_by_id(voice.id)
+    assert (failed.transcript_status, failed.transcript_error) == ("failed", "unreadable audio")
+    assert db.next_pending_transcription() is None
+
+    db.request_voice_transcription(voice.id)
+    retry = db.get_voice_profile_by_id(voice.id)
+    assert (retry.transcript_status, retry.transcript_error) == ("pending", None)
+    with pytest.raises(KeyError):
+        db.request_voice_transcription(999)
+
+
+def test_books_and_clips_remember_their_engine_and_chapters_record_what_made_them(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(title="T", author=None, source_path=str(tmp_path / "b.md"),
+                          source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"))
+    assert book.engine == "chatterbox-turbo"
+    db.update_book_engine(book.id, "qwen3")
+    assert db.get_book(book.id).engine == "qwen3"
+
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    assert chapter.engine is None
+    db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path="/x.mp3", duration=1.0,
+                             engine="qwen3")
+    db.update_chapter_status(chapter.id, ChapterStatus.GENERATING)  # requeue keeps the record
+    assert db.get_chapter(chapter.id).engine == "qwen3"
+
+    clip = db.create_text_clip("Hello.", None, engine="qwen3")
+    assert clip.engine == "qwen3"
+    assert db.create_text_clip("Hello.", None).engine == "chatterbox-turbo"
+
+
+def test_existing_database_gains_transcript_and_engine_columns_via_migration(tmp_path):
+    # Opens a pre-Phase-2 database: voices with no transcript state, finished
+    # chapters made by the old PyTorch Chatterbox engine.
+    import sqlite3
+
+    db_path = str(tmp_path / "test.db")
+    old = Database(db_path)
+    book = old.create_book(title="T", author=None, source_path=str(tmp_path / "b.md"),
+                           source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"))
+    done, pending = old.add_chapters(book.id, [RawChapter(title="1", text="A."), RawChapter(title="2", text="B.")])
+    old.update_chapter_status(done.id, ChapterStatus.DONE, output_mp3_path="/x.mp3", duration=1.0)
+    old.close()
+    conn = sqlite3.connect(db_path)
+    for table, col in [("books", "engine"), ("text_clips", "engine"), ("chapters", "engine"),
+                       ("voice_profiles", "transcript_status"), ("voice_profiles", "transcript_error"),
+                       ("voice_profiles", "reference_words"), ("voice_profiles", "reference_trim_end")]:
+        conn.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
+    conn.execute(
+        "INSERT INTO voice_profiles (name, engine, reference_audio_path, exaggeration, cfg_weight, "
+        "temperature, created_at) VALUES ('Old', 'chatterbox', ?, 0.5, 0.5, 0.8, 0)",
+        (str(tmp_path / "missing.wav"),))
+    conn.commit()
+    conn.close()
+
+    db = Database(db_path)
+    assert db.get_book(book.id).engine == "chatterbox-turbo"
+    assert db.get_chapter(done.id).engine == "chatterbox"  # honest record of what made it
+    assert db.get_chapter(pending.id).engine is None
+    voice = db.find_voice_profile_by_name("Old")
+    assert voice.transcript_status is None and voice.reference_words is None  # transcribed lazily
+    db.close()

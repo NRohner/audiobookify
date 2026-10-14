@@ -24,6 +24,15 @@ Fully local EPUB/Markdown → audiobook (MP3 per chapter) converter. Requires Ap
 
 The GUI is not yet implemented — see `project-spec.md` §9 for the milestone roadmap.
 
+## Engines
+
+Two TTS engines, picked per book or text clip (GUI picker, or `--engine` on `generate`, `voice preview` and `lexicon preview`). The choice is stored on the book, so resumed and requeued chapters keep it.
+
+- **Quality (`qwen3`)**: Qwen3-TTS 1.7B Base. Most natural; about 0.85-0.9 s to generate a second of audio; peaks around 11 GB. Needs a voice profile with a transcript of its reference clip, and copies the clip's speaking pace.
+- **Speed (`chatterbox-turbo`, the CLI default)**: Chatterbox Turbo. About twice as fast, slightly less natural; peaks around 5 GB. Works without a voice (built-in default voice).
+
+The worker keeps one engine loaded at a time and swaps when a job needs the other (a few seconds). Each chapter records which engine made it, and the book page warns when a book's chapters would mix engines.
+
 ## Pronunciation lexicon (M2)
 
 Register a respelling for any term (a name, an invented word, jargon) so it's read correctly. Entries are global (apply to every book) by default, or scoped to one book with `--book`:
@@ -76,9 +85,9 @@ Import a short reference clip (10-30s recommended, clean single-speaker audio) a
 .venv/bin/audiobookify generate --input book.epub --out ./audiobook/ --voice-profile narrator-1
 ```
 
-- `voice add`: validates the reference clip (sample rate, length, mono/stereo channel count) and prints warnings (not errors) for anything outside the recommended range, clipping, or a lack of quiet passages (a sign of constant background noise). Only an unusably short (<1s) or unreadable file is rejected outright. Reference audio is stored by absolute path and is not copied — don't move or delete the original file. Optional tuning flags `--exaggeration`, `--cfg` and `--temperature` are stored on the profile but currently unused: Chatterbox Turbo has no exaggeration/cfg and runs at its own sampling defaults. `--transcript` is stored as optional metadata only; Turbo's cloning is zero-shot on audio alone and doesn't use it.
+- `voice add`: validates the reference clip (sample rate, length, mono/stereo channel count) and prints warnings (not errors) for anything outside the recommended range, clipping, or a lack of quiet passages (a sign of constant background noise). Only an unusably short (<1s) or unreadable file is rejected outright. Reference audio is stored by absolute path and is not copied — don't move or delete the original file. Optional tuning flags `--exaggeration`, `--cfg` and `--temperature` are stored on the profile but unused: neither engine has exaggeration/cfg, and both run at their own sampling defaults. `--transcript` gives the clip's words yourself; without it the worker transcribes the clip with Whisper (`whisper-large-v3-turbo` on MLX), or the Quality engine does so the first time it needs it. Clips over 15 s are trimmed at a word (preferably sentence) boundary for cloning, because Qwen3 re-encodes the whole reference for every chunk and a 36 s clip ran about 15% slower than a 15 s one; the transcript then covers the kept part. Transcripts are shown and editable on the GUI's Voices page.
 - `voice list`: prints each saved profile's name, reference audio path, and tuning params (or a message if none exist yet).
-- `voice preview`: synthesizes `--text` with the named profile and writes a WAV file (`--out`, defaults to `<name>-preview.wav` in the current directory) — play it in any audio player to judge the voice before generating a whole book.
+- `voice preview`: synthesizes `--text` with the named profile (`--engine` picks the engine) and writes a WAV file (`--out`, defaults to `<name>-preview.wav` in the current directory) — play it in any audio player to judge the voice before generating a whole book.
 - `generate --voice-profile NAME`: uses that profile's reference audio and tuning params for the whole book. The ID3 narrator tag defaults to the profile name (override with `--voice`). Without `--voice-profile`, `generate` behaves exactly as in M0 (Chatterbox Turbo's built-in default voice, no cloning).
 
 ## GUI (M4)

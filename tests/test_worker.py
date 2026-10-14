@@ -6,7 +6,12 @@ from audiobookify.db import Database
 from audiobookify.engines.fake import FakeEngine
 from audiobookify.ingest.base import RawChapter
 from audiobookify.models import ChapterStatus, JobStatus, SourceFormat
-from audiobookify.worker import run_worker_once
+from audiobookify.worker import EngineSlot, run_worker_once
+
+
+def _slot(engine):
+    """A worker engine slot that always hands out this engine."""
+    return EngineSlot(lambda name: engine)
 
 requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
@@ -26,7 +31,7 @@ def test_run_worker_once_returns_false_when_queue_empty(tmp_path):
     engine = FakeEngine()
     engine.load("cpu")
 
-    assert run_worker_once(db, engine, {}) is False
+    assert run_worker_once(db, _slot(engine)) is False
     db.close()
 
 
@@ -37,7 +42,7 @@ def test_run_worker_once_claims_job_and_marks_chapter_done(tmp_path):
     engine = FakeEngine()
     engine.load("cpu")
 
-    did_work = run_worker_once(db, engine, {})
+    did_work = run_worker_once(db, _slot(engine))
 
     assert did_work is True
     assert db.get_chapter(chapter.id).status == ChapterStatus.DONE
@@ -52,7 +57,7 @@ def test_run_worker_once_reports_progress_via_job(tmp_path):
     engine = FakeEngine()
     engine.load("cpu")
 
-    run_worker_once(db, engine, {})
+    run_worker_once(db, _slot(engine))
 
     assert db.get_job(job.id).progress == 1.0
     db.close()
@@ -69,7 +74,7 @@ def test_run_worker_once_marks_job_failed_when_synthesis_raises(tmp_path):
     engine = FailingEngine()
     engine.load("cpu")
 
-    run_worker_once(db, engine, {})
+    run_worker_once(db, _slot(engine))
 
     finished = db.get_job(job.id)
     assert finished.status == JobStatus.FAILED
@@ -89,7 +94,7 @@ def test_run_worker_once_marks_job_failed_when_an_unexpected_exception_occurs_be
     engine = ExplodingEngine()
     engine.load("cpu")
 
-    did_work = run_worker_once(db, engine, {})
+    did_work = run_worker_once(db, _slot(engine))
 
     assert did_work is True
     finished = db.get_job(job.id)
@@ -119,9 +124,9 @@ def test_run_worker_once_reuses_cached_profile_handle_for_same_book(tmp_path):
 
     engine = RecordingEngine()
     engine.load("cpu")
-    cache = {}
-    run_worker_once(db, engine, cache)
-    run_worker_once(db, engine, cache)
+    slot = _slot(engine)
+    run_worker_once(db, slot)
+    run_worker_once(db, slot)
 
     assert len(clone_calls) == 1
     db.close()
@@ -158,9 +163,9 @@ def test_run_worker_once_reclones_when_voice_profile_changes(tmp_path):
 
     engine = RecordingEngine()
     engine.load("cpu")
-    cache = {}
-    run_worker_once(db, engine, cache)  # book_a, no profile
-    run_worker_once(db, engine, cache)  # book_b, profile "Nova"
+    slot = _slot(engine)
+    run_worker_once(db, slot)  # book_a, no profile
+    run_worker_once(db, slot)  # book_b, profile "Nova"
 
     assert len(clone_calls) == 2
     assert clone_calls[1] == str(tmp_path / "ref.wav")
@@ -174,7 +179,7 @@ def test_run_worker_once_returns_false_when_paused(tmp_path):
     engine = FakeEngine()
     engine.load("cpu")
 
-    assert run_worker_once(db, engine, {}) is False
+    assert run_worker_once(db, _slot(engine)) is False
     assert db.get_job(job.id).status == JobStatus.QUEUED
     db.close()
 
@@ -207,7 +212,7 @@ def test_run_worker_once_requeues_job_and_keeps_cache_when_paused_mid_chapter(tm
     engine = PausesAfterFirstChunkEngine(db)
     engine.load("cpu")
 
-    did_work = run_worker_once(db, engine, {})
+    did_work = run_worker_once(db, _slot(engine))
 
     assert did_work is True
     assert db.get_job(job.id).status == JobStatus.QUEUED
@@ -245,10 +250,163 @@ def test_run_worker_once_cancels_job_and_clears_cache_when_cancel_requested_mid_
     engine = CancelsAfterFirstChunkEngine(db, job.id)
     engine.load("cpu")
 
-    did_work = run_worker_once(db, engine, {})
+    did_work = run_worker_once(db, _slot(engine))
 
     assert did_work is True
     assert db.get_job(job.id).status == JobStatus.CANCELLED
     assert db.get_chapter(chapter.id).status == ChapterStatus.PENDING
     assert not chunk_cache.chapter_cache_dir(chapter.id).exists()
+    db.close()
+
+
+def _voice(db, tmp_path, **kw):
+    import numpy as np
+    import soundfile as sf
+
+    ref = tmp_path / "ref.wav"
+    sf.write(ref, np.zeros(24000 * 20, dtype=np.float32), 24000)
+    return db.create_voice_profile(name="Nova", engine="chatterbox-turbo", reference_audio_path=str(ref),
+                                   exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+                                   **{"reference_transcript": None, **kw})
+
+
+_WORDS = [{"word": " One", "start": 0.0, "end": 10.0}, {"word": " two.", "start": 10.1, "end": 14.0},
+          {"word": " Three", "start": 14.2, "end": 18.0}]
+
+
+def _fake_whisper(monkeypatch, result=None, error=None):
+    from audiobookify.voice import analysis
+    calls = []
+
+    def transcribe(path):
+        calls.append(path)
+        if error:
+            raise error
+        return result or {"text": "One two. Three", "words": _WORDS}
+    monkeypatch.setattr(analysis, "transcribe", transcribe)
+    return calls
+
+
+def test_worker_transcribes_pending_voices_and_trims_long_clips(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "test.db"))
+    voice = _voice(db, tmp_path, transcript_status="pending")
+    calls = _fake_whisper(monkeypatch)
+
+    assert run_worker_once(db, _slot(FakeEngine())) is True
+
+    saved = db.get_voice_profile_by_id(voice.id)
+    assert calls == [voice.reference_audio_path]
+    assert saved.transcript_status == "done" and saved.reference_words == _WORDS
+    assert (saved.reference_transcript, saved.reference_trim_end) == ("One two.", 14.15)
+    assert run_worker_once(db, _slot(FakeEngine())) is False
+    db.close()
+
+
+def test_worker_records_a_failed_transcription_instead_of_retrying_forever(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "test.db"))
+    voice = _voice(db, tmp_path, transcript_status="pending")
+    _fake_whisper(monkeypatch, error=RuntimeError("no speech found"))
+
+    run_worker_once(db, _slot(FakeEngine()))
+
+    saved = db.get_voice_profile_by_id(voice.id)
+    assert (saved.transcript_status, saved.transcript_error) == ("failed", "no speech found")
+    db.close()
+
+
+class _TranscriptEngine(FakeEngine):
+    needs_transcript = True
+
+    def clone_profile(self, reference_audio, reference_text, params):
+        self.cloned = (reference_audio, reference_text)
+        return super().clone_profile(reference_audio, reference_text, params)
+
+
+def test_worker_transcribes_a_voice_lazily_when_the_engine_needs_a_transcript(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "test.db"))
+    voice = _voice(db, tmp_path)  # created before transcripts existed
+    calls = _fake_whisper(monkeypatch)
+    clip = db.create_text_clip("A sentence long enough to be spoken.", voice.id)
+    engine = _TranscriptEngine()
+
+    run_worker_once(db, _slot(engine), text_clip_output_dir=str(tmp_path / "clips"))
+
+    assert calls == [voice.reference_audio_path]
+    ref_audio, ref_text = engine.cloned
+    assert ref_text == "One two." and ref_audio.endswith(".trim-14.15s.wav")  # trimmed clip + its words
+    assert db.get_voice_profile_by_id(voice.id).transcript_status == "done"
+    db.close()
+
+
+def test_worker_does_not_transcribe_for_engines_that_clone_from_audio_alone(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "test.db"))
+    voice = _voice(db, tmp_path)
+    calls = _fake_whisper(monkeypatch)
+    db.create_text_clip("A sentence long enough to be spoken.", voice.id)
+
+    run_worker_once(db, _slot(FakeEngine()), text_clip_output_dir=str(tmp_path / "clips"))
+
+    assert calls == []
+    db.close()
+
+
+class _Recording(FakeEngine):
+    def __init__(self, name, log):
+        super().__init__()
+        self.name, self.log = name, log
+
+    def load(self, device="auto"):
+        self.log.append(("load", self.name))
+
+    def teardown(self):
+        self.log.append(("teardown", self.name))
+
+
+def test_engine_slot_holds_one_engine_and_tears_it_down_before_loading_another():
+    from audiobookify.worker import EngineSlot
+
+    log = []
+    slot = EngineSlot(lambda name: _Recording(name, log))
+
+    a = slot.get("chatterbox-turbo")
+    assert slot.get("chatterbox-turbo") is a  # reused, not reloaded
+    slot.profile_cache["key"] = "stale"
+    b = slot.get("qwen3")
+    slot.teardown()
+
+    assert b.name == "qwen3"
+    assert log == [("load", "chatterbox-turbo"), ("teardown", "chatterbox-turbo"),
+                   ("load", "qwen3"), ("teardown", "qwen3")]
+    assert slot.profile_cache == {}  # handles belong to the engine that made them
+
+
+def test_engine_slot_loads_nothing_until_a_job_needs_an_engine(tmp_path):
+    from audiobookify.worker import EngineSlot
+
+    log = []
+    db = Database(str(tmp_path / "test.db"))
+    assert run_worker_once(db, EngineSlot(lambda name: _Recording(name, log))) is False
+    assert log == []
+    db.close()
+
+
+def test_worker_uses_each_jobs_stored_engine(tmp_path, monkeypatch):
+    from audiobookify.worker import EngineSlot
+
+    db = Database(str(tmp_path / "test.db"))
+    book, chapter, _ = _make_book_with_job(tmp_path, db)
+    db.update_book_engine(book.id, "qwen3")
+    db.create_text_clip("A sentence long enough to be spoken.", None, engine="chatterbox-turbo")
+    log = []
+    slot = EngineSlot(lambda name: _Recording(name, log))
+    monkeypatch.setattr("audiobookify.worker.synthesize_chapter", lambda chapter, book, engine, *a, **k: (
+        log.append(("chapter", engine.name)) or db.get_chapter(chapter.id)))
+    monkeypatch.setattr("audiobookify.worker.synthesize_text_clip", lambda clip, engine, *a, **k: (
+        log.append(("clip", engine.name)) or db.finish_text_clip(clip.id, JobStatus.DONE, output_path="/x.mp3")))
+
+    run_worker_once(db, slot, text_clip_output_dir=str(tmp_path / "clips"))
+    run_worker_once(db, slot, text_clip_output_dir=str(tmp_path / "clips"))
+
+    assert log == [("load", "qwen3"), ("chapter", "qwen3"),
+                   ("teardown", "qwen3"), ("load", "chatterbox-turbo"), ("clip", "chatterbox-turbo")]
     db.close()
