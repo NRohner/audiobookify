@@ -1,0 +1,194 @@
+/* Reading Room — design tokens
+   Light is the primary theme. Dark ("lamplit study") applies via
+   [data-theme="dark"] or the OS setting when no explicit theme is set. */
+
+
+:root {
+  /* ---------- Interface colour ---------- */
+  --rr-paper: #F6F1E8;        /* window background */
+  --rr-oat: #ECE4D6;          /* sidebar, sunken areas, soft background shapes */
+  --rr-card: #FFFDF9;         /* raised panels, popovers, player, cards */
+  --rr-line: #E2D9CA;         /* hairlines, input borders */
+  --rr-line-strong: #C8B79B;  /* dashed drop zones, step connectors, ledge edge */
+  --rr-ink: #2B2622;          /* primary text */
+  --rr-ink-muted: #6B625A;    /* secondary text (darkened from #7A7068 for 4.5:1) */
+
+  --rr-accent: #B8552F;       /* fills: primary buttons, progress, active play (white text passes 4.5:1) */
+  --rr-accent-text: #A24826;  /* accent used as text on paper/oat */
+  --rr-accent-deco: #C8643B;  /* decorative only: ribbons, card top rules — never text */
+  --rr-accent-soft: #F3DED2;  /* selected rows, active nav, active chip, warning tags */
+  --rr-on-accent: #FFFFFF;
+
+  --rr-periwinkle: #B9BDE6;      /* voice chips, framing */
+  --rr-periwinkle-soft: #E3E5F6; /* voice-chip background, "Changed" badge, card ruling */
+  --rr-periwinkle-ink: #3E4277;  /* text on periwinkle-soft */
+  --rr-sage: #4F7049;            /* finished / success text (darkened for contrast) */
+  --rr-sage-deco: #6F8F6A;
+
+  /* ---------- Shelf ---------- */
+  --rr-ledge: #DDD0BA;
+  --rr-ledge-edge: #C8B79B;
+  --rr-tag-bg: #FFFDF9;
+  --rr-tag-ink: #2B2622;
+
+  /* ---------- Spine / cover cloth (same in both themes — books are objects) ---------- */
+  --rr-spine-mustard: #D9A93F;   /* ink text */
+  --rr-spine-forest: #3F5E4B;    /* cream text */
+  --rr-spine-oxblood: #8C3B33;   /* cream text */
+  --rr-spine-navy: #2F4468;      /* cream text */
+  --rr-spine-cream: #EFE6D2;     /* ink text */
+  --rr-spine-rose: #D8A7A0;      /* ink text */
+  --rr-spine-charcoal: #2E2B29;  /* cream text */
+  --rr-spine-ochre: #B8763A;     /* ink text */
+  --rr-spine-text-light: #EFE6D2;
+  --rr-spine-text-dark: #2B2622;
+
+  /* ---------- Character voice colours (speaker review, cast avatars) ---------- */
+  /* chip = name chip + avatar; tint = highlight behind the quote */
+  --rr-voice-1-chip: #B9BDE6; --rr-voice-1-tint: #E7E8F7; /* periwinkle */
+  --rr-voice-2-chip: #C9D8C4; --rr-voice-2-tint: #E4ECE1; /* sage */
+  --rr-voice-3-chip: #E7C4BE; --rr-voice-3-tint: #F5E4E1; /* rose */
+  --rr-voice-4-chip: #EBD39A; --rr-voice-4-tint: #F6EBCF; /* mustard */
+  --rr-voice-5-chip: #E3C7A6; --rr-voice-5-tint: #F4E7D6; /* ochre */
+  --rr-voice-6-chip: #C7D3E3; --rr-voice-6-tint: #E6ECF3; /* blue-grey */
+  --rr-voice-7-chip: #D8B9C8; --rr-voice-7-tint: #F1E4EA; /* mauve */
+  --rr-voice-8-chip: #C6D6CF; --rr-voice-8-tint: #E5EDE9; /* teal-grey */
+
+  /* ---------- Window chrome ---------- */
+  --rr-traffic-close: #E2685A;
+  --rr-traffic-min: #E5B44A;
+  --rr-traffic-zoom: #5DB46A;
+
+  /* ---------- Type ---------- */
+  --rr-font-serif: "Newsreader", "Source Serif 4", Georgia, serif;
+  --rr-font-ui: "SF Pro Rounded", ui-rounded, "Nunito", system-ui, sans-serif;
+  --rr-font-mono: "SF Mono", ui-monospace, Menlo, monospace;
+
+  --rr-text-34: 34px; /* page titles (serif 500, -0.01em) */
+  --rr-text-24: 24px; /* section titles, drawer titles (serif) */
+  --rr-text-18: 18px; /* list titles, character names (serif) */
+  --rr-text-15: 15px; /* body UI, nav */
+  --rr-text-13: 13px; /* secondary UI, chips, metadata */
+  --rr-text-11: 11px; /* eyebrows: 700, 0.12–0.14em tracking, uppercase */
+  --rr-reading-size: 20px;    /* chapter text in reading panes */
+  --rr-reading-leading: 1.75;
+
+  /* ---------- Shape ---------- */
+  --rr-radius-book: 3px;   /* spines and covers: crisp */
+  --rr-radius-sm: 10px;    /* inputs, nav items */
+  --rr-radius-md: 14px;    /* small cards, tiles */
+  --rr-radius-lg: 18px;    /* panels, popovers */
+  --rr-radius-xl: 20px;    /* hero cards */
+  --rr-radius-pill: 999px;
+
+  /* ---------- Elevation (warm, brown-tinted; only books + floating panels) ---------- */
+  --rr-shadow-cover: 22px 26px 36px -14px rgba(60, 40, 20, 0.42);
+  --rr-shadow-cover-hero: 0 34px 50px -22px rgba(60, 40, 20, 0.5);
+  --rr-shadow-spine: inset -4px 0 6px rgba(0, 0, 0, 0.14), 2px 0 3px rgba(60, 40, 20, 0.12);
+  --rr-shadow-spine-lift: 0 12px 18px -6px rgba(60, 40, 20, 0.35), inset -4px 0 6px rgba(0, 0, 0, 0.2);
+  --rr-shadow-ledge: 0 8px 14px -6px rgba(60, 40, 20, 0.25);
+  --rr-shadow-panel: 0 12px 28px -14px rgba(60, 40, 20, 0.22);
+  --rr-shadow-popover: 0 20px 40px -12px rgba(60, 40, 20, 0.30);
+  --rr-shadow-tag: 0 2px 4px rgba(60, 40, 20, 0.12);
+
+  /* ---------- Layout ---------- */
+  --rr-window-w: 1440px;
+  --rr-window-h: 900px;
+  --rr-sidebar-w: 232px;
+  --rr-rail-w: 300px;          /* right rails (speaker review) */
+  --rr-drawer-w: 420px;        /* voice library drawer */
+  --rr-content-pad-x: 44px;
+  --rr-miniplayer-h: 60px;
+  --rr-control-h: 38px;        /* primary pill buttons (40 in book views) */
+  --rr-chip-h: 32px;
+  --rr-row-h: 42px;            /* chapter rows */
+
+  /* ---------- Motion ---------- */
+  --rr-ease-settle: cubic-bezier(0.22, 0.61, 0.36, 1); /* ease-out, no overshoot */
+  --rr-dur-hover: 180ms;
+  --rr-dur-move: 400ms;   /* spine → cover, cover → mini-player */
+  --rr-dur-fade: 220ms;
+
+  color-scheme: light;
+}
+
+/* ---------- Dark: lamplit study (walnut + warm cream, never cold grey) ---------- */
+:root[data-theme="dark"] {
+  --rr-paper: #1F1B18;
+  --rr-oat: #2A2521;
+  --rr-card: #322C27;
+  --rr-line: #3D3631;
+  --rr-line-strong: #5C4838;
+  --rr-ink: #EFE7DA;
+  --rr-ink-muted: #A89D92;
+  --rr-accent: #E07C52;
+  --rr-accent-text: #EE9C77;
+  --rr-accent-deco: #E07C52;
+  --rr-accent-soft: #4A2E22;
+  --rr-on-accent: #1F1B18;
+  --rr-periwinkle: #555A8A;
+  --rr-periwinkle-soft: #34364F;
+  --rr-periwinkle-ink: #D3D6F2;
+  --rr-sage: #8FB08A;
+  --rr-sage-deco: #8FB08A;
+  --rr-ledge: #5A4332;
+  --rr-ledge-edge: #3E2E22;
+  --rr-tag-bg: #EFE6D2;
+  --rr-tag-ink: #2B2622;
+  --rr-shadow-spine: inset -4px 0 6px rgba(0, 0, 0, 0.22), 2px 0 3px rgba(0, 0, 0, 0.35);
+  --rr-shadow-panel: 0 12px 28px -14px rgba(0, 0, 0, 0.5);
+  --rr-shadow-popover: 0 20px 40px -12px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --rr-paper: #1F1B18;
+    --rr-oat: #2A2521;
+    --rr-card: #322C27;
+    --rr-line: #3D3631;
+    --rr-line-strong: #5C4838;
+    --rr-ink: #EFE7DA;
+    --rr-ink-muted: #A89D92;
+    --rr-accent: #E07C52;
+    --rr-accent-text: #EE9C77;
+    --rr-accent-deco: #E07C52;
+    --rr-accent-soft: #4A2E22;
+    --rr-on-accent: #1F1B18;
+    --rr-periwinkle: #555A8A;
+    --rr-periwinkle-soft: #34364F;
+    --rr-periwinkle-ink: #D3D6F2;
+    --rr-sage: #8FB08A;
+    --rr-sage-deco: #8FB08A;
+    --rr-ledge: #5A4332;
+    --rr-ledge-edge: #3E2E22;
+    --rr-tag-bg: #EFE6D2;
+    --rr-tag-ink: #2B2622;
+    --rr-shadow-spine: inset -4px 0 6px rgba(0, 0, 0, 0.22), 2px 0 3px rgba(0, 0, 0, 0.35);
+    --rr-shadow-panel: 0 12px 28px -14px rgba(0, 0, 0, 0.5);
+    --rr-shadow-popover: 0 20px 40px -12px rgba(0, 0, 0, 0.55);
+    color-scheme: dark;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --rr-dur-hover: 0ms;
+    --rr-dur-move: 0ms; /* replace movement with --rr-dur-fade opacity transitions */
+  }
+}
+
+/* ---------- Base ---------- */
+html, body {
+  margin: 0;
+  background: var(--rr-paper);
+  color: var(--rr-ink);
+  font-family: var(--rr-font-ui);
+  font-size: var(--rr-text-15);
+  -webkit-font-smoothing: antialiased;
+}
+:focus-visible {
+  outline: 2px solid var(--rr-accent);
+  outline-offset: 2px;
+}
+.rr-tabular { font-variant-numeric: tabular-nums; }

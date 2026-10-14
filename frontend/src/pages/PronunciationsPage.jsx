@@ -1,13 +1,34 @@
 import { useEffect, useState } from "react";
-import { Pencil, Plus, SpellCheck2, Trash2 } from "lucide-react";
+import { Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { api } from "../lib/api.js";
-import Button from "../components/ui/Button.jsx";
+import Button, { ErrorNote, PageHeader } from "../components/ui/Button.jsx";
 import Modal from "../components/ui/Modal.jsx";
 import ConfirmDialog from "../components/ui/ConfirmDialog.jsx";
 
-function AddPronunciationModal({ onClose, onAdded }) {
-  const [term, setTerm] = useState("");
-  const [overrideValue, setOverrideValue] = useState("");
+function Field({ label, hint, value, onChange, placeholder, required, large = false }) {
+  return (
+    <label className="block">
+      <span className="block text-meta font-semibold mb-1.5">{label}</span>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        required={required}
+        className={
+          large
+            ? "w-full border-0 border-b border-line-strong bg-transparent pb-1 font-serif text-[30px] placeholder:text-ink-muted/50"
+            : "rr-input"
+        }
+      />
+      {hint && <span className="block mt-1 text-[12px] text-ink-muted">{hint}</span>}
+    </label>
+  );
+}
+
+function WordModal({ entry, onClose, onSaved }) {
+  const [term, setTerm] = useState(entry?.term ?? "");
+  const [overrideValue, setOverrideValue] = useState(entry?.override_value ?? "");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -17,12 +38,9 @@ function AddPronunciationModal({ onClose, onAdded }) {
     setSubmitting(true);
     setError(null);
     try {
-      const entry = await api.createPronunciation({
-        term,
-        override_value: overrideValue,
-        notes: notes || null,
-      });
-      onAdded(entry);
+      if (entry) await api.updatePronunciation(entry.term, overrideValue);
+      else await api.createPronunciation({ term, override_value: overrideValue, notes: notes || null });
+      onSaved();
     } catch (e) {
       setError(e.message);
       setSubmitting(false);
@@ -30,24 +48,25 @@ function AddPronunciationModal({ onClose, onAdded }) {
   }
 
   return (
-    <Modal title="Add pronunciation" onClose={onClose}>
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <Field label="Term" value={term} onChange={setTerm} placeholder="Cadeyrn" required />
+    <Modal title={entry ? `“${entry.term}”` : "Add a tricky word"} onClose={onClose}>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+        {!entry && <Field label="Word" value={term} onChange={setTerm} placeholder="Queequeg" required large />}
         <Field
-          label="Pronounced as"
+          label="Sounds like"
+          hint="Spell it the way it's said, with the stressed part in capitals."
           value={overrideValue}
           onChange={setOverrideValue}
-          placeholder="KAH-dern"
+          placeholder="KWEE-kweg"
           required
         />
-        <Field label="Notes (optional)" value={notes} onChange={setNotes} />
-        {error && <p className="text-sm text-destructive">{error}</p>}
-        <div className="flex justify-end gap-3 mt-2">
+        {!entry && <Field label="Note (optional)" value={notes} onChange={setNotes} placeholder="Harpooner, Moby-Dick" />}
+        <ErrorNote>{error}</ErrorNote>
+        <div className="flex justify-end gap-3">
           <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
           </Button>
           <Button type="submit" loading={submitting}>
-            Add
+            Save word
           </Button>
         </div>
       </form>
@@ -55,56 +74,42 @@ function AddPronunciationModal({ onClose, onAdded }) {
   );
 }
 
-function EditPronunciationModal({ entry, onClose, onSaved }) {
-  const [overrideValue, setOverrideValue] = useState(entry.override_value);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState(null);
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-    setSubmitting(true);
-    setError(null);
-    try {
-      const updated = await api.updatePronunciation(entry.term, overrideValue);
-      onSaved(updated);
-    } catch (e) {
-      setError(e.message);
-      setSubmitting(false);
-    }
-  }
-
+function WordCard({ entry, onEdit, onDelete }) {
   return (
-    <Modal title={`Edit "${entry.term}"`} onClose={onClose}>
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <Field label="Pronounced as" value={overrideValue} onChange={setOverrideValue} required />
-        {error && <p className="text-sm text-destructive">{error}</p>}
-        <div className="flex justify-end gap-3 mt-2">
-          <Button type="button" variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" loading={submitting}>
-            Save
-          </Button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-function Field({ label, value, onChange, placeholder, required }) {
-  return (
-    <label className="block">
-      <span className="block text-sm font-medium mb-1">{label}</span>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        required={required}
-        className="w-full h-10 rounded-lg border border-border bg-background px-3 text-sm
-          focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      />
-    </label>
+    <li
+      className="group relative h-40 rounded-[6px] border border-line bg-card shadow-tag overflow-hidden"
+      style={{
+        backgroundImage:
+          "repeating-linear-gradient(to bottom, transparent 0 25px, var(--rr-periwinkle-soft) 25px 26px)",
+        backgroundPosition: "0 36px",
+        backgroundRepeat: "no-repeat",
+        backgroundSize: "100% calc(100% - 36px)",
+      }}
+    >
+      <div className="flex h-9 items-end justify-between gap-3 border-b border-accent-deco/60 px-4 pb-1 bg-card">
+        <span className="font-serif text-[25px] leading-none truncate">{entry.term}</span>
+        <span className="font-serif italic text-meta text-ink-muted truncate">{entry.override_value}</span>
+      </div>
+      <div className="px-4 pt-3 text-[12px] leading-[26px] text-ink-muted">{entry.notes}</div>
+      <div className="absolute bottom-2.5 right-2.5 flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+        <button
+          type="button"
+          onClick={onEdit}
+          aria-label={`Change how ${entry.term} sounds`}
+          className="rounded-full bg-card p-1.5 text-ink-muted hover:bg-oat hover:text-ink"
+        >
+          <Pencil className="size-4" strokeWidth={1.7} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          onClick={onDelete}
+          aria-label={`Remove ${entry.term}`}
+          className="rounded-full bg-card p-1.5 text-ink-muted hover:bg-accent-soft hover:text-accent-text"
+        >
+          <Trash2 className="size-4" strokeWidth={1.7} aria-hidden="true" />
+        </button>
+      </div>
+    </li>
   );
 }
 
@@ -112,9 +117,9 @@ export default function PronunciationsPage() {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [showAdd, setShowAdd] = useState(false);
-  const [editing, setEditing] = useState(null);
+  const [editing, setEditing] = useState(null); // null | "new" | entry
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [query, setQuery] = useState("");
 
   async function refresh() {
     setEntries(await api.listPronunciations());
@@ -136,74 +141,64 @@ export default function PronunciationsPage() {
     }
   }
 
-  if (loading) return <p className="text-muted-foreground">Loading…</p>;
+  if (loading) return <p className="text-ink-muted">Loading…</p>;
+
+  const q = query.trim().toLowerCase();
+  const visible = entries.filter((e) => !q || e.term.toLowerCase().includes(q));
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold">Pronunciations</h1>
-        <Button onClick={() => setShowAdd(true)}>
-          <Plus className="size-4" aria-hidden="true" />
-          Add pronunciation
+    <div className="max-w-[1100px]">
+      <PageHeader title="Tricky words">
+        {entries.length > 0 && (
+          <label className="relative">
+            <span className="sr-only">Search tricky words</span>
+            <Search
+              className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-ink-muted"
+              strokeWidth={1.7}
+              aria-hidden="true"
+            />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search"
+              className="h-9 w-56 rounded-full border border-line bg-card pl-9 pr-4 text-meta placeholder:text-ink-muted"
+            />
+          </label>
+        )}
+        <Button onClick={() => setEditing("new")}>
+          <Plus className="size-4" strokeWidth={2} aria-hidden="true" />
+          Add a word
         </Button>
-      </div>
+      </PageHeader>
 
-      {error && <p className="text-sm text-destructive mb-4">{error}</p>}
+      <p className="-mt-4 mb-8 max-w-xl text-ui text-ink-muted">
+        Names and words the narrator gets wrong. Tell it how they sound once, and every book will say them your way.
+      </p>
+
+      <ErrorNote>{error}</ErrorNote>
 
       {entries.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-24 text-center">
-          <SpellCheck2 className="size-10 text-muted-foreground mb-3" aria-hidden="true" />
-          <p className="text-muted-foreground mb-4">No custom pronunciations yet.</p>
-          <Button onClick={() => setShowAdd(true)}>
-            <Plus className="size-4" aria-hidden="true" />
-            Add pronunciation
-          </Button>
+        <div className="pt-12 text-center">
+          <p className="font-serif text-section">No tricky words yet.</p>
+          <p className="mt-2 text-ui text-ink-muted">When a name comes out wrong, add it here.</p>
         </div>
       ) : (
-        <div className="rounded-xl border border-border divide-y divide-border overflow-hidden">
-          {entries.map((entry) => (
-            <div key={entry.term} className="p-4 flex items-center gap-4">
-              <div className="flex-1 min-w-0">
-                <p className="font-medium">{entry.term}</p>
-                <p className="text-sm text-muted-foreground">
-                  &rarr; {entry.override_value}
-                  {entry.notes && <span className="ml-2">({entry.notes})</span>}
-                </p>
-              </div>
-              <button
-                onClick={() => setEditing(entry)}
-                aria-label={`Edit pronunciation for ${entry.term}`}
-                className="cursor-pointer rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground
-                  focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-              >
-                <Pencil className="size-4" aria-hidden="true" />
-              </button>
-              <button
-                onClick={() => setPendingDelete(entry)}
-                aria-label={`Delete pronunciation for ${entry.term}`}
-                className="cursor-pointer rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive
-                  focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-              >
-                <Trash2 className="size-4" aria-hidden="true" />
-              </button>
-            </div>
+        <ul className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-[18px]">
+          {visible.map((entry) => (
+            <WordCard
+              key={entry.term}
+              entry={entry}
+              onEdit={() => setEditing(entry)}
+              onDelete={() => setPendingDelete(entry)}
+            />
           ))}
-        </div>
-      )}
-
-      {showAdd && (
-        <AddPronunciationModal
-          onClose={() => setShowAdd(false)}
-          onAdded={async () => {
-            setShowAdd(false);
-            await refresh();
-          }}
-        />
+        </ul>
       )}
 
       {editing && (
-        <EditPronunciationModal
-          entry={editing}
+        <WordModal
+          entry={editing === "new" ? null : editing}
           onClose={() => setEditing(null)}
           onSaved={async () => {
             setEditing(null);
@@ -214,8 +209,9 @@ export default function PronunciationsPage() {
 
       {pendingDelete && (
         <ConfirmDialog
-          title="Delete pronunciation"
-          message={`Delete the pronunciation override for "${pendingDelete.term}"?`}
+          title="Remove word"
+          message={`Remove “${pendingDelete.term}”? The narrator will go back to its own guess.`}
+          confirmLabel="Remove"
           onConfirm={handleDelete}
           onCancel={() => setPendingDelete(null)}
         />

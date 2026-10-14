@@ -1,25 +1,18 @@
-import { formatEta } from "../../lib/eta.js";
-
-export default function ProgressBar({ value, startedAt }) {
+export default function ProgressBar({ value, label, className = "" }) {
   const pct = Math.round((value ?? 0) * 100);
-  const eta = formatEta(value, startedAt);
   return (
-    <div>
+    <div
+      role="progressbar"
+      aria-valuenow={pct}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-label={label}
+      className={`h-1 w-full rounded-full bg-line overflow-hidden ${className}`}
+    >
       <div
-        role="progressbar"
-        aria-valuenow={pct}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        className="h-2 w-full rounded-full bg-muted overflow-hidden"
-      >
-        <div
-          className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <p className="mt-1 text-xs text-muted-foreground">
-        {pct}%{eta ? ` · ~${eta} left` : ""}
-      </p>
+        className="h-full rounded-full bg-accent transition-[width] duration-500 ease-settle"
+        style={{ width: `${pct}%` }}
+      />
     </div>
   );
 }
