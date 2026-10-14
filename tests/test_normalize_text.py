@@ -219,3 +219,49 @@ def test_a_whole_scene_under_the_minimum_merges_across_the_break_rather_than_sta
     text = "The door closed behind him for good.\n\n* * *\n\nThe End."
     chunks = chunk_text(text, max_chars=300, min_chars=20)
     assert chunks == [Chunk("The door closed behind him for good. The End.", "paragraph")]
+
+
+def _epub_chapter_text(tmp_path, body_html):
+    """Chapter text as the real EPUB ingest produces it."""
+    from ebooklib import epub as ebooklib_epub
+    from audiobookify.ingest import epub
+
+    book = ebooklib_epub.EpubBook()
+    book.set_identifier("id-dash")
+    book.set_title("Dashes")
+    ch = ebooklib_epub.EpubHtml(title="Chapter One", file_name="ch1.xhtml")
+    ch.content = f"<html><body>{body_html}</body></html>"
+    book.add_item(ch)
+    book.spine = [ch]
+    book.add_item(ebooklib_epub.EpubNcx())
+    book.add_item(ebooklib_epub.EpubNav())
+    path = tmp_path / "book.epub"
+    ebooklib_epub.write_epub(str(path), book)
+    return epub.parse(str(path)).chapters[0].text
+
+
+_LONG = "The air was heavy over the marsh, and the reeds bent low under the wind from the sea. "
+
+
+def test_an_interrupted_line_ending_a_chunk_gets_a_clean_stop(tmp_path):
+    # Turbo babbled or repeated words after chunks ending in a dash (1 in 20
+    # runs with the dash, 0 in 20 with a period); the pause stays a paragraph pause.
+    text = _epub_chapter_text(tmp_path, (
+        f"<p>{_LONG}“The air is bad there, and if we were to—”</p>"
+        f"<p>{_LONG}They could build a city, or an aqueduct, or a—</p>"
+        f"<p>{_LONG}“But, Cosimo, only look–’</p>"
+        f"<p>{_LONG}He stopped short--</p>"
+        f"<p>{_LONG}The end came quickly.</p>"
+    ))
+
+    chunks = chunk_text(text, 300, 80)
+
+    assert [c.text.rsplit(" ", 1)[-1] for c in chunks] == ["to.”", "a.", "look.’", "short.", "quickly."]
+    assert [c.ends_with for c in chunks] == ["paragraph"] * 5
+
+
+def test_dashes_inside_a_chunk_are_left_alone(tmp_path):
+    text = _epub_chapter_text(tmp_path, f"<p>{_LONG}She paused—only for a moment—and went on.</p>"
+                                        f"<p>{_LONG * 2}</p>")  # long enough not to be skipped as boilerplate
+    chunks = chunk_text(text, 300, 80)
+    assert "paused—only for a moment—and went on." in chunks[0].text
