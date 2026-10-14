@@ -13,7 +13,12 @@ from audiobookify.db import Database
 from audiobookify.engines.fake import FakeEngine
 from audiobookify.ingest.base import RawChapter
 from audiobookify.models import ChapterStatus, JobStatus, SourceFormat
-from audiobookify.worker import run_worker_once
+from audiobookify.worker import EngineSlot, run_worker_once
+
+
+def _slot(engine):
+    """A worker engine slot that always hands out this engine."""
+    return EngineSlot(lambda name: engine)
 
 requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
@@ -160,7 +165,7 @@ def test_generate_endpoint_does_not_requeue_already_done_chapters(tmp_path):
     db = Database(str(tmp_path / "test.db"))
     engine = FakeEngine()
     engine.load("cpu")
-    run_worker_once(db, engine, {})
+    run_worker_once(db, _slot(engine))
     db.close()
 
     second = client.post(f"/api/books/{created['id']}/generate")
@@ -223,7 +228,7 @@ def test_generate_chapter_endpoint_does_not_requeue_an_already_done_chapter(tmp_
     db = Database(str(tmp_path / "test.db"))
     engine = FakeEngine()
     engine.load("cpu")
-    run_worker_once(db, engine, {})
+    run_worker_once(db, _slot(engine))
     db.close()
 
     response = client.post(f"/api/books/{created['id']}/chapters/{chapter_id}/generate")
@@ -312,7 +317,7 @@ def test_book_detail_reflects_job_progress_after_worker_processes_it(tmp_path):
     db = Database(str(tmp_path / "test.db"))
     engine = FakeEngine()
     engine.load("cpu")
-    run_worker_once(db, engine, {})
+    run_worker_once(db, _slot(engine))
     db.close()
 
     detail = client.get(f"/api/books/{created['id']}").json()
@@ -562,7 +567,7 @@ def test_worker_processes_queued_text_clip_and_audio_becomes_available(tmp_path)
     db = Database(str(tmp_path / "test.db"))
     engine = FakeEngine()
     engine.load("cpu")
-    run_worker_once(db, engine, {}, text_clip_output_dir=str(tmp_path / "text_clips"))
+    run_worker_once(db, _slot(engine), text_clip_output_dir=str(tmp_path / "text_clips"))
     db.close()
 
     detail = client.get(f"/api/text-clips/{created['id']}").json()
@@ -1051,3 +1056,86 @@ def test_requesting_a_transcription_requeues_it(tmp_path):
 
     assert response.status_code == 200 and response.json()["transcript_status"] == "pending"
     assert client.post("/api/voices/999/transcribe").status_code == 404
+
+
+def _book(client, tmp_path, db_voice=None):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(title="T", author=None, source_path=str(tmp_path / "b.md"),
+                          source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"))
+    chapters = db.add_chapters(book.id, [RawChapter(title="1", text="A."), RawChapter(title="2", text="B.")])
+    if db_voice:
+        db.update_book_voice_profile(book.id, db_voice)
+    db.close()
+    return book, chapters
+
+
+def test_engines_endpoint_lists_both_engines_with_labels(tmp_path):
+    body = _client(tmp_path).get("/api/engines").json()
+    assert body["default"] == "chatterbox-turbo"
+    by_id = {e["id"]: e for e in body["engines"]}
+    assert by_id["qwen3"]["label"] == "Quality (Qwen3)" and by_id["qwen3"]["needs_voice"] is True
+    assert by_id["chatterbox-turbo"]["label"] == "Speed (Turbo)" and by_id["chatterbox-turbo"]["needs_voice"] is False
+
+
+def test_generating_a_book_stores_the_chosen_engine_for_every_later_job(tmp_path):
+    client = _client(tmp_path)
+    voice = _upload_voice(client)
+    book, _ = _book(client, tmp_path, db_voice=voice["id"])
+
+    response = client.post(f"/api/books/{book.id}/generate", json={"engine": "qwen3"})
+
+    assert response.status_code == 200 and len(response.json()["queued_job_ids"]) == 2
+    assert client.get(f"/api/books/{book.id}").json()["engine"] == "qwen3"
+    client.post(f"/api/books/{book.id}/generate")  # no choice given: keeps the stored one
+    assert client.get(f"/api/books/{book.id}").json()["engine"] == "qwen3"
+
+
+def test_generate_rejects_unknown_engines_and_quality_without_a_voice(tmp_path):
+    client = _client(tmp_path)
+    book, [chapter, _] = _book(client, tmp_path)
+
+    assert client.post(f"/api/books/{book.id}/generate", json={"engine": "nope"}).status_code == 400
+    r = client.post(f"/api/books/{book.id}/generate", json={"engine": "qwen3"})
+    assert r.status_code == 400 and "voice" in r.json()["detail"]
+    r = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/generate", json={"engine": "qwen3"})
+    assert r.status_code == 400
+    assert client.get(f"/api/books/{book.id}").json()["engine"] == "chatterbox-turbo"  # nothing changed
+
+
+def test_regenerating_one_chapter_with_another_engine_switches_the_book(tmp_path):
+    client = _client(tmp_path)
+    voice = _upload_voice(client)
+    book, [chapter, _] = _book(client, tmp_path, db_voice=voice["id"])
+
+    r = client.post(f"/api/books/{book.id}/chapters/{chapter.id}/generate", json={"engine": "qwen3"})
+
+    assert r.status_code == 200 and r.json()["job_id"] is not None
+    assert client.get(f"/api/books/{book.id}").json()["engine"] == "qwen3"
+
+
+def test_book_reports_which_engine_made_each_chapter_and_whether_they_are_mixed(tmp_path):
+    client = _client(tmp_path)
+    book, [a, b] = _book(client, tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    db.update_chapter_status(a.id, ChapterStatus.DONE, output_mp3_path="/a.mp3", engine="qwen3")
+    db.close()
+
+    body = client.get(f"/api/books/{book.id}").json()
+    assert [c["engine"] for c in body["chapters"]] == ["qwen3", None]
+    assert body["mixed_engines"] is False
+
+    db = Database(str(tmp_path / "test.db"))
+    db.update_chapter_status(b.id, ChapterStatus.DONE, output_mp3_path="/b.mp3", engine="chatterbox-turbo")
+    db.close()
+    assert client.get(f"/api/books/{book.id}").json()["mixed_engines"] is True
+
+
+def test_text_clips_store_their_engine(tmp_path):
+    client = _client(tmp_path)
+    voice = _upload_voice(client)
+
+    clip = client.post("/api/text-clips", json={"text": "Hi.", "voice_profile_id": voice["id"], "engine": "qwen3"})
+    assert clip.status_code == 200 and clip.json()["engine"] == "qwen3"
+    assert client.post("/api/text-clips", json={"text": "Hi."}).json()["engine"] == "chatterbox-turbo"
+    assert client.post("/api/text-clips", json={"text": "Hi.", "engine": "qwen3"}).status_code == 400
+    assert client.post("/api/text-clips", json={"text": "Hi.", "engine": "nope"}).status_code == 400

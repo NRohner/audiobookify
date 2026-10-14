@@ -7,7 +7,7 @@ from typing import List, Optional
 import soundfile as sf
 
 from .db import Database
-from .engines.turbo import ChatterboxTurboEngine
+from .engines import DEFAULT_ENGINE, ENGINES
 from .ingest import ingest_by_path
 from .lexicon.substitution import apply_lexicon
 from .models import ChapterStatus
@@ -29,6 +29,10 @@ def _check_reference_audio_present(profile, db: Optional[Database] = None) -> No
         if db is not None:
             db.close()
         sys.exit(1)
+
+
+def _make_engine(name: str):
+    return ENGINES[name].cls()
 
 
 def _sanitize_filename_component(value: str) -> str:
@@ -103,12 +107,21 @@ def _handle_generate(args) -> None:
 
     _check_reference_audio_present(profile, db)
 
+    engine_name = args.engine or book.engine
+    spec = ENGINES[engine_name]
+    if spec.cls.needs_transcript and profile is None:
+        print(f"Error: {spec.label} needs a voice: pass --voice-profile", file=sys.stderr)
+        db.close()
+        sys.exit(1)
+    db.update_book_engine(book.id, engine_name)
+    engine = _make_engine(engine_name)
+    profile = worker.load_voice(db, profile.id, engine) if profile else None
+
     voice_name = args.voice or (profile.name if profile else "default")
     voice_params = {"voice_name": voice_name}
     if profile:
         voice_params.update(params_from_profile(profile))
 
-    engine = ChatterboxTurboEngine()
     results = generate_book(book, engine, db, voice_params)
     for chapter in results:
         print(f"{chapter.status.value}: {chapter.title} -> {chapter.output_mp3_path}")
@@ -138,9 +151,12 @@ def _handle_voice_add(args) -> None:
     db = Database(args.db)
     try:
         profile = db.create_voice_profile(
-            name=args.name, engine=ChatterboxTurboEngine.name, reference_audio_path=reference_path,
+            name=args.name, engine=DEFAULT_ENGINE, reference_audio_path=reference_path,
             reference_transcript=args.transcript, exaggeration=args.exaggeration,
             cfg_weight=args.cfg, temperature=args.temperature,
+            # A typed transcript is used as-is; otherwise Whisper runs in the worker,
+            # or the first time an engine needs it.
+            transcript_status="done" if args.transcript else "pending",
         )
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -183,18 +199,20 @@ def _handle_voice_list(args) -> None:
 def _handle_voice_preview(args) -> None:
     db = Database(args.db)
     profile = db.find_voice_profile_by_name(args.name)
-    db.close()
     if profile is None:
+        db.close()
         print(f"Error: no voice profile named '{args.name}'", file=sys.stderr)
         sys.exit(1)
 
-    _check_reference_audio_present(profile)
+    _check_reference_audio_present(profile, db)
 
-    engine = ChatterboxTurboEngine()
+    engine = _make_engine(args.engine)
+    params = params_from_profile(worker.load_voice(db, profile.id, engine))
+    db.close()
     try:
         engine.load()
-        handle = engine.clone_profile(profile.reference_audio_path, profile.reference_transcript, {})
-        audio = engine.synthesize(args.text, handle, params_from_profile(profile))
+        handle = engine.clone_profile(params["reference_audio"], params["reference_text"], params)
+        audio = engine.synthesize(args.text, handle, params)
         out_path = args.out or f"{profile.name}-preview.wav"
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         sf.write(out_path, audio, engine.sample_rate())
@@ -420,22 +438,19 @@ def _handle_lexicon_preview(args) -> None:
             print(f"Error: no voice profile named '{args.voice_profile}'", file=sys.stderr)
             db.close()
             sys.exit(1)
-    db.close()
 
-    _check_reference_audio_present(profile)
+    _check_reference_audio_present(profile, db)
 
     sentence = args.sentence or f"The pronunciation of {entry.term} is being previewed."
     text = apply_lexicon(sentence, [entry])
 
-    engine = ChatterboxTurboEngine()
+    engine = _make_engine(args.engine)
+    params = params_from_profile(worker.load_voice(db, profile.id, engine)) if profile else {}
+    db.close()
     try:
         engine.load()
-        handle = engine.clone_profile(
-            profile.reference_audio_path if profile else None,
-            profile.reference_transcript if profile else None,
-            {},
-        )
-        audio = engine.synthesize(text, handle, params_from_profile(profile) if profile else {})
+        handle = engine.clone_profile(params.get("reference_audio"), params.get("reference_text"), params)
+        audio = engine.synthesize(text, handle, params)
         out_path = args.out or f"{_sanitize_filename_component(entry.term)}-pronunciation-preview.wav"
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         sf.write(out_path, audio, engine.sample_rate())
@@ -447,13 +462,12 @@ def _handle_lexicon_preview(args) -> None:
 
 def _handle_worker(args) -> None:
     db = Database(args.db)
-    engine = ChatterboxTurboEngine()
-    engine.load()
+    engines = worker.EngineSlot(_make_engine)  # loads each job's engine on demand
     try:
-        worker.run_forever(db, engine, poll_interval=args.poll_interval,
+        worker.run_forever(db, engines, poll_interval=args.poll_interval,
                             text_clip_output_dir=args.text_output_dir)
     finally:
-        engine.teardown()
+        engines.teardown()
         db.close()
 
 
@@ -468,6 +482,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     generate_parser.add_argument("--voice-profile", default=None)
     generate_parser.add_argument("--db", default="audiobookify.db")
     generate_parser.add_argument("--heading-level", type=int, default=1)
+    generate_parser.add_argument("--engine", choices=sorted(ENGINES), default=None,
+                                 help="TTS engine; stored on the book (default: the book's, else chatterbox-turbo)")
 
     voice_parser = subparsers.add_parser("voice", help="Manage voice profiles")
     voice_subparsers = voice_parser.add_subparsers(dest="voice_command", required=True)
@@ -492,6 +508,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     voice_preview_parser.add_argument("--name", required=True)
     voice_preview_parser.add_argument("--text", required=True)
     voice_preview_parser.add_argument("--out", default=None)
+    voice_preview_parser.add_argument("--engine", choices=sorted(ENGINES), default=DEFAULT_ENGINE)
     voice_preview_parser.add_argument("--db", default="audiobookify.db")
 
     lexicon_parser = subparsers.add_parser("lexicon", help="Manage pronunciation overrides")
@@ -544,6 +561,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     lexicon_preview_parser.add_argument("--voice-profile", default=None)
     lexicon_preview_parser.add_argument("--book", default=None)
     lexicon_preview_parser.add_argument("--out", default=None)
+    lexicon_preview_parser.add_argument("--engine", choices=sorted(ENGINES), default=DEFAULT_ENGINE)
     lexicon_preview_parser.add_argument("--db", default="audiobookify.db")
 
     worker_parser = subparsers.add_parser("worker", help="Run the background generation worker")

@@ -14,6 +14,8 @@ def join_segments(segments) -> np.ndarray:
 
 def free_memory() -> None:
     """Return cached GPU memory, so the next engine fits."""
+    import gc
+    gc.collect()  # model objects can sit in reference cycles
     try:
         import mlx.core as mx
         mx.clear_cache()

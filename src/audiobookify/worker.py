@@ -2,6 +2,7 @@ import sys
 import time
 
 from .db import Database
+from .engines import ENGINES
 from .models import ChapterStatus, JobStatus
 from .synth.chunk_cache import clear_cache
 from .synth.pipeline import (
@@ -18,6 +19,33 @@ def _voice_params_for_profile(profile) -> dict:
     if profile:
         voice_params.update(params_from_profile(profile))
     return voice_params
+
+
+class EngineSlot:
+    """At most one loaded TTS engine: Qwen3 (~12 GB) and Turbo (~5 GB) together
+    don't fit comfortably in 18 GB, and MLX reloads take only seconds."""
+
+    def __init__(self, make=lambda name: ENGINES[name].cls()):
+        self._make = make
+        self.name = None
+        self.engine = None
+        self.profile_cache: dict = {}  # voice handles belong to the engine that made them
+
+    def get(self, name: str):
+        if name != self.name:
+            self.teardown()
+            print(f"Loading TTS engine '{name}'", file=sys.stderr)
+            engine = self._make(name)
+            engine.load()
+            self.name, self.engine = name, engine
+        return self.engine
+
+    def teardown(self) -> None:
+        engine = self.engine
+        # Drop voice handles first: Turbo's hold GPU arrays the engine's teardown should free.
+        self.name, self.engine, self.profile_cache = None, None, {}
+        if engine is not None:
+            engine.teardown()
 
 
 def transcribe_voice(db: Database, profile) -> None:
@@ -58,7 +86,7 @@ def _process_next_transcription(db: Database) -> bool:
     return True
 
 
-def _process_next_chapter_job(db: Database, engine, profile_cache: dict) -> bool:
+def _process_next_chapter_job(db: Database, engines: EngineSlot) -> bool:
     job = db.pop_next_queued_job()
     if job is None:
         return False
@@ -66,6 +94,7 @@ def _process_next_chapter_job(db: Database, engine, profile_cache: dict) -> bool
     try:
         chapter = db.get_chapter(job.chapter_id)
         book = db.get_book(chapter.book_id)
+        engine, profile_cache = engines.get(book.engine), engines.profile_cache
         voice_params = _voice_params_for_profile(load_voice(db, book.voice_profile_id, engine))
         _ensure_profile_cached(engine, profile_cache, book.voice_profile_id, voice_params)
 
@@ -96,12 +125,13 @@ def _process_next_chapter_job(db: Database, engine, profile_cache: dict) -> bool
     return True
 
 
-def _process_next_text_clip(db: Database, engine, profile_cache: dict, output_dir: str) -> bool:
+def _process_next_text_clip(db: Database, engines: EngineSlot, output_dir: str) -> bool:
     clip = db.pop_next_queued_text_clip()
     if clip is None:
         return False
 
     try:
+        engine, profile_cache = engines.get(clip.engine), engines.profile_cache
         voice_params = _voice_params_for_profile(load_voice(db, clip.voice_profile_id, engine))
         _ensure_profile_cached(engine, profile_cache, clip.voice_profile_id, voice_params)
 
@@ -118,25 +148,24 @@ def _process_next_text_clip(db: Database, engine, profile_cache: dict, output_di
     return True
 
 
-def run_worker_once(db: Database, engine, profile_cache: dict,
+def run_worker_once(db: Database, engines: EngineSlot,
                      text_clip_output_dir: str = DEFAULT_TEXT_CLIP_OUTPUT_DIR) -> bool:
     if db.is_paused():
         return False
     if _process_next_transcription(db):  # seconds each, and the Voices page is waiting on it
         return True
-    if _process_next_chapter_job(db, engine, profile_cache):
+    if _process_next_chapter_job(db, engines):
         return True
-    return _process_next_text_clip(db, engine, profile_cache, text_clip_output_dir)
+    return _process_next_text_clip(db, engines, text_clip_output_dir)
 
 
-def run_forever(db: Database, engine, poll_interval: float = 2.0,
+def run_forever(db: Database, engines: EngineSlot, poll_interval: float = 2.0,
                  text_clip_output_dir: str = DEFAULT_TEXT_CLIP_OUTPUT_DIR) -> None:
     db.reset_stale_generating_jobs()
     db.reset_stale_generating_text_clips()
-    profile_cache: dict = {}
     while True:
         try:
-            did_work = run_worker_once(db, engine, profile_cache, text_clip_output_dir)
+            did_work = run_worker_once(db, engines, text_clip_output_dir)
         except Exception as exc:
             print(f"Error: worker loop iteration failed: {exc}", file=sys.stderr)
             did_work = False

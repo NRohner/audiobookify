@@ -26,7 +26,8 @@ def synthesize_chapter(chapter: Chapter, book: Book, engine, profile_handle, voi
         chunks = chunk_text(text, engine.max_chunk_chars(), engine.min_chunk_chars())
         total = len(chunks)
 
-        cache_key = compute_cache_key([c.text for c in chunks], voice_params)
+        # The engine is part of the key: same text and voice from another engine is different audio.
+        cache_key = compute_cache_key([c.text for c in chunks], {**voice_params, "engine": engine.name})
         audio_chunks = load_cached_chunks(chapter.id, cache_key)
         if not audio_chunks:
             clear_cache(chapter.id)
@@ -46,7 +47,7 @@ def synthesize_chapter(chapter: Chapter, book: Book, engine, profile_handle, voi
             fallback_dir=str(Path(BACKUP_OUTPUT_DIR) / str(book.id)),
         )
         db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path=mp3_path,
-                                  used_fallback=used_fallback)
+                                  used_fallback=used_fallback, engine=engine.name)
         clear_cache(chapter.id)
     except (GenerationPaused, GenerationCancelled):
         raise
