@@ -308,7 +308,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
 
         try:
             profile = db.create_voice_profile(
-                name=name, engine="chatterbox", reference_audio_path=str(staged_path.resolve()),
+                name=name, engine="chatterbox-turbo", reference_audio_path=str(staged_path.resolve()),
                 reference_transcript=reference_transcript, exaggeration=exaggeration,
                 cfg_weight=cfg_weight, temperature=temperature,
             )

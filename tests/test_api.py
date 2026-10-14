@@ -335,7 +335,7 @@ def test_create_voice_uploads_reference_audio_and_returns_profile(tmp_path):
     assert response.status_code == 200
     body = response.json()
     assert body["name"] == "narrator-1"
-    assert body["engine"] == "chatterbox"
+    assert body["engine"] == "chatterbox-turbo"
     assert body["warnings"] == []
 
 

@@ -3,11 +3,9 @@ chunking/joining and record load time, per-chunk generation time and memory.
 
     python -m audiobookify.bench bench/passage.txt --voice "voices/7_Jim Dale/reference.mp3"
 
-MLX variants run from .venv-mlx-audio (make bench-mlx-audio-setup):
+    python -m audiobookify.bench bench/passage.txt --variant qwen3-tts-1.7b --voice ...
 
-    .venv-mlx-audio/bin/python -m audiobookify.bench bench/passage.txt --variant qwen3-tts-1.7b --voice ...
-
-ponytail: one variant per process, picked by which venv runs it; no orchestrator.
+ponytail: one variant per process; no orchestrator.
 Word-accuracy scoring (Whisper) runs later against the saved WAVs.
 """
 import argparse
@@ -26,7 +24,7 @@ import numpy as np
 import soundfile as sf
 
 from .engines.base import VoiceProfileHandle
-from .engines.chatterbox import ChatterboxEngine
+from .engines.turbo import ChatterboxTurboEngine
 from .normalize.text import chunk_text, expand_numbers, split_paragraphs
 from .postprocess.audio import concatenate_chunks
 
@@ -37,7 +35,7 @@ WHISPER_REPO = "mlx-community/whisper-large-v3-turbo-asr-fp16"
 
 @functools.lru_cache(maxsize=1)
 def _whisper():
-    from mlx_audio.stt.utils import load_model  # upstream mlx-audio venv only
+    from mlx_audio.stt.utils import load_model
     return load_model(WHISPER_REPO)
 
 
@@ -73,69 +71,10 @@ def word_error_rate(reference: str, hypothesis: str) -> float:
     return row[-1] / max(len(ref), 1)
 
 
-class ChatterboxVoiceOnce(ChatterboxEngine):
-    """Prepares the reference voice once instead of on every generate() call
-    (the app's engine passes audio_prompt_path per chunk, which re-decodes and
-    re-encodes the reference each time)."""
-
-    def __init__(self):
-        super().__init__()
-        self._prepared = None
-
-    def synthesize(self, text_chunk, profile_handle, params):
-        path = profile_handle.data.get("audio_prompt_path") if profile_handle else None
-        if path and path != self._prepared:
-            self.model.prepare_conditionals(path, exaggeration=params.get("exaggeration", 0.5))
-            self._prepared = path
-        return super().synthesize(text_chunk, None, params)  # generate() reuses model.conds
-
-
-class ChatterboxMLX(ChatterboxEngine):
-    """English Chatterbox weights on upstream mlx-audio. (Benchmarked on the
-    mlx-audio-plus fork too; it sounded robotic and was removed.) Inherits chunk
-    limits from the app engine so they stay in sync."""
-
-    REPO = "mlx-community/Chatterbox-TTS-fp16"
-
-    def load(self, device: str = "auto") -> None:
-        from mlx_audio.tts.utils import load_model  # only installed in .venv-mlx-audio
-        self.model = load_model(self.REPO)
-        self.device = "mlx"
-
-    def clone_profile(self, reference_audio, reference_text, params):
-        if not reference_audio:
-            return VoiceProfileHandle(data={"conds": None})
-        import librosa
-        import mlx.core as mx
-
-        # Load at 24 kHz exactly as PyTorch Chatterbox does (0.1.7 takes an array, not a path).
-        wav, sr = librosa.load(reference_audio, sr=24000)
-        conds = self.model.prepare_conditionals(mx.array(wav), sr, exaggeration=params.get("exaggeration", 0.5))
-        return VoiceProfileHandle(data={"conds": conds})
-
-    def synthesize(self, text_chunk, profile_handle, params):
-        # Pass the app's settings explicitly: MLX defaults exaggeration to 0.1, not 0.5.
-        [result] = self.model.generate(
-            text_chunk, conds=profile_handle.data["conds"] if profile_handle else None,
-            exaggeration=params.get("exaggeration", 0.5), cfg_weight=params.get("cfg", 0.5),
-            temperature=params.get("temperature", 0.8), verbose=False,
-        )
-        return np.array(result.audio, dtype=np.float32)
-
-    def sample_rate(self) -> int:
-        return self.model.sample_rate
-
-
-class ChatterboxMLXMultilingual(ChatterboxMLX):
-    """Multilingual Chatterbox (different weights; English via the default lang_code)."""
-
-    REPO = "mlx-community/chatterbox-fp16"
-
-
 class MLXAudioEngine:
-    """Generic upstream mlx-audio model (run from .venv-mlx-audio). Subclasses set
-    REPO and GEN_KWARGS (the model's own defaults unless noted); chunk limits match
-    the app's Chatterbox engine so every model gets the same chunks."""
+    """Generic upstream mlx-audio model. Subclasses set REPO and GEN_KWARGS (the
+    model's own defaults unless noted); chunk limits match the app's Turbo engine
+    so every model gets the same chunks."""
 
     REPO = ""
     GEN_KWARGS: dict = {}
@@ -147,7 +86,7 @@ class MLXAudioEngine:
         self.device = None
 
     def load(self, device: str = "auto") -> None:
-        from mlx_audio.tts.utils import load_model  # only installed in the MLX venvs
+        from mlx_audio.tts.utils import load_model
         self.model = load_model(self.REPO)
         self.device = "mlx"
 
@@ -181,21 +120,6 @@ class MLXAudioEngine:
         self.model = None
 
 
-class ChatterboxTurbo(MLXAudioEngine):
-    """Turbo stores prepared conditionals on the model, so prepare once per voice
-    (as the app's Chatterbox engine now does) and generate without ref_audio.
-    Turbo ignores exaggeration/cfg; its other sampling defaults are used as-is."""
-
-    REPO = "mlx-community/chatterbox-turbo-fp16"
-
-    def clone_profile(self, reference_audio, reference_text, params):
-        self.model.prepare_conditionals(reference_audio)
-        return super().clone_profile(reference_audio, reference_text, params)
-
-    def _reference_kwargs(self, profile_handle) -> dict:
-        return {}  # ponytail: one prepared voice per model; per-profile conds if a run ever mixes voices
-
-
 class Qwen3TTS(MLXAudioEngine):
     """Qwen3-TTS Base: in-context voice cloning from reference audio + transcript.
     Its MLX port loads and encodes the reference on every call."""
@@ -214,16 +138,12 @@ class BreezeTTS2(MLXAudioEngine):
 
 
 VARIANTS = {
-    "chatterbox": ChatterboxEngine,  # today's app setup
-    "chatterbox-voice-once": ChatterboxVoiceOnce,
-    "chatterbox-mlx-upstream": ChatterboxMLX,  # same weights, run from .venv-mlx-audio (upstream mlx-audio)
-    "chatterbox-mlx-multilingual": ChatterboxMLXMultilingual,  # run from .venv-mlx-audio
-    "chatterbox-turbo": ChatterboxTurbo,  # run from .venv-mlx-audio
-    "qwen3-tts-1.7b": Qwen3TTS,  # run from .venv-mlx-audio
-    "breeze-tts-2": BreezeTTS2,  # run from .venv-mlx-audio
+    "chatterbox-turbo": ChatterboxTurboEngine,  # the app's engine, as-is
+    "qwen3-tts-1.7b": Qwen3TTS,
+    "breeze-tts-2": BreezeTTS2,
 }
 
-_RUNTIME_PACKAGES = ["chatterbox-tts", "torch", "mlx", "mlx-audio", "mlx-audio-plus", "librosa", "soundfile"]
+_RUNTIME_PACKAGES = ["mlx", "mlx-audio", "librosa", "soundfile"]
 
 
 def leading_paragraphs(text: str, max_chars: Optional[int]) -> str:
@@ -240,13 +160,6 @@ def leading_paragraphs(text: str, max_chars: Optional[int]) -> str:
 def _peak_rss_mb() -> float:
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return peak / 1e6 if sys.platform == "darwin" else peak / 1e3  # bytes on macOS, KiB on Linux
-
-
-def _mps_mb() -> Optional[float]:
-    torch = sys.modules.get("torch")  # only if the engine actually used torch
-    if torch is not None and torch.backends.mps.is_available():
-        return torch.mps.driver_allocated_memory() / 1e6
-    return None
 
 
 def _package_versions() -> dict:
@@ -298,7 +211,7 @@ def run_variant(name: str, engine, text: str, reference_audio: Optional[str], ou
         "min_chars": engine.min_chunk_chars(), "text_chars": len(text), "n_chunks": len(chunks),
         "load_seconds": load_seconds, "gen_seconds": gen_seconds, "audio_seconds": audio_seconds,
         "rtf": gen_seconds / audio_seconds if audio_seconds else None,
-        "peak_rss_mb": _peak_rss_mb(), "mps_allocated_mb": _mps_mb(), "mlx_peak_mb": _mlx_peak_mb(),
+        "peak_rss_mb": _peak_rss_mb(), "mlx_peak_mb": _mlx_peak_mb(),
         "packages": _package_versions(),
         "chunks": records,
     }
@@ -362,9 +275,9 @@ def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("passage", nargs="?")
     parser.add_argument("--voice", help="reference audio for cloning")
-    parser.add_argument("--score", metavar="DIR", help="add word error rates to every result in DIR (upstream MLX venv)")
-    parser.add_argument("--cadence", metavar="DIR", help="add pace/pause stats to every result in DIR (upstream MLX venv)")
-    parser.add_argument("--variant", default="chatterbox", choices=sorted(VARIANTS))
+    parser.add_argument("--score", metavar="DIR", help="add word error rates to every result in DIR")
+    parser.add_argument("--cadence", metavar="DIR", help="add pace/pause stats to every result in DIR")
+    parser.add_argument("--variant", default="chatterbox-turbo", choices=sorted(VARIANTS))
     parser.add_argument("--chunk-chars", type=int, help="override the engine's max chunk size")
     parser.add_argument("--max-chars", type=int, default=DEFAULT_MAX_CHARS, help="passage length to use")
     parser.add_argument("--full", action="store_true", help="use the whole passage")

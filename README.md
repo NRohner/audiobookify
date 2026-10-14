@@ -1,13 +1,13 @@
 # Audiobookify
 
-Fully local EPUB/Markdown → audiobook (MP3 per chapter) converter. See `project-spec.md` for the full design and `docs/superpowers/plans/` for implementation plans.
+Fully local EPUB/Markdown → audiobook (MP3 per chapter) converter. Requires Apple Silicon (TTS runs on [MLX](https://github.com/ml-explore/mlx)) and Python 3.12 (`brew install python@3.12`). See `project-spec.md` for the full design and `docs/superpowers/plans/` for implementation plans.
 
 ## Setup
 
 1. Install [ffmpeg](https://ffmpeg.org/) (`brew install ffmpeg` on macOS, or see your platform's docs).
 2. Install [espeak-ng](https://github.com/espeak-ng/espeak-ng) (`brew install espeak-ng` on macOS, or see your platform's docs) — required by the M3 pronunciation-from-audio feature's `phonemizer` dependency (see note below).
-3. `make setup` — creates a venv and installs the Python package + dev dependencies.
-4. `make models` — downloads and caches the Chatterbox TTS and phoneme-recognition weights (several GB, one-time; cached under your Hugging Face hub cache directory). Re-run any time to verify the cache.
+3. `make setup` — creates a Python 3.12 venv and installs the Python package + dev dependencies.
+4. `make models` — downloads and caches the Chatterbox Turbo TTS (MLX) and phoneme-recognition weights (about 6 GB, one-time; cached under your Hugging Face hub cache directory). Re-run any time to verify the cache.
 
 **Note on `phonemizer` (GPL-3.0):** `lexicon add-from-audio` (see M3 below) loads `facebook/wav2vec2-lv-60-espeak-cv-ft` via Hugging Face `transformers`, whose phoneme tokenizer unconditionally requires the `phonemizer` package (and the `espeak-ng` system binary it wraps) just to construct the tokenizer, even though this project only ever calls `decode`, never `encode`. Every other dependency in this project is Apache-2.0/permissive; this is a deliberate, known exception, accepted for `facebook/wav2vec2-lv-60-espeak-cv-ft`'s zero-additional-*Python*-dependency footprint otherwise. If this project is ever distributed in a form where GPL-3.0 is a problem, revisit this before shipping.
 
@@ -20,7 +20,6 @@ Fully local EPUB/Markdown → audiobook (MP3 per chapter) converter. See `projec
 - `--input`: an `.epub` or `.md` file.
 - `--out`: output directory; one `NN - Chapter Title.mp3` per chapter, tagged with ID3 album/track/title/artist.
 - `--voice`: sets the ID3 narrator/artist tag on the exported MP3s only — no effect on cloning. Defaults to `"default"`, or to the voice profile's name if `--voice-profile` is used.
-- `--device`: `auto` (default), `cuda`, `mps`, or `cpu`. Auto-detects CUDA → MPS → CPU; falls back to CPU if Chatterbox fails to load on the detected accelerator (this is expected on some Apple Silicon MPS builds — see `project-spec.md` §2).
 - `--db`: path to the SQLite job database (default `audiobookify.db` in the current directory). Re-running `generate` against the same `--input`/`--db` resumes: already-completed chapters are skipped. The voice used on a book's first `generate` call is locked in for that book — a later call naming a different (or no) `--voice-profile` prints a warning and keeps using the original voice, so chapters within one book never mix voices silently.
 
 The GUI is not yet implemented — see `project-spec.md` §9 for the milestone roadmap.
@@ -41,7 +40,7 @@ Register a respelling for any term (a name, an invented word, jargon) so it's re
 - `lexicon preview --term NAME`: synthesizes a short carrier sentence (or `--sentence "..."`) with the term's override applied, optionally in a saved `--voice-profile` and/or `--book <path>` (to preview a book-specific override, falling back to the global one if the book has none), and writes a WAV file (same convention as `voice preview` — no auto-playback).
 - `generate` applies every applicable lexicon entry (global + that book's own) automatically — no flag needed. Lexicon changes only affect chapters that haven't been generated yet; a chapter already marked done keeps its existing audio. Pass a fresh `--db` (or delete the chapter's MP3 and reset its status) to re-render with an updated pronunciation.
 
-Only respelling overrides are supported in M2 — IPA/ARPAbet phoneme overrides are deferred until an engine that can actually consume them is added (the installed Chatterbox engine cannot).
+Only respelling overrides are supported in M2 — IPA/ARPAbet phoneme overrides are deferred until an engine that can actually consume them is added (the installed Chatterbox Turbo engine cannot).
 
 ## Audio-sample pronunciation (M3)
 
@@ -51,7 +50,7 @@ Instead of typing a respelling by hand, attach a short clip of the term spoken c
 .venv/bin/audiobookify lexicon add-from-audio --term "Cadeyrn" --audio ./cadeyrn.wav
 ```
 
-This runs the clip through a local phoneme recognizer (`facebook/wav2vec2-lv-60-espeak-cv-ft`, fetched once via `make models`), derives an ASCII respelling from the extracted phonemes, and creates a lexicon entry with `source: from_audio` — printing both the raw phonemes and the derived respelling so you can judge it immediately. `--book <path>` scopes it to one book, same as `lexicon add`. `--notes "..."` attaches a free-text note, same as `lexicon add`. `--device` picks the compute device for the phoneme model (`auto`/`cpu`/`cuda`/`mps`), same convention as `generate --device`.
+This runs the clip through a local phoneme recognizer (`facebook/wav2vec2-lv-60-espeak-cv-ft`, fetched once via `make models`), derives an ASCII respelling from the extracted phonemes, and creates a lexicon entry with `source: from_audio` — printing both the raw phonemes and the derived respelling so you can judge it immediately. `--book <path>` scopes it to one book, same as `lexicon add`. `--notes "..."` attaches a free-text note, same as `lexicon add`. `--device` picks the compute device for the phoneme model (`auto` detects CUDA, then MPS, then CPU; or name one).
 
 The derived respelling is a starting point, not guaranteed to be right — audit it:
 
@@ -64,7 +63,7 @@ The derived respelling is a starting point, not guaranteed to be right — audit
 - `lexicon edit --term NAME --respell NEW_VALUE`: corrects just the respelling in place. Use this instead of `remove` + `add` — it preserves the entry's extracted phonemes, attached clip path, and `source: from_audio` provenance, all of which `remove`+`add` would silently discard. `--book <path>` scopes it to a book-specific entry.
 - `lexicon list` now also shows each entry's `source` (`manual` or `from_audio`) and, when present, its raw extracted phonemes.
 
-Audio-derived entries substitute into text exactly like manual ones — nothing about `generate` changes. The phoneme string is stored for reference/audit only; it is never sent to the TTS engine directly (Chatterbox still can't consume phoneme input, same constraint as M2).
+Audio-derived entries substitute into text exactly like manual ones — nothing about `generate` changes. The phoneme string is stored for reference/audit only; it is never sent to the TTS engine directly (Chatterbox Turbo still can't consume phoneme input, same constraint as M2).
 
 ## Voice cloning (M1)
 
@@ -77,10 +76,10 @@ Import a short reference clip (10-30s recommended, clean single-speaker audio) a
 .venv/bin/audiobookify generate --input book.epub --out ./audiobook/ --voice-profile narrator-1
 ```
 
-- `voice add`: validates the reference clip (sample rate, length, mono/stereo channel count) and prints warnings (not errors) for anything outside the recommended range, clipping, or a lack of quiet passages (a sign of constant background noise). Only an unusably short (<1s) or unreadable file is rejected outright. Reference audio is stored by absolute path and is not copied — don't move or delete the original file. Optional tuning flags: `--exaggeration` (default 0.5), `--cfg` (default 0.5), `--temperature` (default 0.8) — Chatterbox's own defaults. `--transcript` is stored as optional metadata only; the installed Chatterbox engine's cloning is zero-shot on audio alone and doesn't use it.
+- `voice add`: validates the reference clip (sample rate, length, mono/stereo channel count) and prints warnings (not errors) for anything outside the recommended range, clipping, or a lack of quiet passages (a sign of constant background noise). Only an unusably short (<1s) or unreadable file is rejected outright. Reference audio is stored by absolute path and is not copied — don't move or delete the original file. Optional tuning flags `--exaggeration`, `--cfg` and `--temperature` are stored on the profile but currently unused: Chatterbox Turbo has no exaggeration/cfg and runs at its own sampling defaults. `--transcript` is stored as optional metadata only; Turbo's cloning is zero-shot on audio alone and doesn't use it.
 - `voice list`: prints each saved profile's name, reference audio path, and tuning params (or a message if none exist yet).
 - `voice preview`: synthesizes `--text` with the named profile and writes a WAV file (`--out`, defaults to `<name>-preview.wav` in the current directory) — play it in any audio player to judge the voice before generating a whole book.
-- `generate --voice-profile NAME`: uses that profile's reference audio and tuning params for the whole book. The ID3 narrator tag defaults to the profile name (override with `--voice`). Without `--voice-profile`, `generate` behaves exactly as in M0 (Chatterbox's built-in default voice, no cloning).
+- `generate --voice-profile NAME`: uses that profile's reference audio and tuning params for the whole book. The ID3 narrator tag defaults to the profile name (override with `--voice`). Without `--voice-profile`, `generate` behaves exactly as in M0 (Chatterbox Turbo's built-in default voice, no cloning).
 
 ## GUI (M4)
 
@@ -122,5 +121,5 @@ later GUI sub-projects land.
 ```bash
 make setup
 .venv/bin/pytest          # unit tests (fast, no GPU/weights required)
-.venv/bin/pytest -m integration  # real Chatterbox load + synth, requires `make models` first
+.venv/bin/pytest -m integration  # real Turbo + wav2vec2 load and run, requires `make models` first
 ```

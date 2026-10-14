@@ -15,10 +15,10 @@ ifneq ($(NVM_NODE_BIN),)
 export PATH := $(NVM_NODE_BIN):$(PATH)
 endif
 
-.PHONY: setup models build up dev down clean check-not-running bench-mlx-audio-setup
+.PHONY: setup models build up dev down clean check-not-running
 
 setup:
-	python3 -m venv $(VENV)
+	python3.12 -m venv $(VENV)
 	$(PIP) install --upgrade pip
 	$(PIP) install -e ".[dev]"
 	@command -v ffmpeg >/dev/null 2>&1 || { echo "ffmpeg not found - install it (brew install ffmpeg / choco install ffmpeg) then re-run make setup"; exit 1; }
@@ -26,20 +26,12 @@ setup:
 	@if [ -d frontend ]; then cd frontend && npm install; fi
 
 models:
-	$(PY) -c "from audiobookify.engines.chatterbox import ChatterboxEngine; e = ChatterboxEngine(); e.load('cpu'); e.teardown(); print('Chatterbox weights cached.')"
+	$(PY) -c "from audiobookify.engines.turbo import ChatterboxTurboEngine; e = ChatterboxTurboEngine(); e.load(); e.teardown(); print('Chatterbox Turbo weights cached.')"
 	$(PY) -c "from audiobookify.phoneme.wav2vec2 import Wav2Vec2PhonemeExtractor; e = Wav2Vec2PhonemeExtractor(); e.load('cpu'); e.teardown(); print('Phoneme recognition weights cached.')"
 
 build:
 	cd frontend && npm run build
 
-
-# MLX TTS benchmarks (Python 3.12; the app venv is 3.14). The app is installed
-# --no-deps so torch/chatterbox stay out of this venv.
-bench-mlx-audio-setup:
-	python3.12 -m venv .venv-mlx-audio
-	.venv-mlx-audio/bin/pip install --upgrade pip
-	.venv-mlx-audio/bin/pip install "mlx-audio==0.5.9" librosa numpy soundfile num2words mutagen
-	.venv-mlx-audio/bin/pip install -e . --no-deps
 
 # Refuses to start a second stack on top of a live one: a prior `make up`/`make dev`
 # whose port was already taken fails silently, leaving the *old* (possibly stale-code)
