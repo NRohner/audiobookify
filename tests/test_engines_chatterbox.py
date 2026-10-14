@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -43,7 +44,7 @@ def _patch_from_pretrained(monkeypatch, side_effect):
 
 
 def test_chatterbox_engine_falls_back_to_cpu_when_the_requested_device_fails(monkeypatch):
-    sentinel_model = object()
+    sentinel_model = SimpleNamespace(conds=None)  # real ChatterboxTTS always has .conds
 
     def loader(device):
         if device != "cpu":
@@ -71,27 +72,58 @@ def test_chatterbox_engine_reraises_when_cpu_itself_fails(monkeypatch):
     assert mock.call_count == 1  # no second attempt, no infinite fallback loop
 
 
-def test_chatterbox_engine_passes_reference_audio_and_params_to_generate():
+def _engine_with_mock_model():
+    """Engine whose model records calls; prepare_conditionals stores a per-path marker in .conds."""
     engine = ChatterboxEngine()
     engine.model = MagicMock()
-    engine.model.generate.return_value.squeeze.return_value.cpu.return_value.numpy.return_value = (
-        np.zeros(5, dtype=np.float32)
-    )
+    engine.model.conds = "default-voice"
+    engine._default_conds = "default-voice"
+    engine.model.prepare_conditionals.side_effect = (
+        lambda path, exaggeration: setattr(engine.model, "conds", f"conds:{path}"))
+    used = []
+    def generate(text, **kwargs):
+        used.append(engine.model.conds)
+        return MagicMock(**{"squeeze.return_value.cpu.return_value.numpy.return_value": np.zeros(5, dtype=np.float32)})
+    engine.model.generate.side_effect = generate
+    return engine, used
 
-    handle = engine.clone_profile("/refs/narrator.wav", "transcript text", {})
-    audio = engine.synthesize(
-        "Hello there.", handle,
-        {"exaggeration": 0.7, "cfg": 0.3, "temperature": 0.9},
-    )
+
+def test_chatterbox_engine_prepares_the_voice_once_per_profile_not_per_chunk():
+    engine, used = _engine_with_mock_model()
+
+    handle = engine.clone_profile("/refs/narrator.wav", "transcript text", {"exaggeration": 0.7})
+    for text in ("One.", "Two.", "Three."):
+        audio = engine.synthesize(text, handle, {"exaggeration": 0.7, "cfg": 0.3, "temperature": 0.9})
 
     assert isinstance(audio, np.ndarray)
-    engine.model.generate.assert_called_once_with(
-        "Hello there.",
-        audio_prompt_path="/refs/narrator.wav",
-        exaggeration=0.7,
-        cfg_weight=0.3,
-        temperature=0.9,
+    engine.model.prepare_conditionals.assert_called_once_with("/refs/narrator.wav", exaggeration=0.7)
+    assert used == ["conds:/refs/narrator.wav"] * 3
+    engine.model.generate.assert_called_with(
+        "Three.", audio_prompt_path=None, exaggeration=0.7, cfg_weight=0.3, temperature=0.9,
     )
+
+
+def test_chatterbox_engine_switches_voices_between_profiles():
+    engine, used = _engine_with_mock_model()
+    a = engine.clone_profile("/refs/a.wav", None, {})
+    b = engine.clone_profile("/refs/b.wav", None, {})
+
+    for handle in (a, b, a):
+        engine.synthesize("Hi.", handle, {})
+
+    assert used == ["conds:/refs/a.wav", "conds:/refs/b.wav", "conds:/refs/a.wav"]
+    assert engine.model.prepare_conditionals.call_count == 2
+
+
+def test_chatterbox_engine_without_reference_uses_the_built_in_voice_even_after_another_voice():
+    engine, used = _engine_with_mock_model()
+    narrator = engine.clone_profile("/refs/narrator.wav", None, {})
+    default = engine.clone_profile(None, None, {})
+
+    engine.synthesize("Hi.", narrator, {})
+    engine.synthesize("Hi.", default, {})
+
+    assert used == ["conds:/refs/narrator.wav", "default-voice"]
 
 
 @pytest.mark.integration
