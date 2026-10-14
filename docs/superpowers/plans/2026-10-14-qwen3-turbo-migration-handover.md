@@ -5,8 +5,8 @@ Written 2026-10-14 at the end of a research/benchmark session. Start a fresh ses
 ## 1. Where things stand
 
 - `main`: includes PR #6 (paragraph-aware chunking: `Chunk(text, ends_with)`, `min_chunk_chars()`, pause table, silence trim, level matching).
-- PR #7 (`feat/chatterbox-voice-once`, open): PyTorch Chatterbox prepares the reference voice once per profile (~0.7 s saved per chunk). Merge it or drop it; the engine is replaced in Phase 1 anyway.
-- `feat/tts-bench` (PR open, merging it is Phase 0): `src/audiobookify/bench.py` + `tests/test_bench.py` + `make bench-mlx-audio-setup` + `.gitignore` fixes (`.venv*/` was not ignored on `main`; `bench/` must be ignored because it holds a copyrighted passage). This handover doc ships in the same PR.
+- PR #7 (merged): PyTorch Chatterbox prepares the reference voice once per profile (~0.7 s saved per chunk). The same pattern carries over to the Turbo engine in Phase 1.
+- `feat/tts-bench` ([PR #8](https://github.com/NRohner/audiobookify/pull/8), merging it is Phase 0): `src/audiobookify/bench.py` + `tests/test_bench.py` + `make bench-mlx-audio-setup` + `.gitignore` fixes (`.venv*/` was not ignored on `main`; `bench/` must be ignored because it holds a copyrighted passage). This handover doc ships in the same PR.
 - Benchmark data (gitignored): `bench/passage.txt` (copyrighted excerpt, never commit), `bench/out/baseline/`, `bench/out/slow-ref/`, `bench/refs/jim-dale-0.88.wav`, `bench/transcripts/`.
 - `.venv` = app venv (Python 3.14, PyTorch Chatterbox). `.venv-mlx-audio` = Python 3.12 venv with upstream `mlx-audio==0.5.9`, used only by the benchmark.
 - Machine: Apple M3 Pro, 18 GB unified memory, macOS 27. MLX means Apple Silicon only.
@@ -55,7 +55,6 @@ Known failure: chunks ending in an interrupted line (`"...and if we were toâ€”â€
 
 ### Phase 0: land the benchmark
 - Merge the `feat/tts-bench` PR (it adds no runtime deps; the MLX imports are lazy). Then delete the branch locally and on origin. The branch's job ends here; the benchmark lives on in `main` as a developer tool.
-- Decide PR #7 (merge or close; Phase 1 replaces the engine either way).
 - Long-term home for `bench.py`: Phase 1 removes its PyTorch Chatterbox variants. Phases 2-3 move `cadence_stats`, `word_error_rate` and the Whisper transcript helper into app modules (for example `voice/analysis.py`) and have `bench.py` import them, so the benchmark holds no app logic. Exclude `bench.py` from any future packaged build (Tauri/WASM).
 
 ### Phase 1: Python 3.12, MLX, Turbo replaces PyTorch Chatterbox
