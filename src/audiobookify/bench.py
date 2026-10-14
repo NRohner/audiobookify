@@ -3,9 +3,9 @@ chunking/joining and record load time, per-chunk generation time and memory.
 
     python -m audiobookify.bench bench/passage.txt --voice "voices/7_Jim Dale/reference.mp3"
 
-MLX variants run from .venv-mlx (make bench-mlx-setup):
+MLX variants run from .venv-mlx-audio (make bench-mlx-audio-setup):
 
-    .venv-mlx/bin/python -m audiobookify.bench bench/passage.txt --variant chatterbox-mlx --voice ...
+    .venv-mlx-audio/bin/python -m audiobookify.bench bench/passage.txt --variant qwen3-tts-1.7b --voice ...
 
 ponytail: one variant per process, picked by which venv runs it; no orchestrator.
 Word-accuracy scoring (Whisper) runs later against the saved WAVs.
@@ -91,13 +91,14 @@ class ChatterboxVoiceOnce(ChatterboxEngine):
 
 
 class ChatterboxMLX(ChatterboxEngine):
-    """The same English Chatterbox weights on MLX (mlx-audio-plus 0.1.7, run from
-    .venv-mlx). Inherits chunk limits from the app engine so they stay in sync."""
+    """English Chatterbox weights on upstream mlx-audio. (Benchmarked on the
+    mlx-audio-plus fork too; it sounded robotic and was removed.) Inherits chunk
+    limits from the app engine so they stay in sync."""
 
     REPO = "mlx-community/Chatterbox-TTS-fp16"
 
     def load(self, device: str = "auto") -> None:
-        from mlx_audio.tts.utils import load_model  # only installed in .venv-mlx
+        from mlx_audio.tts.utils import load_model  # only installed in .venv-mlx-audio
         self.model = load_model(self.REPO)
         self.device = "mlx"
 
@@ -215,7 +216,6 @@ class BreezeTTS2(MLXAudioEngine):
 VARIANTS = {
     "chatterbox": ChatterboxEngine,  # today's app setup
     "chatterbox-voice-once": ChatterboxVoiceOnce,
-    "chatterbox-mlx": ChatterboxMLX,  # run from .venv-mlx (mlx-audio-plus fork)
     "chatterbox-mlx-upstream": ChatterboxMLX,  # same weights, run from .venv-mlx-audio (upstream mlx-audio)
     "chatterbox-mlx-multilingual": ChatterboxMLXMultilingual,  # run from .venv-mlx-audio
     "chatterbox-turbo": ChatterboxTurbo,  # run from .venv-mlx-audio
