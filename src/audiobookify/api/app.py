@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from ..engines import DEFAULT_ENGINE, ENGINES
 from ..ingest import ingest_by_path
 from ..models import ChapterStatus, JobStatus
 from ..synth.chunk_cache import clear_cache
-from ..voice.analysis import reference_clip
+from ..voice.analysis import TEMPO_RANGE, reference_clip, reference_pace
 from ..voice.storage import delete_voice_storage, store_reference_audio
 from ..voice.validation import validate_reference_audio
 
@@ -71,11 +72,19 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             "transcript_error": profile.transcript_error,
             "reference_seconds": _reference_seconds(profile.reference_audio_path),
             "reference_trim_end": profile.reference_trim_end,
+            "tempo": profile.tempo,
+            "pace": reference_pace(profile.reference_words, profile.reference_trim_end),
             "exaggeration": profile.exaggeration,
             "cfg_weight": profile.cfg_weight,
             "temperature": profile.temperature,
             "warnings": warnings or [],
         }
+
+    def _tempo(value) -> float:
+        lo, hi = TEMPO_RANGE
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not lo <= value <= hi:
+            raise HTTPException(status_code=400, detail=f"tempo must be a number from {lo} to {hi}")
+        return round(float(value), 2)
 
     def _lexicon_to_dict(entry) -> dict:
         return {
@@ -96,6 +105,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             "created_at": clip.created_at,
             "used_fallback": clip.used_fallback,
             "engine": clip.engine,
+            "tempo": clip.tempo,
         }
 
     def _book_to_dict(db: Database, book) -> dict:
@@ -387,19 +397,27 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
     @app.patch("/api/voices/{voice_id}")
     def update_voice(voice_id: int, payload: dict = Body(...), db: Database = Depends(get_db)):
         _existing_voice(db, voice_id)
-        text = (payload.get("reference_transcript") or "").strip()
-        if not text:
-            raise HTTPException(status_code=400, detail="transcript must not be empty")
-        db.save_voice_transcript(voice_id, text)
+        if "reference_transcript" not in payload and "tempo" not in payload:
+            raise HTTPException(status_code=400, detail="nothing to update")
+        tempo = _tempo(payload["tempo"]) if "tempo" in payload else None
+        if "reference_transcript" in payload:
+            text = (payload["reference_transcript"] or "").strip()
+            if not text:
+                raise HTTPException(status_code=400, detail="transcript must not be empty")
+            db.save_voice_transcript(voice_id, text)
+        if tempo is not None:
+            db.set_voice_tempo(voice_id, tempo)
         return _voice_to_dict(db.get_voice_profile_by_id(voice_id))
 
     @app.get("/api/voices/{voice_id}/audio")
-    def get_voice_audio(voice_id: int, db: Database = Depends(get_db)):
-        """The clip engines clone from: the trimmed part when the voice is trimmed."""
+    def get_voice_audio(voice_id: int, tempo: Optional[float] = None, db: Database = Depends(get_db)):
+        """The clip engines clone from (trimmed, at the voice's tempo), or a preview
+        at another tempo without saving it."""
         profile = _existing_voice(db, voice_id)
+        tempo = profile.tempo if tempo is None else _tempo(tempo)
         try:
-            path = reference_clip(profile.reference_audio_path, profile.reference_trim_end)
-        except (OSError, RuntimeError):
+            path = reference_clip(profile.reference_audio_path, profile.reference_trim_end, tempo)
+        except (OSError, RuntimeError, subprocess.CalledProcessError):
             raise HTTPException(status_code=404, detail="reference audio missing")
         if not Path(path).is_file():
             raise HTTPException(status_code=404, detail="reference audio missing")
@@ -462,7 +480,12 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             raise HTTPException(status_code=404, detail="voice profile not found")
 
         engine = _chosen_engine(payload, DEFAULT_ENGINE, voice_profile_id)
-        clip = db.create_text_clip(text=text, voice_profile_id=voice_profile_id, engine=engine)
+        tempo = payload.get("tempo")
+        if tempo is not None:
+            tempo = _tempo(tempo)
+            if voice_profile_id is None:
+                raise HTTPException(status_code=400, detail="a tempo needs a voice")
+        clip = db.create_text_clip(text=text, voice_profile_id=voice_profile_id, engine=engine, tempo=tempo)
         return _text_clip_to_dict(clip)
 
     @app.get("/api/text-clips")

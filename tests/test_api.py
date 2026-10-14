@@ -1155,3 +1155,60 @@ def test_voice_audio_serves_the_clip_the_engines_clone_from(tmp_path):
     trimmed = client.get(f"/api/voices/{voice['id']}/audio")
     assert sf.info(io.BytesIO(trimmed.content)).duration == pytest.approx(4.0, abs=0.01)
     assert client.get("/api/voices/999/audio").status_code == 404
+
+
+def test_a_voice_reports_its_tempo_and_the_pace_of_the_clip_engines_hear(tmp_path):
+    client = _client(tmp_path)
+    voice = _upload_voice(client)
+    assert voice["tempo"] == 1.0 and voice["pace"] is None  # not transcribed yet
+
+    db = Database(str(tmp_path / "test.db"))
+    words = [{"word": " One", "start": 0.0, "end": 0.5}, {"word": " two", "start": 0.5, "end": 1.0},
+             {"word": " three", "start": 14.0, "end": 14.5}]
+    db.save_voice_transcript(voice["id"], "One two", words=words, trim_end=1.1)
+    db.close()
+
+    pace = client.get("/api/voices").json()[0]["pace"]
+    assert pace == {"speaking_wpm": pytest.approx(120.0), "overall_wpm": pytest.approx(120.0)}
+
+
+def test_setting_a_voice_tempo_validates_the_range_and_keeps_the_transcript(tmp_path):
+    client = _client(tmp_path)
+    voice = _upload_voice(client, reference_transcript="typed")
+    url = f"/api/voices/{voice['id']}"
+
+    body = client.patch(url, json={"tempo": 0.884}).json()
+    assert body["tempo"] == 0.88 and body["reference_transcript"] == "typed"
+    for bad in (0.7, 1.3, "fast", None):
+        assert client.patch(url, json={"tempo": bad}).status_code == 400
+    assert client.patch(url, json={}).status_code == 400
+    assert client.patch("/api/voices/999", json={"tempo": 0.9}).status_code == 404
+
+
+def test_voice_audio_plays_the_saved_tempo_or_a_preview_tempo(tmp_path):
+    client = _client(tmp_path)
+    voice = _upload_voice(client)
+    url = f"/api/voices/{voice['id']}/audio"
+
+    preview = client.get(url, params={"tempo": 0.8})
+    assert sf.info(io.BytesIO(preview.content)).duration == pytest.approx(15.0 / 0.8, abs=0.05)
+    assert client.get(url).headers["content-length"] != preview.headers["content-length"]  # nothing saved
+
+    client.patch(f"/api/voices/{voice['id']}", json={"tempo": 1.25})
+    assert sf.info(io.BytesIO(client.get(url).content)).duration == pytest.approx(15.0 / 1.25, abs=0.05)
+    assert client.get(url, params={"tempo": 2}).status_code == 400
+
+
+def test_a_text_clip_can_carry_a_sample_tempo(tmp_path):
+    client = _client(tmp_path)
+    voice = _upload_voice(client)
+
+    body = client.post("/api/text-clips", json={"text": "Hi.", "voice_profile_id": voice["id"],
+                                                 "engine": "chatterbox-turbo", "tempo": 0.9}).json()
+    assert body["tempo"] == 0.9
+    assert client.post("/api/text-clips", json={"text": "Hi.", "voice_profile_id": None,
+                                                "engine": "chatterbox-turbo"}).json()["tempo"] is None
+    assert client.post("/api/text-clips", json={"text": "Hi.", "voice_profile_id": voice["id"],
+                                                "tempo": 1.5}).status_code == 400
+    assert client.post("/api/text-clips", json={"text": "Hi.", "voice_profile_id": None,
+                                                "engine": "chatterbox-turbo", "tempo": 0.9}).status_code == 400

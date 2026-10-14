@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import soundfile as sf
@@ -91,13 +91,16 @@ def validate_reference_audio(path: str) -> ReferenceAudioInfo:
     )
 
 
-def params_from_profile(profile) -> dict:
+def params_from_profile(profile, tempo: Optional[float] = None) -> dict:
+    """Engine params for a voice; tempo overrides the voice's saved tempo (a sample)."""
     from .analysis import reference_clip
+    tempo = profile.tempo if tempo is None else tempo
     return {
-        "reference_audio": reference_clip(profile.reference_audio_path, profile.reference_trim_end),
+        "reference_audio": reference_clip(profile.reference_audio_path, profile.reference_trim_end, tempo),
         "reference_text": profile.reference_transcript,
         "reference_trim_end": profile.reference_trim_end,
         "exaggeration": profile.exaggeration,
         "cfg": profile.cfg_weight,
         "temperature": profile.temperature,
+        "tempo": tempo,
     }

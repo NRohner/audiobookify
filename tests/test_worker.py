@@ -338,6 +338,23 @@ def test_worker_transcribes_a_voice_lazily_when_the_engine_needs_a_transcript(tm
     db.close()
 
 
+@requires_ffmpeg
+def test_a_text_clip_tempo_overrides_the_voice_tempo_for_that_clip_only(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    voice = _voice(db, tmp_path)
+    db.set_voice_tempo(voice.id, 1.1)
+    db.create_text_clip("A sentence long enough to be spoken.", voice.id, tempo=0.9)
+    db.create_text_clip("A sentence long enough to be spoken.", voice.id)
+    engine = _TranscriptEngine()
+    engine.needs_transcript = False
+
+    run_worker_once(db, _slot(engine), text_clip_output_dir=str(tmp_path / "clips"))
+    assert engine.cloned[0].endswith(".tempo-0.90.wav")  # the sample's draft tempo
+    run_worker_once(db, _slot(engine), text_clip_output_dir=str(tmp_path / "clips"))
+    assert engine.cloned[0].endswith(".tempo-1.10.wav")  # the voice's saved tempo
+    db.close()
+
+
 def test_worker_does_not_transcribe_for_engines_that_clone_from_audio_alone(tmp_path, monkeypatch):
     db = Database(str(tmp_path / "test.db"))
     voice = _voice(db, tmp_path)

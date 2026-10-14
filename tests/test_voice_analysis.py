@@ -113,6 +113,84 @@ def test_reference_clip_writes_the_trimmed_clip_once_next_to_the_reference(tmp_p
     assert (tmp_path / trimmed).stat().st_mtime_ns == mtime  # cached, not rewritten
 
 
+def test_word_error_rate():
+    from audiobookify.voice.analysis import word_error_rate
+
+    assert word_error_rate("The cat sat.", "the cat sat") == 0.0
+    # the model is sent spelled-out numbers; Whisper may write digits back
+    assert word_error_rate("Eleonora’s map, in one thousand, five hundred and forty-four!",
+                           "eleonora's map in 1544") == 0.0
+    assert word_error_rate("one two three four", "one three four") == 0.25  # deletion
+    assert word_error_rate("one two", "one two two two") == 1.0  # repeated words count
+    assert word_error_rate("well-ventilated room", "well ventilated room") == 0.0
+
+def test_cadence_stats_from_word_timestamps():
+    from audiobookify.voice.analysis import cadence_stats
+
+    w = lambda word, start, end: {"word": word, "start": start, "end": end}
+    words = [
+        w(" One", 0.0, 0.3), w(" two.", 0.3, 0.6),        # sentence end, then 0.8 s pause
+        w(" Three,", 1.4, 1.7),                            # comma, then 0.3 s pause
+        w(" four", 2.0, 2.3), w(" five", 2.4, 2.7),        # 0.1 s gap: within speech
+        w(" six!”", 2.7, 3.0),                             # sentence end before closing quote, 0.4 s pause
+        w(" Seven.", 3.4, 3.7),
+    ]
+    stats = cadence_stats(words)
+
+    assert stats["sentence_pauses"] == [0.8, 0.4]
+    assert stats["comma_pauses"] == [0.3]
+    assert stats["sentence_pause_median"] == pytest.approx(0.6)
+    # 7 words over 3.7 s minus the 0.8 + 0.3 + 0.4 s pauses (gaps >= 0.15 s) = 2.2 s speaking
+    assert stats["articulation_wpm"] == pytest.approx(7 / 2.2 * 60)
+    assert stats["overall_wpm"] == pytest.approx(7 / 3.7 * 60)
+
+
+def test_reference_pace_counts_only_the_words_engines_hear():
+    words = [_w(" One", 0.0, 0.5), _w(" two.", 0.5, 1.0), _w(" Three", 1.5, 2.0),  # 0.5 s pause
+             _w(" four", 20.0, 20.5)]  # past the trim
+    pace = analysis.reference_pace(words, trim_end=2.1)
+    assert pace["overall_wpm"] == pytest.approx(3 / 2.0 * 60)
+    assert pace["speaking_wpm"] == pytest.approx(3 / 1.5 * 60)
+    assert analysis.reference_pace(words, None)["overall_wpm"] == pytest.approx(4 / 20.5 * 60)
+
+
+def test_reference_pace_is_none_without_enough_words():
+    assert analysis.reference_pace(None, None) is None
+    assert analysis.reference_pace([_w(" One", 0.0, 0.5)], None) is None
+
+
+def test_reference_clip_at_tempo_one_is_the_plain_clip(tmp_path):
+    ref = tmp_path / "reference.mp3"
+    ref.write_bytes(b"x")
+    assert reference_clip(str(ref), None, 1.0) == str(ref)
+
+
+def _tone(path, seconds, sr=24000):
+    t = np.arange(int(sr * seconds)) / sr
+    sf.write(path, (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr)
+
+
+def test_reference_clip_slows_the_trimmed_clip_with_atempo_and_caches_it(tmp_path):
+    ref = tmp_path / "reference.wav"
+    _tone(ref, 3.0)
+
+    slowed = reference_clip(str(ref), 1.5, 0.8)
+    info = sf.info(slowed)
+    assert slowed.startswith(str(tmp_path)) and "tempo-0.80" in slowed and "trim-1.50s" in slowed
+    assert info.samplerate == 24000 and info.duration == pytest.approx(1.5 / 0.8, abs=0.05)
+
+    mtime = (tmp_path / slowed).stat().st_mtime_ns
+    assert reference_clip(str(ref), 1.5, 0.8) == slowed
+    assert (tmp_path / slowed).stat().st_mtime_ns == mtime  # cached, not rewritten
+
+
+def test_reference_clip_speeds_up_an_untrimmed_clip(tmp_path):
+    ref = tmp_path / "reference.wav"
+    _tone(ref, 3.0)
+    faster = reference_clip(str(ref), None, 1.2)
+    assert faster != str(ref) and sf.info(faster).duration == pytest.approx(3.0 / 1.2, abs=0.05)
+
+
 @pytest.mark.integration
 def test_transcribe_runs_real_whisper_on_a_reference_clip():
     from pathlib import Path

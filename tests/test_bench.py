@@ -112,16 +112,6 @@ def test_reference_transcript_is_transcribed_once_and_cached(tmp_path):
     assert len(calls) == 2
 
 
-def test_word_error_rate():
-    from audiobookify.bench import word_error_rate
-
-    assert word_error_rate("The cat sat.", "the cat sat") == 0.0
-    # the model is sent spelled-out numbers; Whisper may write digits back
-    assert word_error_rate("Eleonora’s map, in one thousand, five hundred and forty-four!",
-                           "eleonora's map in 1544") == 0.0
-    assert word_error_rate("one two three four", "one three four") == 0.25  # deletion
-    assert word_error_rate("one two", "one two two two") == 1.0  # repeated words count
-    assert word_error_rate("well-ventilated room", "well ventilated room") == 0.0
 
 
 def test_run_variant_hands_the_reference_transcript_to_the_engine(tmp_path):
@@ -159,23 +149,3 @@ def test_breeze_variant_needs_the_reference_transcript():
     assert issubclass(breeze, MLXAudioEngine) and breeze.NEEDS_REF_TEXT
     assert breeze.REPO == "mlx-community/Breeze-TTS-2-mlx"
 
-
-def test_cadence_stats_from_word_timestamps():
-    from audiobookify.bench import cadence_stats
-
-    w = lambda word, start, end: {"word": word, "start": start, "end": end}
-    words = [
-        w(" One", 0.0, 0.3), w(" two.", 0.3, 0.6),        # sentence end, then 0.8 s pause
-        w(" Three,", 1.4, 1.7),                            # comma, then 0.3 s pause
-        w(" four", 2.0, 2.3), w(" five", 2.4, 2.7),        # 0.1 s gap: within speech
-        w(" six!”", 2.7, 3.0),                             # sentence end before closing quote, 0.4 s pause
-        w(" Seven.", 3.4, 3.7),
-    ]
-    stats = cadence_stats(words)
-
-    assert stats["sentence_pauses"] == [0.8, 0.4]
-    assert stats["comma_pauses"] == [0.3]
-    assert stats["sentence_pause_median"] == pytest.approx(0.6)
-    # 7 words over 3.7 s minus the 0.8 + 0.3 + 0.4 s pauses (gaps >= 0.15 s) = 2.2 s speaking
-    assert stats["articulation_wpm"] == pytest.approx(7 / 2.2 * 60)
-    assert stats["overall_wpm"] == pytest.approx(7 / 3.7 * 60)

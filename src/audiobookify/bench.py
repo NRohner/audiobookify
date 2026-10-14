@@ -12,7 +12,6 @@ import argparse
 import functools
 import hashlib
 import json
-import re
 import resource
 import sys
 import time
@@ -26,9 +25,9 @@ import soundfile as sf
 from .engines.base import VoiceProfileHandle
 from .engines.qwen3 import Qwen3Engine
 from .engines.turbo import ChatterboxTurboEngine
-from .normalize.text import chunk_text, expand_numbers, split_paragraphs
+from .normalize.text import chunk_text, split_paragraphs
 from .postprocess.audio import concatenate_chunks
-from .voice.analysis import _load_whisper
+from .voice.analysis import _load_whisper, cadence_stats, word_error_rate
 
 DEFAULT_MAX_CHARS = 4500  # ~5 min of audio
 TRANSCRIPT_CACHE = Path("bench/transcripts")
@@ -48,23 +47,6 @@ def reference_transcript(path: str, cache_dir: Path = TRANSCRIPT_CACHE, transcri
         cached.parent.mkdir(parents=True, exist_ok=True)
         cached.write_text(transcribe(path).strip(), encoding="utf-8")
     return cached.read_text(encoding="utf-8")
-
-
-def _words(text: str) -> list:
-    text = expand_numbers(text.replace("’", "'")).lower()
-    return re.sub(r"[^a-z0-9' ]+", " ", text.replace("-", " ")).split()
-
-
-def word_error_rate(reference: str, hypothesis: str) -> float:
-    """(substitutions + deletions + insertions) / reference words, after normalizing
-    case, punctuation, hyphens and numbers (Whisper may write digits back)."""
-    ref, hyp = _words(reference), _words(hypothesis)
-    row = list(range(len(hyp) + 1))
-    for i, r in enumerate(ref, 1):
-        prev, row[0] = row[0], i
-        for j, h in enumerate(hyp, 1):
-            prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (r != h))
-    return row[-1] / max(len(ref), 1)
 
 
 class MLXAudioEngine:
@@ -206,30 +188,6 @@ def run_variant(name: str, engine, text: str, reference_audio: Optional[str], ou
     (out_dir / f"{name}.json").write_text(json.dumps(result, indent=2))
     engine.teardown()
     return result
-
-
-PAUSE_MIN_SECONDS = 0.15  # shorter gaps are part of continuous speech
-_SENTENCE_END_RE = re.compile(r'[.!?…]["\'”’)\]]*$')
-_CLAUSE_END_RE = re.compile(r'[,;:—–]["\'”’)\]]*$')
-
-
-def cadence_stats(words: list) -> dict:
-    """Pace and pauses from Whisper word timestamps. Pauses are classified by the
-    punctuation Whisper attaches to the word before them (same bias for every model)."""
-    gaps = [(round(b["start"] - a["end"], 3), a["word"].strip()) for a, b in zip(words, words[1:])]
-    pauses = [(g, w) for g, w in gaps if g >= PAUSE_MIN_SECONDS]
-    sentence = [g for g, w in pauses if _SENTENCE_END_RE.search(w)]
-    clause = [g for g, w in pauses if _CLAUSE_END_RE.search(w)]
-    span = words[-1]["end"] - words[0]["start"]
-    median = lambda xs: float(np.median(xs)) if xs else None
-    return {
-        "articulation_wpm": len(words) / (span - sum(g for g, _ in pauses)) * 60,
-        "overall_wpm": len(words) / span * 60,
-        "sentence_pauses": sentence, "comma_pauses": clause,
-        "sentence_pause_median": median(sentence), "comma_pause_median": median(clause),
-        "other_pause_median": median([g for g, w in pauses
-                                      if not (_SENTENCE_END_RE.search(w) or _CLAUSE_END_RE.search(w))]),
-    }
 
 
 def measure_cadence(out_dir: Path) -> dict:
