@@ -39,78 +39,11 @@ def test_run_variant_honours_a_chunk_size_override(tmp_path):
     assert all(len(c["text"]) <= 100 + FakeEngine().min_chunk_chars() for c in result["chunks"])
 
 
-def test_voice_once_variant_prepares_the_reference_a_single_time():
-    from unittest.mock import MagicMock
-
-    import numpy as np
-    import torch
-
-    from audiobookify.bench import ChatterboxVoiceOnce
-
-    engine = ChatterboxVoiceOnce()
-    engine.model = MagicMock()
-    engine.model.generate.return_value = torch.zeros(1, 10)
-    profile = engine.clone_profile("ref.mp3", None, {})
-
-    for text in ("One.", "Two.", "Three."):
-        assert isinstance(engine.synthesize(text, profile, {"exaggeration": 0.7}), np.ndarray)
-
-    engine.model.prepare_conditionals.assert_called_once_with("ref.mp3", exaggeration=0.7)
-    assert engine.model.generate.call_count == 3
-    assert all(c.kwargs["audio_prompt_path"] is None for c in engine.model.generate.call_args_list)
-
-
-def test_mlx_variant_prepares_voice_once_and_uses_the_apps_generation_settings(tmp_path, monkeypatch):
-    import sys
-    from types import SimpleNamespace
-    from unittest.mock import MagicMock
-
-    import numpy as np
-
-    from audiobookify.bench import ChatterboxMLX
-    from audiobookify.engines.chatterbox import ChatterboxEngine
-
-    fake_core = SimpleNamespace(array=np.asarray)  # no MLX in the app venv
-    monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=fake_core))
-    monkeypatch.setitem(sys.modules, "mlx.core", fake_core)
-    ref = tmp_path / "ref.wav"
-    sf.write(ref, np.full(16000, 0.25, dtype=np.float32), 16000)  # 1 s at 16 kHz
-
-    engine = ChatterboxMLX()
-    engine.model = MagicMock(sample_rate=24000)
-    engine.model.prepare_conditionals.return_value = "jim-conds"
-    engine.model.generate.side_effect = lambda text, **kw: iter([SimpleNamespace(audio=[0.1, 0.2, 0.3])])
-
-    profile = engine.clone_profile(str(ref), None, {})
-    audio = [engine.synthesize(t, profile, {}) for t in ("One.", "Two.")][-1]
-
-    # reference loaded at 24 kHz, as PyTorch Chatterbox does
-    engine.model.prepare_conditionals.assert_called_once()
-    wav, sr = engine.model.prepare_conditionals.call_args.args
-    assert sr == 24000 and len(wav) == 24000
-    assert engine.model.prepare_conditionals.call_args.kwargs == {"exaggeration": 0.5}
-    # MLX defaults to exaggeration 0.1; the comparison must use the app's values
-    engine.model.generate.assert_called_with(
-        "Two.", conds="jim-conds", exaggeration=0.5, cfg_weight=0.5, temperature=0.8, verbose=False)
-    assert audio.dtype == np.float32 and audio.tolist() == np.float32([0.1, 0.2, 0.3]).tolist()
-    assert engine.sample_rate() == 24000
-    assert (engine.max_chunk_chars(), engine.min_chunk_chars()) == (
-        ChatterboxEngine().max_chunk_chars(), ChatterboxEngine().min_chunk_chars())
-
-
 def test_results_record_which_runtime_packages_produced_them(tmp_path):
     result = run_variant("fake", FakeEngine(), "A sentence long enough to be one chunk.", None, tmp_path)
-    # the same variant class runs under different venvs (fork vs upstream mlx-audio)
+    # results stay comparable across runtime upgrades
     assert "soundfile" in result["packages"]
     assert all(isinstance(v, str) for v in result["packages"].values())
-
-
-def test_mlx_variants_differ_only_in_model_repo():
-    from audiobookify.bench import VARIANTS, ChatterboxMLX
-
-    assert VARIANTS["chatterbox-mlx-upstream"].REPO == ChatterboxMLX.REPO == "mlx-community/Chatterbox-TTS-fp16"
-    multi = VARIANTS["chatterbox-mlx-multilingual"]
-    assert issubclass(multi, ChatterboxMLX) and multi.REPO == "mlx-community/chatterbox-fp16"
 
 
 def _fake_mlx_model(segments):
@@ -152,18 +85,11 @@ def test_mlx_audio_engine_passes_reference_transcript_when_the_model_needs_it():
     assert engine.model.generate.call_args.kwargs["ref_text"] == "ref words"
 
 
-def test_turbo_prepares_the_voice_once_and_generates_without_the_reference():
+def test_turbo_variant_benchmarks_the_apps_engine():
     from audiobookify.bench import VARIANTS
+    from audiobookify.engines.turbo import ChatterboxTurboEngine
 
-    engine = VARIANTS["chatterbox-turbo"]()
-    assert engine.REPO == "mlx-community/chatterbox-turbo-fp16"
-    engine.model = _fake_mlx_model([[0.1]])
-    profile = engine.clone_profile("ref.wav", None, {})
-    for t in ("One.", "Two."):
-        engine.synthesize(t, profile, {})
-
-    engine.model.prepare_conditionals.assert_called_once_with("ref.wav")
-    assert all("ref_audio" not in c.kwargs for c in engine.model.generate.call_args_list)
+    assert VARIANTS["chatterbox-turbo"] is ChatterboxTurboEngine
 
 
 def test_reference_transcript_is_transcribed_once_and_cached(tmp_path):

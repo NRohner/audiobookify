@@ -7,7 +7,7 @@ from typing import List, Optional
 import soundfile as sf
 
 from .db import Database
-from .engines.chatterbox import ChatterboxEngine
+from .engines.turbo import ChatterboxTurboEngine
 from .ingest import ingest_by_path
 from .lexicon.substitution import apply_lexicon
 from .models import ChapterStatus
@@ -108,8 +108,8 @@ def _handle_generate(args) -> None:
     if profile:
         voice_params.update(params_from_profile(profile))
 
-    engine = ChatterboxEngine()
-    results = generate_book(book, engine, db, voice_params, device=args.device)
+    engine = ChatterboxTurboEngine()
+    results = generate_book(book, engine, db, voice_params)
     for chapter in results:
         print(f"{chapter.status.value}: {chapter.title} -> {chapter.output_mp3_path}")
 
@@ -138,7 +138,7 @@ def _handle_voice_add(args) -> None:
     db = Database(args.db)
     try:
         profile = db.create_voice_profile(
-            name=args.name, engine=ChatterboxEngine.name, reference_audio_path=reference_path,
+            name=args.name, engine=ChatterboxTurboEngine.name, reference_audio_path=reference_path,
             reference_transcript=args.transcript, exaggeration=args.exaggeration,
             cfg_weight=args.cfg, temperature=args.temperature,
         )
@@ -190,9 +190,9 @@ def _handle_voice_preview(args) -> None:
 
     _check_reference_audio_present(profile)
 
-    engine = ChatterboxEngine()
+    engine = ChatterboxTurboEngine()
     try:
-        engine.load(args.device)
+        engine.load()
         handle = engine.clone_profile(profile.reference_audio_path, profile.reference_transcript, {})
         audio = engine.synthesize(args.text, handle, params_from_profile(profile))
         out_path = args.out or f"{profile.name}-preview.wav"
@@ -427,9 +427,9 @@ def _handle_lexicon_preview(args) -> None:
     sentence = args.sentence or f"The pronunciation of {entry.term} is being previewed."
     text = apply_lexicon(sentence, [entry])
 
-    engine = ChatterboxEngine()
+    engine = ChatterboxTurboEngine()
     try:
-        engine.load(args.device)
+        engine.load()
         handle = engine.clone_profile(
             profile.reference_audio_path if profile else None,
             profile.reference_transcript if profile else None,
@@ -447,8 +447,8 @@ def _handle_lexicon_preview(args) -> None:
 
 def _handle_worker(args) -> None:
     db = Database(args.db)
-    engine = ChatterboxEngine()
-    engine.load(args.device)
+    engine = ChatterboxTurboEngine()
+    engine.load()
     try:
         worker.run_forever(db, engine, poll_interval=args.poll_interval,
                             text_clip_output_dir=args.text_output_dir)
@@ -466,7 +466,6 @@ def main(argv: Optional[List[str]] = None) -> None:
     generate_parser.add_argument("--out", required=True)
     generate_parser.add_argument("--voice", default=None)
     generate_parser.add_argument("--voice-profile", default=None)
-    generate_parser.add_argument("--device", default="auto")
     generate_parser.add_argument("--db", default="audiobookify.db")
     generate_parser.add_argument("--heading-level", type=int, default=1)
 
@@ -493,7 +492,6 @@ def main(argv: Optional[List[str]] = None) -> None:
     voice_preview_parser.add_argument("--name", required=True)
     voice_preview_parser.add_argument("--text", required=True)
     voice_preview_parser.add_argument("--out", default=None)
-    voice_preview_parser.add_argument("--device", default="auto")
     voice_preview_parser.add_argument("--db", default="audiobookify.db")
 
     lexicon_parser = subparsers.add_parser("lexicon", help="Manage pronunciation overrides")
@@ -546,11 +544,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     lexicon_preview_parser.add_argument("--voice-profile", default=None)
     lexicon_preview_parser.add_argument("--book", default=None)
     lexicon_preview_parser.add_argument("--out", default=None)
-    lexicon_preview_parser.add_argument("--device", default="auto")
     lexicon_preview_parser.add_argument("--db", default="audiobookify.db")
 
     worker_parser = subparsers.add_parser("worker", help="Run the background generation worker")
-    worker_parser.add_argument("--device", default="auto")
     worker_parser.add_argument("--poll-interval", type=float, default=2.0)
     worker_parser.add_argument("--db", default="audiobookify.db")
     worker_parser.add_argument("--text-output-dir", default=worker.DEFAULT_TEXT_CLIP_OUTPUT_DIR)

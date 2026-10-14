@@ -5,7 +5,19 @@ import pytest
 import soundfile as sf
 import torch
 
-from audiobookify.phoneme.wav2vec2 import Wav2Vec2PhonemeExtractor
+from audiobookify.phoneme.wav2vec2 import Wav2Vec2PhonemeExtractor, detect_device
+
+
+def test_detect_device_prefers_cuda_then_mps_then_cpu(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert detect_device() == "cuda"
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    assert detect_device() == "mps"
+
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    assert detect_device() == "cpu"
 
 
 def _patch_transformers(monkeypatch, decoded_phonemes="k ə d eɪ ɹ n"):

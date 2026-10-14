@@ -1,6 +1,15 @@
 import soundfile as sf
 
 
+def detect_device() -> str:
+    import torch
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 class Wav2Vec2PhonemeExtractor:
     model_name = "facebook/wav2vec2-lv-60-espeak-cv-ft"
     target_sample_rate = 16000
@@ -12,8 +21,6 @@ class Wav2Vec2PhonemeExtractor:
 
     def load(self, device: str = "auto") -> None:
         from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
-
-        from ..engines.base import detect_device
 
         self.device = detect_device() if device == "auto" else device
         self.processor = Wav2Vec2Processor.from_pretrained(self.model_name)

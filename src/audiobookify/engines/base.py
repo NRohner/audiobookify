@@ -12,7 +12,7 @@ class TTSEngine(Protocol):
     name: str
     supports_cloning: bool
 
-    def load(self, device: str) -> None: ...
+    def load(self, device: str = "auto") -> None: ...
     def clone_profile(self, reference_audio: Optional[str], reference_text: Optional[str],
                        params: dict) -> VoiceProfileHandle: ...
     def synthesize(self, text_chunk: str, profile_handle: Optional[VoiceProfileHandle],
@@ -23,11 +23,3 @@ class TTSEngine(Protocol):
     def sample_rate(self) -> int: ...
     def teardown(self) -> None: ...
 
-
-def detect_device() -> str:
-    import torch
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"

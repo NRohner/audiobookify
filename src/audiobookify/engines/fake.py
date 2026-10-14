@@ -11,7 +11,7 @@ class FakeEngine:
         self._sr = 24000
         self.device = None
 
-    def load(self, device: str) -> None:
+    def load(self, device: str = "auto") -> None:
         self.device = device
 
     def clone_profile(self, reference_audio, reference_text, params) -> VoiceProfileHandle:
