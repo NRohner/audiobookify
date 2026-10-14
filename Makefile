@@ -15,7 +15,7 @@ ifneq ($(NVM_NODE_BIN),)
 export PATH := $(NVM_NODE_BIN):$(PATH)
 endif
 
-.PHONY: setup models build up dev down clean check-not-running
+.PHONY: setup models build up dev down clean check-not-running bench-mlx-setup bench-mlx-audio-setup
 
 setup:
 	python3 -m venv $(VENV)
@@ -31,6 +31,23 @@ models:
 
 build:
 	cd frontend && npm run build
+
+# Separate venv for MLX TTS benchmarks (mlx-audio-plus needs Python <=3.12 wheels;
+# pinned to 0.1.7: the 0.1.8 wheel imports a MTLTokenizer its tokenizer.py lacks;
+# the app venv is 3.14). The app is installed --no-deps so torch/chatterbox stay out.
+bench-mlx-setup:
+	python3.12 -m venv .venv-mlx
+	.venv-mlx/bin/pip install --upgrade pip
+	.venv-mlx/bin/pip install "mlx-audio-plus==0.1.7" "mlx-lm>=0.18,<0.30" "transformers>=4.49,<5" scipy einops librosa numpy soundfile num2words mutagen
+	.venv-mlx/bin/pip install -e . --no-deps
+
+# Upstream mlx-audio in its own venv: it installs under the same `mlx_audio`
+# import name as the fork, so the two can't share one.
+bench-mlx-audio-setup:
+	python3.12 -m venv .venv-mlx-audio
+	.venv-mlx-audio/bin/pip install --upgrade pip
+	.venv-mlx-audio/bin/pip install "mlx-audio==0.5.9" librosa numpy soundfile num2words mutagen
+	.venv-mlx-audio/bin/pip install -e . --no-deps
 
 # Refuses to start a second stack on top of a live one: a prior `make up`/`make dev`
 # whose port was already taken fails silently, leaving the *old* (possibly stale-code)
