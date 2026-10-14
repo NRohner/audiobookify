@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
-import { Link, NavLink, Outlet } from "react-router-dom";
-import { FileText, LibraryBig, Mic, Pause, Play, Quote } from "lucide-react";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import { FileText, Headphones, LibraryBig, Mic, Pause, Play, Quote } from "lucide-react";
 import { api } from "../lib/api.js";
 import { bookState } from "../lib/shelf.js";
 import ProgressBar from "./ui/ProgressBar.jsx";
 import ThemeToggle from "./ThemeToggle.jsx";
+import MiniPlayer from "./player/MiniPlayer.jsx";
+import { usePlayer } from "./player/PlayerContext.jsx";
 
 const navItems = [
   { to: "/", label: "Library", icon: LibraryBig, end: true },
+  { to: "/player", label: "Now playing", icon: Headphones },
   { to: "/voices", label: "Voices", icon: Mic },
   { to: "/pronunciations", label: "Tricky words", icon: FileText },
   { to: "/text", label: "Try a line", icon: Quote },
@@ -51,6 +54,8 @@ export default function AppShell() {
   const [paused, setPaused] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [studioBook, setStudioBook] = useState(null);
+  const { chapter } = usePlayer();
+  const onPlayer = useLocation().pathname === "/player";
 
   async function refresh() {
     const [status, books] = await Promise.all([api.getWorkerStatus(), api.listBooks()]);
@@ -119,9 +124,17 @@ export default function AppShell() {
           </div>
         </div>
       </aside>
-      <main className="flex-1 min-w-0 overflow-y-auto pt-6.5 pl-10 pr-11 pb-10">
-        <Outlet />
-      </main>
+      <div className="flex-1 min-w-0 flex flex-col">
+        <main className="flex-1 min-h-0 overflow-y-auto pt-6.5 pl-10 pr-11 pb-10">
+          <Outlet />
+        </main>
+        {/* Nothing is loaded on an empty library, so the mini-player stays hidden there too. */}
+        {chapter && !onPlayer && (
+          <div className="pl-10 pr-11 pb-4">
+            <MiniPlayer />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -72,7 +72,13 @@ test("spineNote says what needs attention in plain words", () => {
   assert.equal(note([ch("failed"), ch("done")]), "1 chapter failed");
   assert.equal(note([ch("failed"), ch("failed")]), "2 chapters failed");
   assert.equal(note([ch("done"), ch("pending")]), null);
-  assert.equal(note([ch("done"), ch("done")]), "2 chapters");
+  assert.equal(note([ch("done"), ch("done")]), "2 chapters"); // no durations known yet
+  assert.equal(note([ch("done", { duration: 30000 }), ch("done", { duration: 12120 })]), "11h 42m");
   assert.equal(note([ch("pending")]), null);
   assert.equal(note([ch("generating", { progress: 0.2 })]), null);
+});
+
+test("bookState adds up the runtime of finished chapters", () => {
+  const s = bookState(book(1, [ch("done", { duration: 60 }), ch("done", { duration: 30 }), ch("pending")]));
+  assert.equal(s.runtime, 90);
 });

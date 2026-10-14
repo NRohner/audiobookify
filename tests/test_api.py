@@ -1212,3 +1212,102 @@ def test_a_text_clip_can_carry_a_sample_tempo(tmp_path):
                                                 "tempo": 1.5}).status_code == 400
     assert client.post("/api/text-clips", json={"text": "Hi.", "voice_profile_id": None,
                                                 "engine": "chatterbox-turbo", "tempo": 0.9}).status_code == 400
+
+
+def _book_with_chapter(tmp_path, title="T"):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title=title, author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text="Body.")])
+    return db, book, chapter
+
+
+def test_chapter_audio_serves_the_finished_mp3(tmp_path):
+    client = _client(tmp_path)
+    db, book, chapter = _book_with_chapter(tmp_path)
+    mp3 = tmp_path / "ch1.mp3"
+    mp3.write_bytes(b"ID3fake")
+    db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path=str(mp3), duration=1.0)
+    db.close()
+
+    response = client.get(f"/api/books/{book.id}/chapters/{chapter.id}/audio")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/mpeg"
+    assert response.content == b"ID3fake"
+
+
+def test_chapter_audio_404s_until_the_chapter_is_done(tmp_path):
+    client = _client(tmp_path)
+    db, book, chapter = _book_with_chapter(tmp_path)
+    db.close()
+
+    assert client.get(f"/api/books/{book.id}/chapters/{chapter.id}/audio").status_code == 404
+
+
+def test_chapter_audio_404s_when_the_file_is_missing(tmp_path):
+    client = _client(tmp_path)
+    db, book, chapter = _book_with_chapter(tmp_path)
+    db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path=str(tmp_path / "gone.mp3"),
+                              duration=1.0)
+    db.close()
+
+    assert client.get(f"/api/books/{book.id}/chapters/{chapter.id}/audio").status_code == 404
+
+
+def test_chapter_audio_404s_for_unknown_book_or_a_chapter_of_another_book(tmp_path):
+    client = _client(tmp_path)
+    db, book, chapter = _book_with_chapter(tmp_path)
+    other = db.create_book(
+        title="Other", author=None, source_path=str(tmp_path / "o.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    db.close()
+
+    assert client.get(f"/api/books/999/chapters/{chapter.id}/audio").status_code == 404
+    assert client.get(f"/api/books/{other.id}/chapters/{chapter.id}/audio").status_code == 404
+    assert client.get(f"/api/books/{book.id}/chapters/999/audio").status_code == 404
+
+
+def test_book_reports_duration_only_for_done_chapters(tmp_path):
+    client = _client(tmp_path)
+    db, book, chapter = _book_with_chapter(tmp_path)
+    db.close()
+
+    assert client.get(f"/api/books/{book.id}").json()["chapters"][0]["duration"] is None
+
+
+def test_book_measures_and_stores_duration_of_chapters_finished_before_durations_were_kept(tmp_path):
+    client = _client(tmp_path)
+    db, book, chapter = _book_with_chapter(tmp_path)
+    mp3 = tmp_path / "ch1.mp3"
+    sf.write(str(mp3), np.zeros(22050 * 2, dtype=np.float32), 22050, format="MP3")
+    db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path=str(mp3))
+
+    duration = client.get(f"/api/books/{book.id}").json()["chapters"][0]["duration"]
+
+    assert duration == pytest.approx(2.0, abs=0.1)
+    assert db.get_chapter(chapter.id).duration == pytest.approx(duration)
+    db.close()
+
+
+@requires_ffmpeg
+def test_worker_stores_the_chapter_duration_when_it_finishes(tmp_path):
+    client = _client(tmp_path)
+    created = client.post(
+        "/api/books", files={"file": ("book.md", b"# One\nA short line.\n", "text/markdown")},
+        data={"output_dir": str(tmp_path / "out")},
+    ).json()
+    client.post(f"/api/books/{created['id']}/generate")
+
+    db = Database(str(tmp_path / "test.db"))
+    engine = FakeEngine()
+    engine.load("cpu")
+    run_worker_once(db, _slot(engine))
+    stored = db.list_chapters(created["id"])[0].duration
+    db.close()
+
+    assert stored and stored > 0
+    assert client.get(f"/api/books/{created['id']}").json()["chapters"][0]["duration"] == stored

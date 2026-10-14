@@ -330,6 +330,10 @@ class Database:
             raise KeyError(f"no chapter with id {chapter_id}")
         self.conn.commit()
 
+    def set_chapter_duration(self, chapter_id: int, duration: float) -> None:
+        self.conn.execute("UPDATE chapters SET duration = ? WHERE id = ?", (duration, chapter_id))
+        self.conn.commit()
+
     def close(self) -> None:
         self.conn.close()
 

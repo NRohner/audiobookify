@@ -108,6 +108,19 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             "tempo": clip.tempo,
         }
 
+    def _chapter_duration(db: Database, chapter) -> Optional[float]:
+        if chapter.status != ChapterStatus.DONE:
+            return None
+        if chapter.duration is None and chapter.output_mp3_path:
+            # Chapters finished before durations were stored: measure once, keep it.
+            try:
+                duration = sf.info(chapter.output_mp3_path).duration
+            except Exception:
+                return None
+            db.set_chapter_duration(chapter.id, duration)
+            return duration
+        return chapter.duration
+
     def _book_to_dict(db: Database, book) -> dict:
         chapters = []
         for chapter in db.list_chapters(book.id):
@@ -124,6 +137,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
                 "started_at": active_job.started_at if active_job else None,
                 "used_fallback": chapter.used_fallback,
                 "engine": chapter.engine,
+                "duration": _chapter_duration(db, chapter),
             })
         done_engines = {c["engine"] for c in chapters if c["status"] == ChapterStatus.DONE.value}
         return {
@@ -288,6 +302,19 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         db.update_book_engine(book.id, engine)  # the book's chapters all use one engine
         job = db.create_job(chapter.id)
         return {"job_id": job.id}
+
+    @app.get("/api/books/{book_id}/chapters/{chapter_id}/audio")
+    def get_chapter_audio(book_id: int, chapter_id: int, db: Database = Depends(get_db)):
+        try:
+            chapter = db.get_chapter(chapter_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="chapter not found")
+        if chapter.book_id != book_id:
+            raise HTTPException(status_code=404, detail="chapter not found")
+        if chapter.status != ChapterStatus.DONE or not chapter.output_mp3_path \
+                or not Path(chapter.output_mp3_path).is_file():
+            raise HTTPException(status_code=404, detail="audio not ready")
+        return FileResponse(chapter.output_mp3_path, media_type="audio/mpeg")
 
     @app.get("/api/worker/status")
     def worker_status(db: Database = Depends(get_db)):
