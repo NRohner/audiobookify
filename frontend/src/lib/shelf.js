@@ -1,5 +1,6 @@
 // How books look and sit on the shelf, kept out of the components so it is testable.
 import { chapterInProgress } from "./api.js";
+import { formatRuntime } from "./player.js";
 
 // [spine token, text tone] — the tone pairs are fixed by tokens.css.
 export const SPINE_COLORS = [
@@ -51,7 +52,8 @@ export function bookState(book) {
   let shelf = "unstarted";
   if (total > 0 && done === total) shelf = "finished";
   else if (rendering || failed > 0 || done > 0) shelf = "studio";
-  return { total, done, failed, rendering, activeIndex, progress, shelf };
+  const runtime = chapters.reduce((sum, c) => sum + (c.status === "done" ? c.duration ?? 0 : 0), 0);
+  return { total, done, failed, rendering, activeIndex, progress, shelf, runtime };
 }
 
 const SHELVES = [
@@ -85,6 +87,6 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 export function spineNote(state) {
   if (state.rendering) return null;
   if (state.failed > 0) return `${plural(state.failed, "chapter")} failed`;
-  if (state.shelf === "finished") return plural(state.total, "chapter");
+  if (state.shelf === "finished") return state.runtime ? formatRuntime(state.runtime) : plural(state.total, "chapter");
   return null;
 }

@@ -265,6 +265,16 @@
       var(--rr-shadow-cover);
     font-family: var(--rr-font-serif);
   }
+  /* The Player's cover stands upright with the deeper hero shadow. */
+  .rr-cover.rr-cover-hero {
+    box-shadow:
+      inset 6px 0 0 rgba(0, 0, 0, 0.18),
+      var(--rr-shadow-cover-hero);
+  }
+  /* Ribbon bookmark with a V notch, hanging from the cover's top edge. */
+  .rr-ribbon {
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 82%, 0 100%);
+  }
   .rr-rule {
     width: 58%;
     height: 4px;

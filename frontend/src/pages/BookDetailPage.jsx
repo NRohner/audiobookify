@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Check, ChevronLeft, ChevronRight, Laptop, Play, Square } from "lucide-react";
+import { ChevronLeft, ChevronRight, Laptop, Play, Square } from "lucide-react";
 import { api, chapterInProgress } from "../lib/api.js";
 import { formatEta } from "../lib/eta.js";
 import { bookState, primaryAction } from "../lib/shelf.js";
@@ -8,6 +8,9 @@ import Button, { ErrorNote, IconButton } from "../components/ui/Button.jsx";
 import ProgressBar from "../components/ui/ProgressBar.jsx";
 import EnginePicker from "../components/EnginePicker.jsx";
 import BookCover from "../components/BookCover.jsx";
+import PlayGlyph from "../components/player/PlayGlyph.jsx";
+import { usePlayer } from "../components/player/PlayerContext.jsx";
+import { formatClock } from "../lib/player.js";
 import { effectiveEngine, engineLabel, engineMismatchWarning, initialBookEngine } from "../lib/engines.js";
 
 const WAVE_BARS = 72;
@@ -87,19 +90,13 @@ function ChapterError({ number, chapter, onRetry, retrying }) {
   );
 }
 
-function ChapterRow({ number, chapter, busy, onRender, onCancel }) {
+function ChapterRow({ number, chapter, busy, onRender, onCancel, playing, onPlay }) {
   const inProgress = chapterInProgress(chapter);
   const queued = chapter.status === "pending" && inProgress;
   const muted = queued || (chapter.status === "pending" && !inProgress);
+  const playable = chapter.status === "done" && chapter.duration;
   let status;
-  if (chapter.status === "done") {
-    status = (
-      <span className="inline-flex items-center gap-1 text-meta font-semibold text-sage">
-        <Check className="size-3.5" strokeWidth={2.2} aria-hidden="true" />
-        Ready
-      </span>
-    );
-  } else if (chapter.status === "generating") {
+  if (chapter.status === "generating") {
     status = (
       <span className="text-meta font-bold text-accent-text tabular-nums">
         Rendering · {Math.round((chapter.progress ?? 0) * 100)}%
@@ -110,7 +107,13 @@ function ChapterRow({ number, chapter, busy, onRender, onCancel }) {
   }
 
   let action = null;
-  if (inProgress) {
+  if (playable) {
+    action = (
+      <IconButton onClick={onPlay} aria-label={`${playing ? "Pause" : "Play"} ${chapter.title}`}>
+        <PlayGlyph playing={playing} className="size-2.5" />
+      </IconButton>
+    );
+  } else if (inProgress) {
     action = (
       <IconButton onClick={onCancel} disabled={busy} aria-label={`Stop rendering ${chapter.title}`} title="Stop">
         <Square className="size-2.5 fill-current" aria-hidden="true" />
@@ -125,7 +128,7 @@ function ChapterRow({ number, chapter, busy, onRender, onCancel }) {
   }
 
   return (
-    <li className="grid grid-cols-[34px_1fr_auto_32px] items-center gap-x-3 min-h-(--rr-row-h) border-b border-line py-1">
+    <li className="grid grid-cols-[34px_1fr_auto_64px_32px] items-center gap-x-3 min-h-(--rr-row-h) border-b border-line py-1">
       <span className="text-meta text-ink-muted tabular-nums">{number}</span>
       <span className={`font-serif text-[17px] truncate ${muted ? "text-ink-muted" : ""}`}>
         {chapter.title}
@@ -139,6 +142,7 @@ function ChapterRow({ number, chapter, busy, onRender, onCancel }) {
         )}
       </span>
       <span>{status}</span>
+      <span className="text-right text-meta text-ink-muted tabular-nums">{playable && formatClock(chapter.duration)}</span>
       <span className="flex justify-end">{action}</span>
     </li>
   );
@@ -155,10 +159,12 @@ export default function BookDetailPage() {
   const [busyAll, setBusyAll] = useState(false);
   const [busyChapters, setBusyChapters] = useState(new Set());
   const [error, setError] = useState(null);
+  const player = usePlayer();
 
   async function refresh() {
     const [next, worker] = await Promise.all([api.getBook(bookId), api.getWorkerStatus()]);
     setBook(next);
+    player.refreshBook(next);
     setPaused(worker.paused);
     setChosenEngine((current) => current ?? initialBookEngine(next));
   }
@@ -387,6 +393,10 @@ export default function BookDetailPage() {
                     busy={busyChapters.has(chapter.id)}
                     onRender={() => forChapter(chapter.id, () => api.generateChapter(bookId, chapter.id, engine))}
                     onCancel={() => forChapter(chapter.id, () => api.cancelChapter(bookId, chapter.id))}
+                    playing={player.chapter?.id === chapter.id && player.playing}
+                    onPlay={() =>
+                      player.chapter?.id === chapter.id ? player.toggle() : player.play(book, chapter.id)
+                    }
                   />
                 ),
               )}

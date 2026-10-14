@@ -47,6 +47,7 @@ def synthesize_chapter(chapter: Chapter, book: Book, engine, profile_handle, voi
             fallback_dir=str(Path(BACKUP_OUTPUT_DIR) / str(book.id)),
         )
         db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path=mp3_path,
+                                  duration=len(combined) / engine.sample_rate(),
                                   used_fallback=used_fallback, engine=engine.name)
         clear_cache(chapter.id)
     except (GenerationPaused, GenerationCancelled):
