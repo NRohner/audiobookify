@@ -15,7 +15,7 @@ ifneq ($(NVM_NODE_BIN),)
 export PATH := $(NVM_NODE_BIN):$(PATH)
 endif
 
-.PHONY: setup models build up dev down clean check-not-running
+.PHONY: setup models build up dev down clean check-not-running bench-mlx-audio-setup
 
 setup:
 	python3 -m venv $(VENV)
@@ -31,6 +31,15 @@ models:
 
 build:
 	cd frontend && npm run build
+
+
+# MLX TTS benchmarks (Python 3.12; the app venv is 3.14). The app is installed
+# --no-deps so torch/chatterbox stay out of this venv.
+bench-mlx-audio-setup:
+	python3.12 -m venv .venv-mlx-audio
+	.venv-mlx-audio/bin/pip install --upgrade pip
+	.venv-mlx-audio/bin/pip install "mlx-audio==0.5.9" librosa numpy soundfile num2words mutagen
+	.venv-mlx-audio/bin/pip install -e . --no-deps
 
 # Refuses to start a second stack on top of a live one: a prior `make up`/`make dev`
 # whose port was already taken fails silently, leaving the *old* (possibly stale-code)
