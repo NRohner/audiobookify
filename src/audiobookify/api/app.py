@@ -15,6 +15,7 @@ from ..engines import DEFAULT_ENGINE, ENGINES
 from ..ingest import ingest_by_path
 from ..models import ChapterStatus, JobStatus
 from ..synth.chunk_cache import clear_cache
+from ..voice.analysis import reference_clip
 from ..voice.storage import delete_voice_storage, store_reference_audio
 from ..voice.validation import validate_reference_audio
 
@@ -391,6 +392,18 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             raise HTTPException(status_code=400, detail="transcript must not be empty")
         db.save_voice_transcript(voice_id, text)
         return _voice_to_dict(db.get_voice_profile_by_id(voice_id))
+
+    @app.get("/api/voices/{voice_id}/audio")
+    def get_voice_audio(voice_id: int, db: Database = Depends(get_db)):
+        """The clip engines clone from: the trimmed part when the voice is trimmed."""
+        profile = _existing_voice(db, voice_id)
+        try:
+            path = reference_clip(profile.reference_audio_path, profile.reference_trim_end)
+        except (OSError, RuntimeError):
+            raise HTTPException(status_code=404, detail="reference audio missing")
+        if not Path(path).is_file():
+            raise HTTPException(status_code=404, detail="reference audio missing")
+        return FileResponse(path)
 
     @app.post("/api/voices/{voice_id}/transcribe")
     def transcribe_voice(voice_id: int, db: Database = Depends(get_db)):

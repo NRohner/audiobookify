@@ -16,9 +16,19 @@ export const api = {
   getWorkerStatus: () => request("/api/worker/status"),
   pauseWorker: () => request("/api/worker/pause", { method: "POST" }),
   resumeWorker: () => request("/api/worker/resume", { method: "POST" }),
-  generateBook: (id) => request(`/api/books/${id}/generate`, { method: "POST" }),
-  generateChapter: (bookId, chapterId) =>
-    request(`/api/books/${bookId}/chapters/${chapterId}/generate`, { method: "POST" }),
+  listEngines: () => request("/api/engines"),
+  generateBook: (id, engine) =>
+    request(`/api/books/${id}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ engine }),
+    }),
+  generateChapter: (bookId, chapterId, engine) =>
+    request(`/api/books/${bookId}/chapters/${chapterId}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ engine }),
+    }),
   cancelChapter: (bookId, chapterId) =>
     request(`/api/books/${bookId}/chapters/${chapterId}/cancel`, { method: "POST" }),
   cancelBook: (bookId) => request(`/api/books/${bookId}/cancel`, { method: "POST" }),
@@ -32,6 +42,13 @@ export const api = {
   listVoices: () => request("/api/voices"),
   createVoice: (formData) => request("/api/voices", { method: "POST", body: formData }),
   deleteVoice: (id) => request(`/api/voices/${id}`, { method: "DELETE" }),
+  updateVoiceTranscript: (id, transcript) =>
+    request(`/api/voices/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reference_transcript: transcript }),
+    }),
+  transcribeVoice: (id) => request(`/api/voices/${id}/transcribe`, { method: "POST" }),
 
   listPronunciations: () => request("/api/pronunciations"),
   createPronunciation: (payload) =>
@@ -50,11 +67,11 @@ export const api = {
     request(`/api/pronunciations/${encodeURIComponent(term)}`, { method: "DELETE" }),
 
   listTextClips: () => request("/api/text-clips"),
-  createTextClip: (text, voiceProfileId) =>
+  createTextClip: (text, voiceProfileId, engine) =>
     request("/api/text-clips", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, voice_profile_id: voiceProfileId }),
+      body: JSON.stringify({ text, voice_profile_id: voiceProfileId, engine }),
     }),
   getTextClip: (id) => request(`/api/text-clips/${id}`),
   deleteTextClip: (id) => request(`/api/text-clips/${id}`, { method: "DELETE" }),

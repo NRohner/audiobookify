@@ -5,11 +5,15 @@ import { api, chapterInProgress } from "../lib/api.js";
 import Badge from "../components/ui/Badge.jsx";
 import Button from "../components/ui/Button.jsx";
 import ProgressBar from "../components/ui/ProgressBar.jsx";
+import EnginePicker from "../components/EnginePicker.jsx";
+import { effectiveEngine, engineLabel, engineMismatchWarning, initialBookEngine } from "../lib/engines.js";
 
 export default function BookDetailPage() {
   const { bookId } = useParams();
   const [book, setBook] = useState(null);
   const [voices, setVoices] = useState([]);
+  const [engines, setEngines] = useState([]);
+  const [chosenEngine, setChosenEngine] = useState(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [generatingChapterIds, setGeneratingChapterIds] = useState(new Set());
@@ -18,16 +22,19 @@ export default function BookDetailPage() {
   const [error, setError] = useState(null);
 
   async function refresh() {
-    setBook(await api.getBook(bookId));
+    const next = await api.getBook(bookId);
+    setBook(next);
+    setChosenEngine((current) => current ?? initialBookEngine(next));
   }
 
   useEffect(() => {
-    Promise.all([refresh(), api.listVoices().then(setVoices)])
+    Promise.all([refresh(), api.listVoices().then(setVoices), api.listEngines().then((r) => setEngines(r.engines))])
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [bookId]);
 
   const anyInProgress = book?.chapters.some(chapterInProgress);
+  const engine = book ? effectiveEngine(chosenEngine, engines, book.voice_profile_id != null) : null;
 
   useEffect(() => {
     if (!anyInProgress) return;
@@ -38,7 +45,7 @@ export default function BookDetailPage() {
   async function handleGenerate() {
     setGenerating(true);
     try {
-      await api.generateBook(bookId);
+      await api.generateBook(bookId, engine);
       await refresh();
     } catch (e) {
       setError(e.message);
@@ -50,7 +57,7 @@ export default function BookDetailPage() {
   async function handleGenerateChapter(chapterId) {
     setGeneratingChapterIds((prev) => new Set(prev).add(chapterId));
     try {
-      await api.generateChapter(bookId, chapterId);
+      await api.generateChapter(bookId, chapterId, engine);
       await refresh();
     } catch (e) {
       setError(e.message);
@@ -105,6 +112,7 @@ export default function BookDetailPage() {
   if (!book) return <p className="text-destructive">Book not found.</p>;
 
   const allDone = book.chapters.every((c) => c.status === "done");
+  const mismatch = engineMismatchWarning(book, engine, engines);
 
   return (
     <div className="max-w-3xl">
@@ -122,7 +130,7 @@ export default function BookDetailPage() {
 
       {error && <p className="text-sm text-destructive mb-4">{error}</p>}
 
-      <div className="flex items-center gap-4 mb-6">
+      <div className="flex flex-wrap items-start gap-4 mb-6">
         <Button onClick={handleGenerate} loading={generating} disabled={anyInProgress || allDone}>
           <Play className="size-4" aria-hidden="true" />
           Generate all
@@ -148,7 +156,22 @@ export default function BookDetailPage() {
             ))}
           </select>
         </label>
+
+        <EnginePicker
+          engines={engines}
+          value={engine}
+          onChange={setChosenEngine}
+          hasVoice={book.voice_profile_id != null}
+          disabled={anyInProgress}
+        />
       </div>
+
+      {mismatch && (
+        <div className="mb-6 rounded-lg border border-accent/30 bg-accent/10 p-3 text-sm text-accent flex gap-2">
+          <AlertTriangle className="size-4 shrink-0 mt-0.5" aria-hidden="true" />
+          <p>{mismatch}</p>
+        </div>
+      )}
 
       <div className="rounded-xl border border-border divide-y divide-border overflow-hidden">
         {book.chapters.map((chapter) => {
@@ -159,6 +182,11 @@ export default function BookDetailPage() {
             <div key={chapter.id} className="p-4 flex items-center gap-4">
               <div className="flex-1 min-w-0">
                 <p className="font-medium truncate">{chapter.title}</p>
+                {chapter.status === "done" && chapter.engine && (
+                  <p className="text-xs text-muted-foreground">
+                    {engineLabel(chapter.engine, engines)}
+                  </p>
+                )}
                 {chapter.status === "generating" && (
                   <div className="mt-2 max-w-xs">
                     <ProgressBar value={chapter.progress} startedAt={chapter.started_at} />

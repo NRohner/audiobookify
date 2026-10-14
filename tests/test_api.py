@@ -1139,3 +1139,19 @@ def test_text_clips_store_their_engine(tmp_path):
     assert client.post("/api/text-clips", json={"text": "Hi."}).json()["engine"] == "chatterbox-turbo"
     assert client.post("/api/text-clips", json={"text": "Hi.", "engine": "qwen3"}).status_code == 400
     assert client.post("/api/text-clips", json={"text": "Hi.", "engine": "nope"}).status_code == 400
+
+
+def test_voice_audio_serves_the_clip_the_engines_clone_from(tmp_path):
+    client = _client(tmp_path)
+    voice = _upload_voice(client)
+
+    full = client.get(f"/api/voices/{voice['id']}/audio")
+    assert full.status_code == 200
+    assert sf.info(io.BytesIO(full.content)).duration == pytest.approx(15.0, abs=0.01)
+
+    db = Database(str(tmp_path / "test.db"))
+    db.save_voice_transcript(voice["id"], "Part.", words=[{"word": " Part.", "start": 0, "end": 4}], trim_end=4.0)
+    db.close()
+    trimmed = client.get(f"/api/voices/{voice['id']}/audio")
+    assert sf.info(io.BytesIO(trimmed.content)).duration == pytest.approx(4.0, abs=0.01)
+    assert client.get("/api/voices/999/audio").status_code == 404

@@ -5,11 +5,15 @@ import Badge from "../components/ui/Badge.jsx";
 import Button from "../components/ui/Button.jsx";
 import ProgressBar from "../components/ui/ProgressBar.jsx";
 import ConfirmDialog from "../components/ui/ConfirmDialog.jsx";
+import EnginePicker from "../components/EnginePicker.jsx";
+import { effectiveEngine, engineLabel } from "../lib/engines.js";
 
 export default function TextPage() {
   const [text, setText] = useState("");
   const [voiceProfileId, setVoiceProfileId] = useState("");
   const [voices, setVoices] = useState([]);
+  const [engines, setEngines] = useState([]);
+  const [chosenEngine, setChosenEngine] = useState("qwen3");
   const [clips, setClips] = useState([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -21,12 +25,13 @@ export default function TextPage() {
   }
 
   useEffect(() => {
-    Promise.all([api.listVoices().then(setVoices), refreshClips()])
+    Promise.all([api.listVoices().then(setVoices), api.listEngines().then((r) => setEngines(r.engines)), refreshClips()])
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
 
   const anyInProgress = clips.some(textClipInProgress);
+  const engine = effectiveEngine(chosenEngine, engines, Boolean(voiceProfileId));
 
   useEffect(() => {
     if (!anyInProgress) return;
@@ -39,7 +44,7 @@ export default function TextPage() {
     setSubmitting(true);
     setError(null);
     try {
-      await api.createTextClip(text.trim(), voiceProfileId ? Number(voiceProfileId) : null);
+      await api.createTextClip(text.trim(), voiceProfileId ? Number(voiceProfileId) : null, engine);
       setText("");
       await refreshClips();
     } catch (e) {
@@ -78,7 +83,8 @@ export default function TextPage() {
             focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         />
 
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex flex-wrap items-start gap-4">
           <label className="flex items-center gap-2 text-sm">
             <span className="text-muted-foreground">Voice</span>
             <select
@@ -95,6 +101,8 @@ export default function TextPage() {
               ))}
             </select>
           </label>
+          <EnginePicker engines={engines} value={engine} onChange={setChosenEngine} hasVoice={Boolean(voiceProfileId)} />
+          </div>
 
           <Button type="submit" loading={submitting} disabled={!text.trim()}>
             <Send className="size-4" aria-hidden="true" />
@@ -112,12 +120,15 @@ export default function TextPage() {
         <div className="rounded-xl border border-border divide-y divide-border overflow-hidden">
           {clips.map((clip) => {
             const voiceName = voices.find((v) => v.id === clip.voice_profile_id)?.name || "Default";
+            const engineName = engineLabel(clip.engine, engines);
             return (
               <div key={clip.id} className="p-4 flex flex-col gap-3">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm line-clamp-2">{clip.text}</p>
-                    <p className="text-xs text-muted-foreground mt-1">{voiceName}</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {voiceName} · {engineName}
+                    </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge status={clip.status} label={clip.status} />
