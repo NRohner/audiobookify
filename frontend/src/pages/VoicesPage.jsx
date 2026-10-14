@@ -173,7 +173,7 @@ function VoiceCard({ voice, onDelete, onChanged, onError }) {
                 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             />
             {state.note && <p className="text-xs text-muted-foreground">{state.note}</p>}
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 [&>button]:whitespace-nowrap">
               <Button onClick={save} loading={saving} disabled={!dirty} className="h-8 px-3">
                 <Save className="size-4" aria-hidden="true" />
                 Save

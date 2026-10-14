@@ -10,6 +10,11 @@ WHISPER_REPO = "mlx-community/whisper-large-v3-turbo-asr-fp16"
 MAX_REFERENCE_SECONDS = 15.0  # Qwen3 encodes the whole reference per chunk; 36 s ran ~15% slower than 15 s
 SENTENCE_WINDOW_SECONDS = 5.0  # cut at a sentence end if one falls this close to the limit
 TRAIL_SECONDS = 0.15  # air kept after the last word
+# Whisper sometimes returns a clip as unpunctuated lowercase. A short punctuated
+# prompt brings punctuation back; content-bearing prompts leak words into the
+# transcript, and some short ones made Whisper skip most of a clip.
+PUNCTUATION_PROMPT = "Hello. Yes, I see."
+MIN_RETRY_WORD_RATIO = 0.85  # keep the prompted pass only if it kept nearly all the words
 
 _SENTENCE_END_RE = re.compile(r'[.!?…]["\'”’)\]]*$')
 
@@ -24,14 +29,22 @@ def transcribe(path: str) -> dict:
     Loads Whisper per call (~1-3 s once cached) so it never sits next to a TTS model."""
     model = _load_whisper()
     try:
-        out = model.generate(path, word_timestamps=True)
-        words = [{"word": w["word"], "start": w["start"], "end": w["end"]}
-                 for seg in out.segments for w in seg["words"]]
-        return {"text": out.text.strip(), "words": words}
+        result = _result(model.generate(path, word_timestamps=True))
+        if not re.search(r"[.,!?;:]", result["text"]):
+            retry = _result(model.generate(path, word_timestamps=True, initial_prompt=PUNCTUATION_PROMPT))
+            if len(retry["words"]) >= MIN_RETRY_WORD_RATIO * len(result["words"]):
+                result = retry
+        return result
     finally:
         del model
         from ..engines.mlx_util import free_memory
         free_memory()
+
+
+def _result(out) -> dict:
+    words = [{"word": w["word"], "start": w["start"], "end": w["end"]}
+             for seg in out.segments for w in seg["words"]]
+    return {"text": out.text.strip(), "words": words}
 
 
 def trim_point(words: list, max_seconds: float = MAX_REFERENCE_SECONDS) -> Optional[tuple]:
