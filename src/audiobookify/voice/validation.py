@@ -92,9 +92,11 @@ def validate_reference_audio(path: str) -> ReferenceAudioInfo:
 
 
 def params_from_profile(profile) -> dict:
+    from .analysis import reference_clip
     return {
-        "reference_audio": profile.reference_audio_path,
+        "reference_audio": reference_clip(profile.reference_audio_path, profile.reference_trim_end),
         "reference_text": profile.reference_transcript,
+        "reference_trim_end": profile.reference_trim_end,
         "exaggeration": profile.exaggeration,
         "cfg": profile.cfg_weight,
         "temperature": profile.temperature,

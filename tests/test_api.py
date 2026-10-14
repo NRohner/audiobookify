@@ -1007,3 +1007,47 @@ def test_delete_voice_removes_the_permanent_voice_storage_folder(tmp_path):
     client.delete(f"/api/voices/{created['id']}")
 
     assert not voice_dir.exists()
+
+
+def _upload_voice(client, name="narrator-1", **data):
+    return client.post("/api/voices", files={"file": ("ref.wav", _clean_tone_wav_bytes(), "audio/wav")},
+                       data={"name": name, **data}).json()
+
+
+def test_a_new_voice_is_queued_for_transcription_and_reports_its_length(tmp_path):
+    client = _client(tmp_path)
+
+    body = _upload_voice(client)
+
+    assert body["transcript_status"] == "pending" and body["reference_transcript"] is None
+    assert body["reference_seconds"] == pytest.approx(15.0, abs=0.01)
+    assert body["reference_trim_end"] is None and body["transcript_error"] is None
+
+
+def test_a_voice_uploaded_with_a_typed_transcript_skips_whisper(tmp_path):
+    client = _client(tmp_path)
+    body = _upload_voice(client, reference_transcript="  I typed every word.  ")
+    assert (body["transcript_status"], body["reference_transcript"]) == ("done", "I typed every word.")
+
+
+def test_editing_a_voice_transcript_saves_it(tmp_path):
+    client = _client(tmp_path)
+    voice = _upload_voice(client)
+
+    response = client.patch(f"/api/voices/{voice['id']}", json={"reference_transcript": "a small son called"})
+
+    assert response.status_code == 200
+    assert response.json()["reference_transcript"] == "a small son called"
+    assert response.json()["transcript_status"] == "done"
+    assert client.patch(f"/api/voices/{voice['id']}", json={"reference_transcript": "  "}).status_code == 400
+    assert client.patch("/api/voices/999", json={"reference_transcript": "x"}).status_code == 404
+
+
+def test_requesting_a_transcription_requeues_it(tmp_path):
+    client = _client(tmp_path)
+    voice = _upload_voice(client, reference_transcript="typed")
+
+    response = client.post(f"/api/voices/{voice['id']}/transcribe")
+
+    assert response.status_code == 200 and response.json()["transcript_status"] == "pending"
+    assert client.post("/api/voices/999/transcribe").status_code == 404

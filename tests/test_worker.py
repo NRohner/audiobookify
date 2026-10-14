@@ -252,3 +252,94 @@ def test_run_worker_once_cancels_job_and_clears_cache_when_cancel_requested_mid_
     assert db.get_chapter(chapter.id).status == ChapterStatus.PENDING
     assert not chunk_cache.chapter_cache_dir(chapter.id).exists()
     db.close()
+
+
+def _voice(db, tmp_path, **kw):
+    import numpy as np
+    import soundfile as sf
+
+    ref = tmp_path / "ref.wav"
+    sf.write(ref, np.zeros(24000 * 20, dtype=np.float32), 24000)
+    return db.create_voice_profile(name="Nova", engine="chatterbox-turbo", reference_audio_path=str(ref),
+                                   exaggeration=0.5, cfg_weight=0.5, temperature=0.8,
+                                   **{"reference_transcript": None, **kw})
+
+
+_WORDS = [{"word": " One", "start": 0.0, "end": 10.0}, {"word": " two.", "start": 10.1, "end": 14.0},
+          {"word": " Three", "start": 14.2, "end": 18.0}]
+
+
+def _fake_whisper(monkeypatch, result=None, error=None):
+    from audiobookify.voice import analysis
+    calls = []
+
+    def transcribe(path):
+        calls.append(path)
+        if error:
+            raise error
+        return result or {"text": "One two. Three", "words": _WORDS}
+    monkeypatch.setattr(analysis, "transcribe", transcribe)
+    return calls
+
+
+def test_worker_transcribes_pending_voices_and_trims_long_clips(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "test.db"))
+    voice = _voice(db, tmp_path, transcript_status="pending")
+    calls = _fake_whisper(monkeypatch)
+
+    assert run_worker_once(db, FakeEngine(), {}) is True
+
+    saved = db.get_voice_profile_by_id(voice.id)
+    assert calls == [voice.reference_audio_path]
+    assert saved.transcript_status == "done" and saved.reference_words == _WORDS
+    assert (saved.reference_transcript, saved.reference_trim_end) == ("One two.", 14.15)
+    assert run_worker_once(db, FakeEngine(), {}) is False
+    db.close()
+
+
+def test_worker_records_a_failed_transcription_instead_of_retrying_forever(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "test.db"))
+    voice = _voice(db, tmp_path, transcript_status="pending")
+    _fake_whisper(monkeypatch, error=RuntimeError("no speech found"))
+
+    run_worker_once(db, FakeEngine(), {})
+
+    saved = db.get_voice_profile_by_id(voice.id)
+    assert (saved.transcript_status, saved.transcript_error) == ("failed", "no speech found")
+    db.close()
+
+
+class _TranscriptEngine(FakeEngine):
+    needs_transcript = True
+
+    def clone_profile(self, reference_audio, reference_text, params):
+        self.cloned = (reference_audio, reference_text)
+        return super().clone_profile(reference_audio, reference_text, params)
+
+
+def test_worker_transcribes_a_voice_lazily_when_the_engine_needs_a_transcript(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "test.db"))
+    voice = _voice(db, tmp_path)  # created before transcripts existed
+    calls = _fake_whisper(monkeypatch)
+    clip = db.create_text_clip("A sentence long enough to be spoken.", voice.id)
+    engine = _TranscriptEngine()
+
+    run_worker_once(db, engine, {}, text_clip_output_dir=str(tmp_path / "clips"))
+
+    assert calls == [voice.reference_audio_path]
+    ref_audio, ref_text = engine.cloned
+    assert ref_text == "One two." and ref_audio.endswith(".trim-14.15s.wav")  # trimmed clip + its words
+    assert db.get_voice_profile_by_id(voice.id).transcript_status == "done"
+    db.close()
+
+
+def test_worker_does_not_transcribe_for_engines_that_clone_from_audio_alone(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "test.db"))
+    voice = _voice(db, tmp_path)
+    calls = _fake_whisper(monkeypatch)
+    db.create_text_clip("A sentence long enough to be spoken.", voice.id)
+
+    run_worker_once(db, FakeEngine(), {}, text_clip_output_dir=str(tmp_path / "clips"))
+
+    assert calls == []
+    db.close()

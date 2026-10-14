@@ -15,6 +15,7 @@ class Qwen3Engine:
 
     name = "qwen3"
     supports_cloning = True
+    needs_transcript = True
 
     def __init__(self):
         self.model = None

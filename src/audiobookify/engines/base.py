@@ -11,6 +11,7 @@ class VoiceProfileHandle:
 class TTSEngine(Protocol):
     name: str
     supports_cloning: bool
+    needs_transcript: bool  # clones from reference audio plus its transcript
 
     def load(self, device: str = "auto") -> None: ...
     def clone_profile(self, reference_audio: Optional[str], reference_text: Optional[str],

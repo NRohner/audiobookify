@@ -15,6 +15,7 @@ class ChatterboxTurboEngine:
 
     name = "chatterbox-turbo"
     supports_cloning = True
+    needs_transcript = False
 
     def __init__(self):
         self.model = None

@@ -28,16 +28,11 @@ from .engines.qwen3 import Qwen3Engine
 from .engines.turbo import ChatterboxTurboEngine
 from .normalize.text import chunk_text, expand_numbers, split_paragraphs
 from .postprocess.audio import concatenate_chunks
+from .voice.analysis import _load_whisper
 
 DEFAULT_MAX_CHARS = 4500  # ~5 min of audio
 TRANSCRIPT_CACHE = Path("bench/transcripts")
-WHISPER_REPO = "mlx-community/whisper-large-v3-turbo-asr-fp16"
-
-
-@functools.lru_cache(maxsize=1)
-def _whisper():
-    from mlx_audio.stt.utils import load_model
-    return load_model(WHISPER_REPO)
+_whisper = functools.lru_cache(maxsize=1)(_load_whisper)  # one load for a whole scoring run
 
 
 def whisper_transcribe(path: str) -> str:

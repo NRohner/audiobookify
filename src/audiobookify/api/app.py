@@ -5,6 +5,7 @@ from pathlib import Path
 
 from typing import Optional
 
+import soundfile as sf
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -52,12 +53,22 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         finally:
             db.close()
 
+    def _reference_seconds(path: str) -> Optional[float]:
+        try:
+            return sf.info(path).duration
+        except Exception:
+            return None  # missing or unreadable file; generation reports it properly
+
     def _voice_to_dict(profile, warnings: Optional[list] = None) -> dict:
         return {
             "id": profile.id,
             "name": profile.name,
             "engine": profile.engine,
             "reference_transcript": profile.reference_transcript,
+            "transcript_status": profile.transcript_status,
+            "transcript_error": profile.transcript_error,
+            "reference_seconds": _reference_seconds(profile.reference_audio_path),
+            "reference_trim_end": profile.reference_trim_end,
             "exaggeration": profile.exaggeration,
             "cfg_weight": profile.cfg_weight,
             "temperature": profile.temperature,
@@ -306,11 +317,14 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             shutil.rmtree(staged_dir, ignore_errors=True)
             raise HTTPException(status_code=400, detail=str(exc))
 
+        # A typed transcript is used as-is; otherwise the worker runs Whisper.
+        reference_transcript = (reference_transcript or "").strip() or None
         try:
             profile = db.create_voice_profile(
                 name=name, engine="chatterbox-turbo", reference_audio_path=str(staged_path.resolve()),
                 reference_transcript=reference_transcript, exaggeration=exaggeration,
                 cfg_weight=cfg_weight, temperature=temperature,
+                transcript_status="done" if reference_transcript else "pending",
             )
         except ValueError as exc:
             shutil.rmtree(staged_dir, ignore_errors=True)
@@ -334,6 +348,27 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
     @app.get("/api/voices")
     def list_voices(db: Database = Depends(get_db)):
         return [_voice_to_dict(p) for p in db.list_voice_profiles()]
+
+    def _existing_voice(db: Database, voice_id: int):
+        profile = db.get_voice_profile_by_id(voice_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="voice profile not found")
+        return profile
+
+    @app.patch("/api/voices/{voice_id}")
+    def update_voice(voice_id: int, payload: dict = Body(...), db: Database = Depends(get_db)):
+        _existing_voice(db, voice_id)
+        text = (payload.get("reference_transcript") or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="transcript must not be empty")
+        db.save_voice_transcript(voice_id, text)
+        return _voice_to_dict(db.get_voice_profile_by_id(voice_id))
+
+    @app.post("/api/voices/{voice_id}/transcribe")
+    def transcribe_voice(voice_id: int, db: Database = Depends(get_db)):
+        _existing_voice(db, voice_id)
+        db.request_voice_transcription(voice_id)
+        return _voice_to_dict(db.get_voice_profile_by_id(voice_id))
 
     @app.delete("/api/voices/{voice_id}")
     def delete_voice(voice_id: int, db: Database = Depends(get_db)):

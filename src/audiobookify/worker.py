@@ -7,6 +7,7 @@ from .synth.chunk_cache import clear_cache
 from .synth.pipeline import (
     GenerationCancelled, GenerationPaused, synthesize_chapter, synthesize_text_clip,
 )
+from .voice import analysis
 from .voice.validation import params_from_profile
 
 DEFAULT_TEXT_CLIP_OUTPUT_DIR = "text_clips"
@@ -19,17 +20,42 @@ def _voice_params_for_profile(profile) -> dict:
     return voice_params
 
 
-def _voice_params_for_book(db: Database, book) -> tuple:
-    profile = db.get_voice_profile_by_id(book.voice_profile_id) if book.voice_profile_id else None
-    return _voice_params_for_profile(profile), profile
+def transcribe_voice(db: Database, profile) -> None:
+    """One Whisper pass: transcript, word timings, and the reference trim."""
+    try:
+        result = analysis.transcribe(profile.reference_audio_path)
+        cut = analysis.trim_point(result["words"])
+        trim_end, text = cut if cut else (None, result["text"])
+        db.save_voice_transcript(profile.id, text, words=result["words"], trim_end=trim_end)
+    except Exception as exc:
+        db.fail_voice_transcription(profile.id, str(exc))
 
 
-def _ensure_profile_cached(engine, profile_cache: dict, voice_profile_id, profile, voice_params: dict) -> None:
-    if "voice_profile_id" not in profile_cache or profile_cache["voice_profile_id"] != voice_profile_id:
-        reference_audio = profile.reference_audio_path if profile else None
-        reference_text = profile.reference_transcript if profile else None
-        profile_cache["voice_profile_id"] = voice_profile_id
-        profile_cache["handle"] = engine.clone_profile(reference_audio, reference_text, voice_params)
+def load_voice(db: Database, voice_profile_id, engine):
+    """The voice profile, transcribed first if this engine needs a transcript and
+    the voice has none yet (voices made before transcripts existed)."""
+    profile = db.get_voice_profile_by_id(voice_profile_id) if voice_profile_id else None
+    if profile and engine.needs_transcript and not (profile.reference_transcript or "").strip():
+        transcribe_voice(db, profile)
+        profile = db.get_voice_profile_by_id(voice_profile_id)
+    return profile
+
+
+def _ensure_profile_cached(engine, profile_cache: dict, voice_profile_id, voice_params: dict) -> None:
+    # Keyed on the params too, so an edited transcript or trim takes effect.
+    key = (voice_profile_id, voice_params.get("reference_audio"), voice_params.get("reference_text"))
+    if profile_cache.get("key") != key:
+        profile_cache["key"] = key
+        profile_cache["handle"] = engine.clone_profile(
+            voice_params.get("reference_audio"), voice_params.get("reference_text"), voice_params)
+
+
+def _process_next_transcription(db: Database) -> bool:
+    profile = db.next_pending_transcription()
+    if profile is None:
+        return False
+    transcribe_voice(db, profile)
+    return True
 
 
 def _process_next_chapter_job(db: Database, engine, profile_cache: dict) -> bool:
@@ -40,8 +66,8 @@ def _process_next_chapter_job(db: Database, engine, profile_cache: dict) -> bool
     try:
         chapter = db.get_chapter(job.chapter_id)
         book = db.get_book(chapter.book_id)
-        voice_params, profile = _voice_params_for_book(db, book)
-        _ensure_profile_cached(engine, profile_cache, book.voice_profile_id, profile, voice_params)
+        voice_params = _voice_params_for_profile(load_voice(db, book.voice_profile_id, engine))
+        _ensure_profile_cached(engine, profile_cache, book.voice_profile_id, voice_params)
 
         lexicon_entries = db.list_lexicon_entries(book.id)
 
@@ -76,9 +102,8 @@ def _process_next_text_clip(db: Database, engine, profile_cache: dict, output_di
         return False
 
     try:
-        profile = db.get_voice_profile_by_id(clip.voice_profile_id) if clip.voice_profile_id else None
-        voice_params = _voice_params_for_profile(profile)
-        _ensure_profile_cached(engine, profile_cache, clip.voice_profile_id, profile, voice_params)
+        voice_params = _voice_params_for_profile(load_voice(db, clip.voice_profile_id, engine))
+        _ensure_profile_cached(engine, profile_cache, clip.voice_profile_id, voice_params)
 
         lexicon_entries = db.list_lexicon_entries()
 
@@ -97,6 +122,8 @@ def run_worker_once(db: Database, engine, profile_cache: dict,
                      text_clip_output_dir: str = DEFAULT_TEXT_CLIP_OUTPUT_DIR) -> bool:
     if db.is_paused():
         return False
+    if _process_next_transcription(db):  # seconds each, and the Voices page is waiting on it
+        return True
     if _process_next_chapter_job(db, engine, profile_cache):
         return True
     return _process_next_text_clip(db, engine, profile_cache, text_clip_output_dir)

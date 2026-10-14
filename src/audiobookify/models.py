@@ -27,6 +27,7 @@ class Chapter:
     duration: Optional[float] = None
     error: Optional[str] = None
     used_fallback: bool = False
+    engine: Optional[str] = None  # what produced the audio; None until generated
 
 
 @dataclass
@@ -40,19 +41,24 @@ class Book:
     created_at: float
     voice_profile_id: Optional[int] = None
     chapters: list = field(default_factory=list)
+    engine: str = "chatterbox-turbo"  # used for every (re)generated chapter
 
 
 @dataclass
 class VoiceProfile:
     id: int
     name: str
-    engine: str
+    engine: str  # legacy: voices work with any engine; the book or clip picks one
     reference_audio_path: str
     reference_transcript: Optional[str]
     exaggeration: float
     cfg_weight: float
     temperature: float
     created_at: float
+    transcript_status: Optional[str] = None  # None (never asked), pending, done, failed
+    transcript_error: Optional[str] = None
+    reference_words: Optional[list] = None  # Whisper word timings of the whole clip
+    reference_trim_end: Optional[float] = None  # engines clone from the first N seconds; None = whole clip
 
 
 @dataclass
@@ -102,3 +108,4 @@ class TextClip:
     finished_at: Optional[float] = None
     error: Optional[str] = None
     used_fallback: bool = False
+    engine: str = "chatterbox-turbo"
