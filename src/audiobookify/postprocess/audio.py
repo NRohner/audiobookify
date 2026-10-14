@@ -118,6 +118,19 @@ def _export_chapter_mp3_to(output_dir: str, audio: np.ndarray, sample_rate: int,
     return str(mp3_path)
 
 
+def relabel_chapter_mp3(path: str, order_index: int, chapter_title: str) -> str:
+    """Move a finished chapter's MP3 to its new name (same folder) and fix its title and track tags."""
+    new_path = Path(path).parent / chapter_filename(order_index, chapter_title)
+    Path(path).replace(new_path)
+    tags = MP3(str(new_path))
+    if tags.tags is None:
+        tags.add_tags()
+    tags.tags.add(TIT2(encoding=3, text=chapter_title))
+    tags.tags.add(TRCK(encoding=3, text=str(order_index + 1)))
+    tags.save()
+    return str(new_path)
+
+
 def export_chapter_mp3(audio: np.ndarray, sample_rate: int, output_dir: str, order_index: int,
                         chapter_title: str, book_title: str, narrator: str,
                         fallback_dir: Optional[str] = None) -> Tuple[str, bool]:

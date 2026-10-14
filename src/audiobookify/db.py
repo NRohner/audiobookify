@@ -247,6 +247,19 @@ def _row_to_text_clip(row: sqlite3.Row) -> TextClip:
     )
 
 
+def book_paragraphs(chapters: List[Chapter]):
+    """The book as one paragraph list, plus the index each chapter starts at.
+
+    Chapter text is paragraphs joined by a blank line, and split/join on it are exact
+    inverses, so chapter breaks can move between paragraphs without losing a character.
+    """
+    paragraphs, starts = [], []
+    for chapter in chapters:
+        starts.append(len(paragraphs))
+        paragraphs.extend(chapter.text.split("\n\n"))
+    return paragraphs, starts
+
+
 class Database:
     def __init__(self, path: str):
         self.conn = sqlite3.connect(path, check_same_thread=False)
@@ -308,6 +321,57 @@ class Database:
             "SELECT * FROM chapters WHERE book_id = ? ORDER BY order_index", (book_id,)
         ).fetchall()
         return [_row_to_chapter(row) for row in rows]
+
+    def replace_chapter_breaks(self, book_id: int, breaks: List[tuple]) -> List[Chapter]:
+        """Re-split the book's paragraphs at `breaks` [(start paragraph, title), ...].
+
+        A chapter covering exactly the same paragraphs as before keeps its row (and so its
+        audio and status); any other range becomes a new pending chapter. Returns the old
+        chapters that no longer exist, so callers can clean up their files.
+        """
+        old = self.list_chapters(book_id)
+        paragraphs, old_starts = book_paragraphs(old)
+        starts = [start for start, _ in breaks]
+        if not breaks or starts[0] != 0 or starts[-1] >= len(paragraphs) \
+                or any(a >= b for a, b in zip(starts, starts[1:])):
+            raise ValueError("chapter breaks must start at the first paragraph and go forward")
+        ends = starts[1:] + [len(paragraphs)]
+        texts = ["\n\n".join(paragraphs[s:e]) for s, e in zip(starts, ends)]
+        titles = [title.strip() for _, title in breaks]
+        if not all(titles):
+            raise ValueError("every chapter needs a title")
+        if not all(text.strip() for text in texts):
+            raise ValueError("every chapter needs some words in it")
+
+        old_ends = old_starts[1:] + [len(paragraphs)]
+        by_range = {(s, e): c for s, e, c in zip(old_starts, old_ends, old)}
+        kept = {}
+        for i, (s, e) in enumerate(zip(starts, ends)):
+            if (s, e) in by_range:
+                kept[i] = by_range[(s, e)]
+        kept_ids = {c.id for c in kept.values()}
+        removed = [c for c in old if c.id not in kept_ids]
+
+        with self.conn:
+            # Park every index out of the way so the UNIQUE(book_id, order_index) holds mid-update.
+            self.conn.execute("UPDATE chapters SET order_index = -1 - order_index WHERE book_id = ?", (book_id,))
+            for chapter in removed:
+                self.conn.execute("DELETE FROM jobs WHERE chapter_id = ?", (chapter.id,))
+                self.conn.execute("DELETE FROM chapters WHERE id = ?", (chapter.id,))
+            for i, (title, text) in enumerate(zip(titles, texts)):
+                if i in kept:
+                    self.conn.execute("UPDATE chapters SET order_index = ?, title = ? WHERE id = ?",
+                                      (i, title, kept[i].id))
+                else:
+                    self.conn.execute(
+                        "INSERT INTO chapters (book_id, order_index, title, text) VALUES (?, ?, ?, ?)",
+                        (book_id, i, title, text),
+                    )
+        return removed
+
+    def set_chapter_audio_path(self, chapter_id: int, path: str) -> None:
+        self.conn.execute("UPDATE chapters SET output_mp3_path = ? WHERE id = ?", (path, chapter_id))
+        self.conn.commit()
 
     def get_chapter(self, chapter_id: int) -> Chapter:
         row = self.conn.execute("SELECT * FROM chapters WHERE id = ?", (chapter_id,)).fetchone()

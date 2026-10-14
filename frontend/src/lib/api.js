@@ -39,6 +39,14 @@ export const api = {
       body: JSON.stringify({ voice_profile_id: voiceProfileId }),
     }),
 
+  getBookText: (id) => request(`/api/books/${id}/text`),
+  saveChapterBreaks: (id, breaks) =>
+    request(`/api/books/${id}/chapters`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chapters: breaks.map(({ start, title }) => ({ start, title })) }),
+    }),
+
   listVoices: () => request("/api/voices"),
   createVoice: (formData) => request("/api/voices", { method: "POST", body: formData }),
   deleteVoice: (id) => request(`/api/voices/${id}`, { method: "DELETE" }),
