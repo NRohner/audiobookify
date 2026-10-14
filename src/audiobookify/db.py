@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS voice_profiles (
     transcript_status TEXT,
     transcript_error TEXT,
     reference_words TEXT,
-    reference_trim_end REAL
+    reference_trim_end REAL,
+    tempo REAL NOT NULL DEFAULT 1.0
 );
 
 CREATE TABLE IF NOT EXISTS lexicon_entries (
@@ -98,7 +99,8 @@ CREATE TABLE IF NOT EXISTS text_clips (
     finished_at REAL,
     error TEXT,
     used_fallback INTEGER NOT NULL DEFAULT 0,
-    engine TEXT NOT NULL DEFAULT 'chatterbox-turbo'
+    engine TEXT NOT NULL DEFAULT 'chatterbox-turbo',
+    tempo REAL
 );
 """
 
@@ -142,6 +144,10 @@ def _migrate_engine_and_transcript_columns(conn: sqlite3.Connection) -> None:
                       ("reference_words", "TEXT"), ("reference_trim_end", "REAL")]:
         if col not in voice_cols:
             conn.execute(f"ALTER TABLE voice_profiles ADD COLUMN {col} {kind}")
+    if "tempo" not in voice_cols:
+        conn.execute("ALTER TABLE voice_profiles ADD COLUMN tempo REAL NOT NULL DEFAULT 1.0")
+    if "tempo" not in cols("text_clips"):
+        conn.execute("ALTER TABLE text_clips ADD COLUMN tempo REAL")
 
 
 _WARNED_VOICE_MIGRATION_IDS: set = set()
@@ -210,7 +216,7 @@ def _row_to_voice_profile(row: sqlite3.Row) -> VoiceProfile:
         temperature=row["temperature"], created_at=row["created_at"],
         transcript_status=row["transcript_status"], transcript_error=row["transcript_error"],
         reference_words=json.loads(row["reference_words"]) if row["reference_words"] else None,
-        reference_trim_end=row["reference_trim_end"],
+        reference_trim_end=row["reference_trim_end"], tempo=row["tempo"],
     )
 
 
@@ -237,6 +243,7 @@ def _row_to_text_clip(row: sqlite3.Row) -> TextClip:
         status=JobStatus(row["status"]), progress=row["progress"], output_path=row["output_path"],
         created_at=row["created_at"], started_at=row["started_at"], finished_at=row["finished_at"],
         error=row["error"], used_fallback=bool(row["used_fallback"]), engine=row["engine"],
+        tempo=row["tempo"],
     )
 
 
@@ -402,6 +409,9 @@ class Database:
                                "transcript_error = NULL, reference_words = ?, reference_trim_end = ?",
                                (text, json.dumps(words), trim_end))
 
+    def set_voice_tempo(self, profile_id: int, tempo: float) -> None:
+        self._update_voice(profile_id, "tempo = ?", (tempo,))
+
     def _update_voice(self, profile_id: int, assignments: str, params: tuple) -> None:
         cur = self.conn.execute(f"UPDATE voice_profiles SET {assignments} WHERE id = ?", (*params, profile_id))
         if cur.rowcount == 0:
@@ -540,11 +550,11 @@ class Database:
         self.conn.commit()
 
     def create_text_clip(self, text: str, voice_profile_id: Optional[int],
-                          engine: str = "chatterbox-turbo") -> TextClip:
+                          engine: str = "chatterbox-turbo", tempo: Optional[float] = None) -> TextClip:
         cur = self.conn.execute(
-            "INSERT INTO text_clips (text, voice_profile_id, status, progress, created_at, engine) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (text, voice_profile_id, JobStatus.QUEUED.value, 0.0, time.time(), engine),
+            "INSERT INTO text_clips (text, voice_profile_id, status, progress, created_at, engine, tempo) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (text, voice_profile_id, JobStatus.QUEUED.value, 0.0, time.time(), engine, tempo),
         )
         self.conn.commit()
         return self.get_text_clip(cur.lastrowid)

@@ -59,6 +59,7 @@ class VoiceProfile:
     transcript_error: Optional[str] = None
     reference_words: Optional[list] = None  # Whisper word timings of the whole clip
     reference_trim_end: Optional[float] = None  # engines clone from the first N seconds; None = whole clip
+    tempo: float = 1.0  # the reference is played at this speed (atempo) before cloning
 
 
 @dataclass
@@ -109,3 +110,4 @@ class TextClip:
     error: Optional[str] = None
     used_fallback: bool = False
     engine: str = "chatterbox-turbo"
+    tempo: Optional[float] = None  # a sample at an unsaved tempo; None = the voice's tempo

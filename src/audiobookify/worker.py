@@ -14,10 +14,10 @@ from .voice.validation import params_from_profile
 DEFAULT_TEXT_CLIP_OUTPUT_DIR = "text_clips"
 
 
-def _voice_params_for_profile(profile) -> dict:
+def _voice_params_for_profile(profile, tempo=None) -> dict:
     voice_params = {"voice_name": profile.name if profile else "default"}
     if profile:
-        voice_params.update(params_from_profile(profile))
+        voice_params.update(params_from_profile(profile, tempo))
     return voice_params
 
 
@@ -132,7 +132,7 @@ def _process_next_text_clip(db: Database, engines: EngineSlot, output_dir: str) 
 
     try:
         engine, profile_cache = engines.get(clip.engine), engines.profile_cache
-        voice_params = _voice_params_for_profile(load_voice(db, clip.voice_profile_id, engine))
+        voice_params = _voice_params_for_profile(load_voice(db, clip.voice_profile_id, engine), clip.tempo)
         _ensure_profile_cached(engine, profile_cache, clip.voice_profile_id, voice_params)
 
         lexicon_entries = db.list_lexicon_entries()

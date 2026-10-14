@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Loader2, Mic, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
-import { api } from "../lib/api.js";
+import { AlertTriangle, AudioLines, Loader2, Mic, Play, Plus, RotateCcw, Save, Target, Trash2 } from "lucide-react";
+import { api, textClipInProgress } from "../lib/api.js";
 import { transcriptState } from "../lib/engines.js";
+import { SWEET_SPOT, TEMPO_MAX, TEMPO_MIN, pacedWpm, sweetSpotTempo, tempoPosition } from "../lib/pace.js";
 import Button from "../components/ui/Button.jsx";
 import Modal from "../components/ui/Modal.jsx";
 import ConfirmDialog from "../components/ui/ConfirmDialog.jsx";
@@ -92,6 +93,149 @@ function CloneVoiceModal({ onClose, onCloned }) {
   );
 }
 
+const SAMPLE_TEXT =
+  "The house stood at the end of a quiet lane, half hidden by an old hedge. " +
+  "Nobody had lived there for years, or so the neighbours said, but on certain evenings a light still burned in the upper window.";
+
+function wpmText(wpm) {
+  return `${wpm.overall} wpm overall, ${wpm.speaking} speaking`;
+}
+
+function PaceSection({ voice, onChanged, onError }) {
+  const [draft, setDraft] = useState(voice.tempo);
+  const [lastSeen, setLastSeen] = useState(voice.tempo);
+  if (voice.tempo !== lastSeen) {
+    setLastSeen(voice.tempo);
+    setDraft(voice.tempo);
+  }
+  const [saving, setSaving] = useState(false);
+  const [previewTempo, setPreviewTempo] = useState(null);
+  const [sample, setSample] = useState(null);
+  const sweet = sweetSpotTempo(voice.pace);
+  const measured = pacedWpm(voice.pace, 1);
+  const atDraft = pacedWpm(voice.pace, draft);
+  const dirty = draft !== voice.tempo;
+
+  useEffect(() => {
+    if (!sample || !textClipInProgress(sample)) return;
+    const id = setInterval(
+      () => api.getTextClip(sample.id).then(setSample).catch((e) => onError(e.message)),
+      1500,
+    );
+    return () => clearInterval(id);
+  }, [sample, onError]);
+
+  async function save() {
+    setSaving(true);
+    try {
+      await api.setVoiceTempo(voice.id, draft);
+      await onChanged();
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function generateSample() {
+    try {
+      setSample(await api.createTextClip(SAMPLE_TEXT, voice.id, "qwen3", draft));
+    } catch (e) {
+      onError(e.message);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-border pt-3">
+      <div className="flex items-baseline justify-between">
+        <label htmlFor={`tempo-${voice.id}`} className="text-xs font-medium text-muted-foreground">
+          Reference pace
+        </label>
+        <span className="text-sm font-medium tabular-nums">{draft.toFixed(2)}x</span>
+      </div>
+      {measured ? (
+        <p className="text-xs text-muted-foreground">Measured: {wpmText(measured)}</p>
+      ) : (
+        <p className="text-xs text-muted-foreground">Pace is measured once the clip is transcribed.</p>
+      )}
+      <div className="relative pb-5">
+        <input
+          id={`tempo-${voice.id}`}
+          type="range"
+          min={TEMPO_MIN}
+          max={TEMPO_MAX}
+          step={0.01}
+          value={draft}
+          onChange={(e) => setDraft(Number(e.target.value))}
+          className="w-full cursor-pointer accent-primary"
+        />
+        {sweet != null && (
+          <button
+            type="button"
+            onClick={() => setDraft(sweet)}
+            title="Move the slider to the sweet spot (not saved)"
+            className="absolute bottom-0 -translate-x-1/2 cursor-pointer rounded text-[11px] text-primary whitespace-nowrap
+              flex items-center gap-0.5 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+            style={{ left: `${tempoPosition(sweet)}%` }}
+          >
+            <Target className="size-3" aria-hidden="true" />
+            sweet spot {sweet.toFixed(2)}x
+          </button>
+        )}
+      </div>
+      {atDraft && <p className="text-sm tabular-nums">At {draft.toFixed(2)}x: {wpmText(atDraft)}</p>}
+      <p className="text-xs text-muted-foreground">
+        Sweet spot: about {SWEET_SPOT.overall} wpm overall ({SWEET_SPOT.speaking} speaking), the reference pace behind
+        the best narration so far. These figures describe the reference clip; the narration follows only part of a
+        tempo change, so its pace is approximate. Listen to a sample before saving.
+      </p>
+      <div className="flex flex-wrap items-center gap-2 [&>button]:whitespace-nowrap">
+        <Button variant="ghost" className="h-8 px-3" onClick={() => setPreviewTempo(draft)}>
+          <Play className="size-4" aria-hidden="true" />
+          Preview reference
+        </Button>
+        <Button
+          variant="ghost"
+          className="h-8 px-3"
+          onClick={generateSample}
+          disabled={!voice.reference_transcript || (sample && textClipInProgress(sample))}
+        >
+          <AudioLines className="size-4" aria-hidden="true" />
+          Generate sample
+        </Button>
+        <Button onClick={save} loading={saving} disabled={!dirty} className="h-8 px-3">
+          <Save className="size-4" aria-hidden="true" />
+          Save tempo
+        </Button>
+        {dirty && (
+          <Button variant="ghost" className="h-8 px-3" onClick={() => setDraft(voice.tempo)}>
+            <RotateCcw className="size-4" aria-hidden="true" />
+            Revert
+          </Button>
+        )}
+      </div>
+      {previewTempo != null && (
+        <div className="flex flex-col gap-1">
+          <p className="text-xs text-muted-foreground">Reference at {previewTempo.toFixed(2)}x (not saved)</p>
+          <audio controls autoPlay src={`/api/voices/${voice.id}/audio?tempo=${previewTempo}`} className="h-9 w-full" />
+        </div>
+      )}
+      {sample && (
+        <div className="flex flex-col gap-1">
+          <p className="text-xs text-muted-foreground">
+            Sample (Quality engine) at {sample.tempo.toFixed(2)}x
+            {textClipInProgress(sample) && `: generating ${Math.round((sample.progress || 0) * 100)}%`}
+          </p>
+          {sample.status === "done" && (
+            <audio controls src={`/api/text-clips/${sample.id}/audio`} className="h-9 w-full" />
+          )}
+          {sample.status === "failed" && <p className="text-xs text-destructive">{sample.error}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VoiceCard({ voice, onDelete, onChanged, onError }) {
   const [draft, setDraft] = useState(voice.reference_transcript || "");
   const [saving, setSaving] = useState(false);
@@ -145,7 +289,7 @@ function VoiceCard({ voice, onDelete, onChanged, onError }) {
         </button>
       </div>
 
-      <audio controls src={`/api/voices/${voice.id}/audio`} className="h-9 w-full" />
+      <audio controls src={`/api/voices/${voice.id}/audio?tempo=${voice.tempo}`} className="h-9 w-full" />
 
       <div className="flex flex-col gap-1.5">
         <label htmlFor={`transcript-${voice.id}`} className="text-xs font-medium text-muted-foreground">
@@ -190,6 +334,8 @@ function VoiceCard({ voice, onDelete, onChanged, onError }) {
           </>
         )}
       </div>
+
+      <PaceSection voice={voice} onChanged={onChanged} onError={onError} />
 
       {confirmRetranscribe && (
         <ConfirmDialog

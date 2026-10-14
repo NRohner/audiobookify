@@ -48,6 +48,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reference_transcript: transcript }),
     }),
+  setVoiceTempo: (id, tempo) =>
+    request(`/api/voices/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tempo }),
+    }),
   transcribeVoice: (id) => request(`/api/voices/${id}/transcribe`, { method: "POST" }),
 
   listPronunciations: () => request("/api/pronunciations"),
@@ -67,11 +73,11 @@ export const api = {
     request(`/api/pronunciations/${encodeURIComponent(term)}`, { method: "DELETE" }),
 
   listTextClips: () => request("/api/text-clips"),
-  createTextClip: (text, voiceProfileId, engine) =>
+  createTextClip: (text, voiceProfileId, engine, tempo = null) =>
     request("/api/text-clips", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, voice_profile_id: voiceProfileId, engine }),
+      body: JSON.stringify({ text, voice_profile_id: voiceProfileId, engine, tempo }),
     }),
   getTextClip: (id) => request(`/api/text-clips/${id}`),
   deleteTextClip: (id) => request(`/api/text-clips/${id}`, { method: "DELETE" }),

@@ -962,7 +962,8 @@ def test_existing_database_gains_transcript_and_engine_columns_via_migration(tmp
     conn = sqlite3.connect(db_path)
     for table, col in [("books", "engine"), ("text_clips", "engine"), ("chapters", "engine"),
                        ("voice_profiles", "transcript_status"), ("voice_profiles", "transcript_error"),
-                       ("voice_profiles", "reference_words"), ("voice_profiles", "reference_trim_end")]:
+                       ("voice_profiles", "reference_words"), ("voice_profiles", "reference_trim_end"),
+                       ("voice_profiles", "tempo"), ("text_clips", "tempo")]:
         conn.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
     conn.execute(
         "INSERT INTO voice_profiles (name, engine, reference_audio_path, exaggeration, cfg_weight, "
@@ -977,4 +978,21 @@ def test_existing_database_gains_transcript_and_engine_columns_via_migration(tmp
     assert db.get_chapter(pending.id).engine is None
     voice = db.find_voice_profile_by_name("Old")
     assert voice.transcript_status is None and voice.reference_words is None  # transcribed lazily
+    assert voice.tempo == 1.0
     db.close()
+
+
+def test_voice_tempo_defaults_to_one_and_can_be_set(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    voice = _voice(db, tmp_path)
+    assert voice.tempo == 1.0
+    db.set_voice_tempo(voice.id, 0.88)
+    assert db.get_voice_profile_by_id(voice.id).tempo == 0.88
+    with pytest.raises(KeyError):
+        db.set_voice_tempo(999, 0.9)
+
+
+def test_text_clip_tempo_is_stored_and_defaults_to_the_voices(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    assert db.create_text_clip("Hi.", None).tempo is None
+    assert db.create_text_clip("Hi.", None, tempo=0.9).tempo == 0.9
