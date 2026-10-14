@@ -321,6 +321,12 @@ export default function BookDetailPage() {
               </Button>
             )}
             <Link
+              to={`/books/${bookId}/chapters`}
+              className="inline-flex h-10 items-center rounded-full border border-line bg-card px-5 text-[14px] font-semibold hover:bg-oat"
+            >
+              Chapter breaks
+            </Link>
+            <Link
               to="/pronunciations"
               className="inline-flex h-10 items-center rounded-full border border-line bg-card px-5 text-[14px] font-semibold hover:bg-oat"
             >

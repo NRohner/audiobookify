@@ -11,10 +11,11 @@ from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, UploadFil
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from ..db import Database
+from ..db import Database, book_paragraphs
 from ..engines import DEFAULT_ENGINE, ENGINES
 from ..ingest import ingest_by_path
 from ..models import ChapterStatus, JobStatus
+from ..postprocess.audio import chapter_filename, relabel_chapter_mp3
 from ..synth.chunk_cache import clear_cache
 from ..voice.analysis import TEMPO_RANGE, reference_clip, reference_pace
 from ..voice.storage import delete_voice_storage, store_reference_audio
@@ -214,6 +215,60 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             book = db.get_book(book_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="book not found")
+        return _book_to_dict(db, book)
+
+    @app.get("/api/books/{book_id}/text")
+    def get_book_text(book_id: int, db: Database = Depends(get_db)):
+        try:
+            db.get_book(book_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="book not found")
+        chapters = db.list_chapters(book_id)
+        paragraphs, starts = book_paragraphs(chapters)
+        return {
+            "paragraphs": paragraphs,
+            "chapters": [{"id": c.id, "title": c.title, "start": start, "status": c.status.value}
+                         for c, start in zip(chapters, starts)],
+        }
+
+    @app.put("/api/books/{book_id}/chapters")
+    def put_chapter_breaks(book_id: int, payload: dict = Body(...), db: Database = Depends(get_db)):
+        try:
+            book = db.get_book(book_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="book not found")
+        for chapter in db.list_chapters(book_id):
+            latest = db.latest_job_for_chapter(chapter.id)
+            if latest is not None and latest.status in (JobStatus.QUEUED, JobStatus.GENERATING):
+                raise HTTPException(status_code=409, detail="This book is rendering. Pause or cancel it "
+                                                            "before changing chapter breaks.")
+        try:
+            breaks = [(int(c["start"]), str(c["title"])) for c in payload.get("chapters") or []]
+            removed = db.replace_chapter_breaks(book_id, breaks)
+        except (ValueError, KeyError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        for chapter in removed:  # their audio no longer matches any chapter's text
+            if chapter.output_mp3_path:
+                Path(chapter.output_mp3_path).unlink(missing_ok=True)
+            clear_cache(chapter.id)
+
+        # Kept chapters may have moved or been renamed. Park the files first so a chapter
+        # taking a neighbour's old filename can't overwrite it, then give them their new names.
+        stale = [c for c in db.list_chapters(book_id)
+                 if c.output_mp3_path and Path(c.output_mp3_path).name != chapter_filename(c.order_index, c.title)
+                 and Path(c.output_mp3_path).is_file()]
+        parked = {}
+        for chapter in stale:
+            parked[chapter.id] = Path(chapter.output_mp3_path).with_suffix(f".relabel-{chapter.id}.mp3")
+            Path(chapter.output_mp3_path).replace(parked[chapter.id])
+        for chapter in stale:
+            try:
+                path = relabel_chapter_mp3(str(parked[chapter.id]), chapter.order_index, chapter.title)
+            except Exception:  # keep the audio playable under its parked name rather than lose track of it
+                path = str(parked[chapter.id])
+            db.set_chapter_audio_path(chapter.id, path)
+
         return _book_to_dict(db, book)
 
     @app.get("/api/browse-dir")
