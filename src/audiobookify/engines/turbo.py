@@ -3,13 +3,9 @@ from typing import Optional
 import numpy as np
 
 from .base import VoiceProfileHandle
+from .mlx_util import free_memory, join_segments, load_model as _load_model
 
 REPO = "mlx-community/chatterbox-turbo-fp16"
-
-
-def _load_model(repo: str):
-    from mlx_audio.tts.utils import load_model
-    return load_model(repo)
 
 
 class ChatterboxTurboEngine:
@@ -43,9 +39,7 @@ class ChatterboxTurboEngine:
     def synthesize(self, text_chunk: str, profile_handle: Optional[VoiceProfileHandle],
                     params: dict) -> np.ndarray:
         self.model._conds = profile_handle.data["conds"] if profile_handle else self._default_conds
-        # The port may split text itself and yield several segments; keep them all.
-        segments = self.model.generate(text_chunk)
-        return np.concatenate([np.asarray(s.audio, dtype=np.float32).reshape(-1) for s in segments])
+        return join_segments(self.model.generate(text_chunk))
 
     def max_chunk_chars(self) -> int:
         return 300
@@ -62,8 +56,4 @@ class ChatterboxTurboEngine:
     def teardown(self) -> None:
         self.model = None
         self._default_conds = None
-        try:
-            import mlx.core as mx
-            mx.clear_cache()  # return GPU memory before another engine loads
-        except ImportError:
-            pass
+        free_memory()

@@ -24,6 +24,7 @@ import numpy as np
 import soundfile as sf
 
 from .engines.base import VoiceProfileHandle
+from .engines.qwen3 import Qwen3Engine
 from .engines.turbo import ChatterboxTurboEngine
 from .normalize.text import chunk_text, expand_numbers, split_paragraphs
 from .postprocess.audio import concatenate_chunks
@@ -120,15 +121,6 @@ class MLXAudioEngine:
         self.model = None
 
 
-class Qwen3TTS(MLXAudioEngine):
-    """Qwen3-TTS Base: in-context voice cloning from reference audio + transcript.
-    Its MLX port loads and encodes the reference on every call."""
-
-    REPO = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
-    NEEDS_REF_TEXT = True
-    GEN_KWARGS = {"lang_code": "english"}  # skip auto-detection; sampling left at its defaults
-
-
 class BreezeTTS2(MLXAudioEngine):
     """Breeze TTS 2 (3B, research/non-commercial license): reference audio +
     transcript, re-encoded on every call by the port. Model defaults otherwise."""
@@ -139,7 +131,7 @@ class BreezeTTS2(MLXAudioEngine):
 
 VARIANTS = {
     "chatterbox-turbo": ChatterboxTurboEngine,  # the app's engine, as-is
-    "qwen3-tts-1.7b": Qwen3TTS,
+    "qwen3-tts-1.7b": Qwen3Engine,  # the app's engine, as-is
     "breeze-tts-2": BreezeTTS2,
 }
 
@@ -301,7 +293,7 @@ def main(argv=None) -> None:
     name = args.variant + (f"-{args.chunk_chars}" if args.chunk_chars else "")
     print(f"{name}: {len(text)} chars -> {args.out}", flush=True)
     engine = VARIANTS[args.variant]()
-    ref_text = reference_transcript(args.voice) if getattr(engine, "NEEDS_REF_TEXT", False) else None
+    ref_text = reference_transcript(args.voice)  # cached; engines that don't clone from text ignore it
     if ref_text:
         print(f"reference transcript: {ref_text!r}", flush=True)
     r = run_variant(name, engine, text, args.voice, Path(args.out), args.chunk_chars, reference_text=ref_text)
