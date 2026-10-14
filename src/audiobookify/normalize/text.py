@@ -25,6 +25,8 @@ _SENTENCE_SPLIT_RE = re.compile(
 )
 _PARAGRAPH_SPLIT_RE = re.compile(r'\n\s*\n')
 _ENDS_WITH_PUNCT_RE = re.compile(rf'[.!?…,;:—–-][{_CLOSERS}]*$')
+# A chunk ending in an interrupted line ("if we were to—”", "or a—", "short--").
+_TRAILING_DASH_RE = re.compile(rf'\s*(?:[—–]|-+)([{_CLOSERS}]*)$')
 # Clause split points, strongest first; a cut goes right after the match.
 _CLAUSE_LEVELS = [re.compile(r'[;:]\s+'), re.compile(r'\s[—–]\s*|—\s*'), re.compile(r',\s+')]
 # Matches a trailing hyphen-digit right after a would-be match, e.g. the "-34"
@@ -190,6 +192,18 @@ def _merge_short(chunks: List[Chunk], min_chars: int) -> List[Chunk]:
     return out
 
 
+def _close_interrupted(chunk: Chunk) -> Chunk:
+    """Give a chunk that ends in a dash a clean stop ("to—”" -> "to.”"). Turbo
+    sometimes babbled or repeated words after a chunk-final dash (1 in 20 runs;
+    0 in 20 with a period). The pause after the chunk (ends_with) is unchanged;
+    dashes inside a chunk are left alone.
+
+    ponytail: also applies where the clause splitter cut a long sentence at a
+    dash, which then reads as a full stop; a comma there if that ever sounds wrong.
+    """
+    return chunk._replace(text=_TRAILING_DASH_RE.sub(r".\1", chunk.text))
+
+
 def chunk_text(text: str, max_chars: int, min_chars: int = 0) -> List[Chunk]:
     chunks: List[Chunk] = []
     for paragraph in split_paragraphs(text):
@@ -198,4 +212,4 @@ def chunk_text(text: str, max_chars: int, min_chars: int = 0) -> List[Chunk]:
                 chunks[-1] = chunks[-1]._replace(ends_with="scene")
             continue
         chunks.extend(_chunk_paragraph(paragraph, max_chars, min_chars))
-    return _merge_short(chunks, min_chars)
+    return [_close_interrupted(c) for c in _merge_short(chunks, min_chars)]
