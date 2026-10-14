@@ -11,15 +11,75 @@ from mutagen.mp3 import MP3
 BACKUP_OUTPUT_DIR = str(Path(__file__).resolve().parents[3] / "output")
 
 
-def concatenate_chunks(chunks: List[np.ndarray], sample_rate: int, pause_seconds: float = 0.4) -> np.ndarray:
+# Silence inserted after a chunk, by why the chunk ended (see normalize.text.Chunk).
+PAUSE_SECONDS = {"word": 0.1, "clause": 0.2, "sentence": 0.35, "paragraph": 0.75, "scene": 1.5}
+
+_FRAME_SECONDS = 0.01
+_SILENCE_BELOW_PEAK_DB = 40.0
+_KEEP_MARGIN_SECONDS = 0.03  # keeps breaths and soft consonant onsets
+_FADE_SECONDS = 0.01
+_LEVEL_TOLERANCE_DB = 3.0
+_MAX_LEVEL_GAIN_DB = 6.0
+_PEAK_CEILING = 0.99
+
+
+def trim_silence(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Cut the model's own leading/trailing silence (so pauses come only from
+    PAUSE_SECONDS) and fade the edges so joins don't click."""
+    peak = float(np.abs(audio).max()) if audio.size else 0.0
+    frame = max(1, int(sample_rate * _FRAME_SECONDS))
+    n_frames = len(audio) // frame
+    if peak == 0.0 or n_frames == 0:
+        return audio
+    rms = np.sqrt(np.mean(audio[:n_frames * frame].reshape(n_frames, frame).astype(np.float64) ** 2, axis=1))
+    loud = np.nonzero(rms > peak * 10 ** (-_SILENCE_BELOW_PEAK_DB / 20))[0]
+    if not loud.size:
+        return audio
+    margin = int(sample_rate * _KEEP_MARGIN_SECONDS)
+    start = max(0, loud[0] * frame - margin)
+    end = min(len(audio), (loud[-1] + 1) * frame + margin)
+    out = audio[start:end].astype(np.float32, copy=True)
+    fade = min(int(sample_rate * _FADE_SECONDS), len(out) // 2)
+    if fade:
+        ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+        out[:fade] *= ramp
+        out[-fade:] *= ramp[::-1]
+    return out
+
+
+def _level_db(audio: np.ndarray) -> Optional[float]:
+    rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2))) if audio.size else 0.0
+    return 20 * np.log10(rms) if rms > 0 else None
+
+
+def level_chunks(chunks: List[np.ndarray]) -> List[np.ndarray]:
+    """Nudge chunks more than _LEVEL_TOLERANCE_DB off the median level toward it
+    (capped, never clipping). The overall level is left as the model made it."""
+    levels = [_level_db(c) for c in chunks]
+    known = [lv for lv in levels if lv is not None]
+    if not known:
+        return chunks
+    median = float(np.median(known))
+    out = []
+    for chunk, level in zip(chunks, levels):
+        if level is None or abs(median - level) <= _LEVEL_TOLERANCE_DB:
+            out.append(chunk)
+            continue
+        gain = 10 ** (float(np.clip(median - level, -_MAX_LEVEL_GAIN_DB, _MAX_LEVEL_GAIN_DB)) / 20)
+        gain = min(gain, _PEAK_CEILING / float(np.abs(chunk).max()))
+        out.append((chunk * gain).astype(np.float32))
+    return out
+
+
+def concatenate_chunks(chunks: List[np.ndarray], ends_with: List[str], sample_rate: int) -> np.ndarray:
     if not chunks:
         return np.zeros(0, dtype=np.float32)
-    pause = np.zeros(int(sample_rate * pause_seconds), dtype=np.float32)
+    chunks = level_chunks([trim_silence(c, sample_rate) for c in chunks])
     parts = []
     for i, chunk in enumerate(chunks):
         parts.append(chunk)
         if i < len(chunks) - 1:
-            parts.append(pause)
+            parts.append(np.zeros(int(sample_rate * PAUSE_SECONDS[ends_with[i]]), dtype=np.float32))
     return np.concatenate(parts)
 
 

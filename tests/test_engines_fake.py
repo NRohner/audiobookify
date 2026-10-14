@@ -13,7 +13,7 @@ def test_fake_engine_full_lifecycle():
 
     assert isinstance(short_audio, np.ndarray)
     assert len(long_audio) > len(short_audio)
-    assert engine.max_chunk_chars() > 0
+    assert 0 < engine.min_chunk_chars() < engine.max_chunk_chars()
     assert engine.sample_rate() > 0
     assert engine.preferred_phoneme_scheme() is None
 

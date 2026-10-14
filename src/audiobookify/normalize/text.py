@@ -1,4 +1,5 @@
 import re
+from typing import List, NamedTuple, Optional, Tuple
 
 from num2words import num2words
 
@@ -13,7 +14,19 @@ _NUMBER = r'\d[\d,]*(?:\.\d+)?'
 # atomic match so neither operand can be half-expanded; the `(?<!-)` lookbehind
 # keeps hyphen-suffixed identifiers ("COVID-19") out of the match entirely.
 _NUMBER_RE = re.compile(rf'(?<!-)\b{_NUMBER}(?:-{_NUMBER})*\b')
-_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z0-9"\'])')
+# A sentence ends at .!?… optionally followed by up to two closing quotes/brackets
+# ('."', '?\'', '!”', '.)'); the next one may open with a quote or bracket. Without
+# the closers, dialogue like '"I'm leaving." She turned' never split, producing
+# run-on "sentences" that later had to be hard-split mid-sentence.
+_CLOSERS = "\"'”’)\\]"
+_SENTENCE_SPLIT_RE = re.compile(
+    rf'(?:(?<=[.!?…])|(?<=[.!?…][{_CLOSERS}])|(?<=[.!?…][{_CLOSERS}][{_CLOSERS}]))'
+    r'\s+(?=["\'“‘(\[]?[A-Z0-9])'
+)
+_PARAGRAPH_SPLIT_RE = re.compile(r'\n\s*\n')
+_ENDS_WITH_PUNCT_RE = re.compile(rf'[.!?…,;:—–-][{_CLOSERS}]*$')
+# Clause split points, strongest first; a cut goes right after the match.
+_CLAUSE_LEVELS = [re.compile(r'[;:]\s+'), re.compile(r'\s[—–]\s*|—\s*'), re.compile(r',\s+')]
 # Matches a trailing hyphen-digit right after a would-be match, e.g. the "-34"
 # in "12-34b" or the "-90" in "1980-90s". When the range's right operand is
 # glued to a following word character (no closing \b), _NUMBER_RE above can't
@@ -57,50 +70,132 @@ def split_sentences(text: str) -> list:
     return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
 
 
-def _split_on_word_boundaries(text: str, max_chars: int) -> list:
-    """Greedily pack whitespace-separated words into pieces of at most max_chars.
+def split_paragraphs(text: str) -> List[str]:
+    """Blank lines separate paragraphs; whitespace inside a paragraph collapses to one space."""
+    return [p for p in (" ".join(raw.split()) for raw in _PARAGRAPH_SPLIT_RE.split(text)) if p]
+
+
+class Chunk(NamedTuple):
+    text: str
+    # Why the chunk ended, which sets the pause after it:
+    # "word" | "clause" | "sentence" | "paragraph" | "scene"
+    ends_with: str
+
+
+def _is_scene_break(paragraph: str) -> bool:
+    return not re.search(r'\w', paragraph)  # "* * *", "#", "~~~", "⁂"
+
+
+def _best_cut(text: str, max_chars: int, min_chars: int, pattern: re.Pattern) -> Optional[int]:
+    """Largest cut position after a `pattern` match leaving both sides within bounds."""
+    best = None
+    for m in pattern.finditer(text):
+        left, right = text[:m.end()].strip(), text[m.end():].strip()
+        if min_chars <= len(left) <= max_chars and len(right) >= min_chars:
+            best = m.end()
+    return best
+
+
+def _split_long_sentence(sentence: str, max_chars: int, min_chars: int) -> List[Tuple[str, str]]:
+    """Split a sentence longer than max_chars at the strongest clause punctuation
+    that fits, falling back to a word boundary. Returns (text, ends_with) pieces;
+    the last piece's ends_with is a placeholder the caller overwrites.
 
     Words are never broken, so a single word longer than max_chars still yields an
-    oversized piece — that is preferred over emitting a mid-word fragment.
+    oversized piece - that is preferred over emitting a mid-word fragment.
     """
     pieces = []
-    current = ""
-    for word in text.split():
-        candidate = f"{current} {word}".strip()
-        if len(candidate) > max_chars and current:
-            pieces.append(current)
-            current = word
-        else:
-            current = candidate
-    if current:
-        pieces.append(current)
+    rest = sentence
+    while len(rest) > max_chars:
+        for kind, patterns in (("clause", _CLAUSE_LEVELS), ("word", [re.compile(r'\s+')])):
+            cut = next((c for c in (_best_cut(rest, max_chars, min_chars, p) for p in patterns)
+                        if c is not None), None)
+            if cut is not None:
+                break
+        if cut is None:
+            # No cut keeps both sides >= min_chars; respect max_chars alone.
+            cut = _best_cut(rest, max_chars, 0, re.compile(r'\s+'))
+            kind = "word"
+        if cut is None:
+            break  # one giant word
+        pieces.append((rest[:cut].strip(), kind))
+        rest = rest[cut:].strip()
+    pieces.append((rest, "sentence"))
     return pieces
 
 
-def chunk_text(text: str, max_chars: int) -> list:
+def _chunk_paragraph(paragraph: str, max_chars: int, min_chars: int) -> List[Chunk]:
     # Abbreviations are expanded before splitting so "Dr. Smith" isn't seen as a
     # sentence break; numbers are expanded *after* splitting, because turning a
     # leading digit into a lowercase word ("7 more" -> "seven more") would hide
     # the sentence boundary from _SENTENCE_SPLIT_RE.
-    sentences = [expand_numbers(s) for s in split_sentences(expand_abbreviations(text))]
-    chunks = []
+    sentences = [expand_numbers(s) for s in split_sentences(expand_abbreviations(paragraph))]
+    packed = []
     current = ""
     for sentence in sentences:
         candidate = f"{current} {sentence}".strip()
         if len(candidate) > max_chars and current:
-            chunks.append(current)
+            packed.append(current)
             current = sentence
         else:
             current = candidate
     if current:
-        chunks.append(current)
+        packed.append(current)
 
-    # A chunk can still exceed max_chars when a single sentence does (long
-    # unpunctuated front matter, verse, list runs); hard-split those on words.
-    result = []
-    for chunk in chunks:
-        if len(chunk) <= max_chars:
-            result.append(chunk)
+    # A packed chunk only exceeds max_chars when it is a single sentence (long
+    # unpunctuated front matter, verse, list runs); split those at clauses/words.
+    chunks = []
+    for text in packed:
+        if len(text) <= max_chars:
+            chunks.append(Chunk(text, "sentence"))
         else:
-            result.extend(_split_on_word_boundaries(chunk, max_chars))
-    return result
+            chunks.extend(Chunk(t, k) for t, k in _split_long_sentence(text, max_chars, min_chars))
+    chunks[-1] = chunks[-1]._replace(ends_with="paragraph")
+    return chunks
+
+
+def _join(a: Chunk, b: Chunk) -> Chunk:
+    # A merged paragraph with no closing punctuation (a heading like "Chapter One")
+    # gets a period so the model pauses instead of running into the next sentence.
+    first = a.text if _ENDS_WITH_PUNCT_RE.search(a.text) else a.text + "."
+    return Chunk(f"{first} {b.text}", b.ends_with)
+
+
+def _merge_short(chunks: List[Chunk], min_chars: int) -> List[Chunk]:
+    """Very short inputs sound bad (and waste a model call), so a chunk under
+    min_chars merges into the next one - or into the previous one when it ends a
+    scene or the text. It only crosses a scene break when the whole scene is
+    shorter than min_chars ("The End."): a lost pause beats a garbled chunk.
+
+    ponytail: merging can push a chunk past max_chars by up to min_chars (2x for
+    a short final paragraph); max_chars is a conservative quality limit, not the
+    model's hard limit.
+    """
+    out: List[Chunk] = []
+    pending: Optional[Chunk] = None
+    for chunk in chunks:
+        if pending is not None:
+            chunk, pending = _join(pending, chunk), None
+        if len(chunk.text) >= min_chars:
+            out.append(chunk)
+        elif chunk.ends_with == "scene" and out:
+            out[-1] = _join(out[-1], chunk)
+        else:
+            pending = chunk
+    if pending is not None:
+        if out:
+            out[-1] = _join(out[-1], pending)
+        else:
+            out.append(pending)
+    return out
+
+
+def chunk_text(text: str, max_chars: int, min_chars: int = 0) -> List[Chunk]:
+    chunks: List[Chunk] = []
+    for paragraph in split_paragraphs(text):
+        if _is_scene_break(paragraph):
+            if chunks:
+                chunks[-1] = chunks[-1]._replace(ends_with="scene")
+            continue
+        chunks.extend(_chunk_paragraph(paragraph, max_chars, min_chars))
+    return _merge_short(chunks, min_chars)

@@ -44,6 +44,9 @@ class ChatterboxEngine:
     def max_chunk_chars(self) -> int:
         return 300
 
+    def min_chunk_chars(self) -> int:
+        return 80  # ~5 s of speech; shorter inputs come out garbled
+
     def preferred_phoneme_scheme(self):
         return None
 

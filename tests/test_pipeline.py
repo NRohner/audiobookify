@@ -421,3 +421,50 @@ def test_synthesize_chapter_reraises_generation_cancelled_instead_of_marking_fai
 
     assert db.get_chapter(chapter.id).status != ChapterStatus.FAILED
     db.close()
+
+
+class _RecordingEngine(FakeEngine):
+    def __init__(self):
+        super().__init__()
+        self.texts = []
+
+    def synthesize(self, text_chunk, profile_handle, params):
+        self.texts.append(text_chunk)
+        return super().synthesize(text_chunk, profile_handle, params)
+
+
+LONG = "She looked out over the water for a long time before she finally spoke again."
+
+
+@requires_ffmpeg
+def test_synthesize_chapter_chunks_by_paragraph_and_never_sends_a_tiny_chunk(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(
+        title="T", author=None, source_path=str(tmp_path / "b.md"),
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"),
+    )
+    [chapter] = db.add_chapters(book.id, [RawChapter(title="Ch 1", text=f"{LONG}\n\nNo.\n\n* * *\n\n{LONG}")])
+    engine = _RecordingEngine()
+    engine.load("cpu")
+
+    result = synthesize_chapter(chapter, book, engine, engine.clone_profile(None, None, {}),
+                                {"voice_name": "fake"}, [], db)
+
+    assert result.status == ChapterStatus.DONE
+    assert engine.texts == [f"{LONG} No.", LONG]  # "No." merged back, scene break never synthesized
+    db.close()
+
+
+@requires_ffmpeg
+def test_synthesize_text_clip_chunks_by_paragraph(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    clip = db.create_text_clip(text=f"{LONG}\n\n{LONG}", voice_profile_id=None)
+    engine = _RecordingEngine()
+    engine.load("cpu")
+
+    result = synthesize_text_clip(clip, engine, engine.clone_profile(None, None, {}),
+                                  {"voice_name": "fake"}, [], db, str(tmp_path / "out"))
+
+    assert result.status == JobStatus.DONE
+    assert engine.texts == [LONG, LONG]
+    db.close()

@@ -27,6 +27,12 @@ def test_chatterbox_engine_declares_cloning_support():
     assert engine.name == "chatterbox"
 
 
+def test_chatterbox_engine_never_takes_very_short_chunks():
+    engine = ChatterboxEngine()
+    assert engine.min_chunk_chars() == 80
+    assert engine.min_chunk_chars() < engine.max_chunk_chars()
+
+
 def _patch_from_pretrained(monkeypatch, side_effect):
     """Replace ChatterboxTTS.from_pretrained with a recording stub. No weights needed."""
     import chatterbox.tts
