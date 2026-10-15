@@ -41,3 +41,23 @@ pub fn invalid<T: Debug>(result: Result<T, DbError>) -> String {
         other => panic!("expected Invalid, got {other:?}"),
     }
 }
+
+/// A "chatterbox" voice with default params and no transcript, like most test_db.py voices.
+pub fn voice_at(db: &Database, name: &str, reference_audio_path: &str) -> VoiceProfile {
+    db.create_voice_profile(&NewVoiceProfile {
+        name, engine: "chatterbox", reference_audio_path, reference_transcript: None,
+        exaggeration: 0.5, cfg_weight: 0.5, temperature: 0.8, transcript_status: None,
+    })
+    .unwrap()
+}
+
+/// test_db.py's `_voice` helper.
+pub fn voice(db: &Database, dir: &Path, name: &str, transcript: Option<&str>,
+             transcript_status: Option<&str>) -> VoiceProfile {
+    db.create_voice_profile(&NewVoiceProfile {
+        name, engine: "chatterbox-turbo", reference_audio_path: &path(dir, &format!("{name}.wav")),
+        reference_transcript: transcript, exaggeration: 0.5, cfg_weight: 0.5, temperature: 0.8,
+        transcript_status,
+    })
+    .unwrap()
+}

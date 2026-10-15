@@ -9,6 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension, Params, Row, TransactionBe
 use crate::models::{Book, Chapter, ChapterOutcome, ChapterStatus, RawChapter, SourceFormat};
 
 mod jobs;
+mod voices;
 
 const SCHEMA: &str = include_str!("schema.sql");
 
@@ -36,7 +37,6 @@ pub(crate) fn now() -> f64 {
 }
 
 /// A UNIQUE / NOT NULL violation (Python: sqlite3.IntegrityError).
-#[allow(dead_code)] // used by later tasks' modules
 pub(crate) fn is_constraint(err: &rusqlite::Error) -> bool {
     matches!(err, rusqlite::Error::SqliteFailure(e, _) if e.code == rusqlite::ErrorCode::ConstraintViolation)
 }
