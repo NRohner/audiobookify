@@ -217,6 +217,100 @@ def write_handmade_epub(path):
             data = body.encode("latin-1") if name == "Text/bytes.xhtml" else body.encode("utf-8")
             z.writestr(f"OEBPS/{name}", data, compress_type=zipfile.ZIP_DEFLATED)
 
+# --- Hand-written EPUBs whose chapters come from the table of contents. Built with
+# zipfile (ebooklib rewrites content); fixed zip timestamps keep the binaries stable. ---
+
+def _para(topic, n=6):
+    return "".join(f"<p>{topic} {i}. {LONG}{FILLER.strip()}</p>" for i in range(n))
+
+
+def write_zip_epub(path, title, docs, spine, ncx=None, nav=None, nav_path="nav.xhtml"):
+    """docs: {path under OEBPS/: body html}; spine: doc paths in reading order."""
+    ids = {name: f"d{i}" for i, name in enumerate(docs)}
+    items = [f'<item id="{ids[n]}" href="{n}" media-type="application/xhtml+xml"/>' for n in docs]
+    if ncx is not None:
+        items.append('<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>')
+    if nav is not None:
+        items.append(f'<item id="nav" href="{nav_path}" media-type="application/xhtml+xml" properties="nav"/>')
+    toc_attr = ' toc="ncx"' if ncx is not None else ""
+    refs = "".join(f'<itemref idref="{ids[n]}"/>' for n in spine)
+    opf = ('<?xml version="1.0" encoding="utf-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" '
+           'unique-identifier="uid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+           f'<dc:identifier id="uid">{path.stem}</dc:identifier><dc:title>{title}</dc:title>'
+           '<dc:creator>Test Author</dc:creator><dc:language>en</dc:language></metadata>'
+           f'<manifest>{"".join(items)}</manifest><spine{toc_attr}>{refs}</spine></package>')
+    page = ('<?xml version="1.0" encoding="utf-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml" '
+            'xmlns:epub="http://www.idpf.org/2007/ops"><head><title>t</title></head><body>{}</body></html>')
+
+    def put(z, name, data, stored=False):
+        info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_STORED if stored else zipfile.ZIP_DEFLATED
+        z.writestr(info, data.encode("utf-8"))
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as z:
+        put(z, "mimetype", "application/epub+zip", stored=True)
+        put(z, "META-INF/container.xml", CONTAINER)
+        put(z, "OEBPS/content.opf", opf)
+        for name, body in docs.items():
+            put(z, f"OEBPS/{name}", page.format(body))
+        if ncx is not None:
+            points = "".join(
+                f'<navPoint id="n{i}"><navLabel><text>{label}</text></navLabel><content src="{href}"/></navPoint>'
+                for i, (label, href) in enumerate(ncx))
+            put(z, "OEBPS/toc.ncx", '<?xml version="1.0" encoding="utf-8"?>\n'
+                '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">'
+                f"<head/><docTitle><text>{title}</text></docTitle><navMap>{points}</navMap></ncx>")
+        if nav is not None:
+            put(z, f"OEBPS/{nav_path}", page.format(nav))
+
+
+def write_calibre_split_epub(path):
+    """Calibre-style: heading-only files, front matter before the first entry, back matter after the last."""
+    docs = {
+        "Text/titlepage.xhtml": "<h1>Split Book</h1><p>Copyright page text that is not part of any chapter.</p>" + _para("Front"),
+        "Text/part1.xhtml": "<h1>BOOK I</h1>",
+        "Text/ch1.xhtml": "<h2>CHAPTER ONE</h2>",
+        "Text/ch1_1.xhtml": _para("First"),
+        "Text/ch1_2.xhtml": _para("Second"),
+        "Text/ch2.xhtml": "<h2>CHAPTER TWO</h2>",
+        "Text/ch2_1.xhtml": _para("Third"),
+        "Text/part2.xhtml": "<h1>BOOK II</h1>",
+        "Text/ch3.xhtml": "<h2>CHAPTER THREE</h2>" + _para("Fourth"),
+        "Text/about.xhtml": "<h2>About the Author</h2>" + _para("Back", 2),
+    }
+    ncx = [("BOOK I", "Text/part1.xhtml"), ("CHAPTER ONE", "Text/ch1.xhtml"), ("  CHAPTER\n TWO ", "Text/ch2.xhtml"),
+           ("BOOK II", "Text/part2.xhtml"), ("CHAPTER THREE", "Text/ch3.xhtml")]
+    write_zip_epub(path, "Calibre Split", docs, list(docs), ncx=ncx)
+
+
+def write_anchors_epub(path):
+    """EPUB 3 nav in another directory, nested entries, chapters by #id, <a name>, percent-encoded and
+    unknown fragments, an out-of-order entry, and page-list and landmarks navs that must be ignored."""
+    docs = {
+        "text/a.xhtml": ("<h1>Part One</h1>" + _para("Opening", 2)
+                         + '<h2 id="c1">Chapter 1</h2>' + _para("One") + '<h2 id="c2">Chapter 2</h2>' + _para("Two")
+                         + '<h2><a name="c3"></a>Chapter 3</h2>' + _para("Three")),
+        "text/b.xhtml": ('<h1>Part Two</h1>' + _para("Mid", 2) + '<h2 id="caf\xe9">Chapter 4</h2>' + _para("Four")
+                         + '<h2 id="c5">Chapter 5</h2>' + _para("Five")),
+        "text/c.xhtml": "<h2>Epilogue</h2>" + _para("Last", 3),
+    }
+    nav = ('<nav epub:type="landmarks"><ol><li><a href="../text/a.xhtml">Start</a></li>'
+           '<li><a href="../text/c.xhtml">Epilogue landmark</a></li></ol></nav>'
+           '<nav epub:type="page-list"><ol><li><a href="../text/a.xhtml#c2">1</a></li>'
+           '<li><a href="../text/b.xhtml#c5">2</a></li><li><a href="../text/c.xhtml">3</a></li></ol></nav>'
+           '<nav epub:type="toc"><ol>'
+           '<li><a href="../text/a.xhtml">Part One</a><ol>'
+           '<li><a href="../text/a.xhtml#c1">Chapter 1</a></li>'
+           '<li><a href="../text/a.xhtml#c2">Chapter 2</a></li>'
+           '<li><a href="../text/a.xhtml#c3">Chapter 3</a></li>'
+           '<li><a href="../text/a.xhtml#c1">Out of order</a></li></ol></li>'
+           '<li><a href="../text/b.xhtml#missing">Part Two</a><ol>'
+           '<li><a href="../text/b.xhtml#caf%C3%A9">Chapter 4</a></li>'
+           '<li><a href="../text/b.xhtml#c5">Chapter 5</a></li></ol></li>'
+           '<li><a href="../text/c.xhtml">Epilogue</a></li></ol></nav>')
+    write_zip_epub(path, "Anchors", docs, list(docs), nav=nav, nav_path="nav/toc.xhtml")
+
 
 MARKDOWN = {
     "basic.md": "# Chapter One: A Beginning\n\nThis is **bold** and _italic_ text with a [link](https://example.com).\n\n"
@@ -393,6 +487,8 @@ def main():
     for name, (title, author, docs) in EBOOKLIB_BOOKS.items():
         write_ebooklib_epub(HERE / "epub" / f"{name}.epub", title, author, docs)
     write_handmade_epub(HERE / "epub" / "handmade.epub")
+    write_calibre_split_epub(HERE / "epub" / "calibre_split.epub")
+    write_anchors_epub(HERE / "epub" / "anchors.epub")
     for name, text in MARKDOWN.items():
         (HERE / "md").mkdir(exist_ok=True)
         (HERE / "md" / name).write_bytes(text.encode("utf-8"))

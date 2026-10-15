@@ -10,7 +10,12 @@
 //!   document counts as a document.
 //! - The title is the first `dc:title` directly under `<metadata>`, else the file
 //!   stem; the author is the first `dc:creator`.
+//!
+//! Chapters come from the table of contents when it has at least 2 usable entries
+//! (see `toc.rs`); otherwise one chapter per spine document of at least
+//! `MIN_CHAPTER_CHARS`.
 
+use std::cell::OnceCell;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -19,7 +24,7 @@ use roxmltree::{Document as Xml, Node};
 use zip::ZipArchive;
 
 use super::html::Document;
-use super::{IngestError, ParsedBook};
+use super::{toc, IngestError, ParsedBook};
 use crate::models::RawChapter;
 use crate::pystr;
 
@@ -32,7 +37,7 @@ fn bad(message: impl Into<String>) -> IngestError {
     IngestError::Epub(message.into())
 }
 
-fn read(zip: &mut ZipArchive<File>, name: &str) -> Result<Vec<u8>, IngestError> {
+pub(super) fn read(zip: &mut ZipArchive<File>, name: &str) -> Result<Vec<u8>, IngestError> {
     let mut file = zip.by_name(name).map_err(|e| bad(format!("{name}: {e}")))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
@@ -49,7 +54,7 @@ fn child<'a, 'i>(node: Node<'a, 'i>, ns: &str, name: &str) -> Option<Node<'a, 'i
 }
 
 /// `urllib.parse.unquote`
-fn unquote(s: &str) -> String {
+pub(super) fn unquote(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -83,10 +88,33 @@ fn normpath(path: &str) -> String {
     parts.join("/")
 }
 
-struct Item {
+pub(super) struct Item {
     id: Option<String>,
-    path: String,
+    /// ebooklib's `file_name`: the percent-decoded href, relative to the OPF, not normalized.
+    pub(super) file_name: String,
+    /// Where it is in the zip.
+    pub(super) path: String,
+    pub(super) media_type: String,
+    /// ebooklib's EpubNav: an XHTML item whose properties include "nav".
+    pub(super) is_nav: bool,
     is_document: bool,
+}
+
+/// The spine's documents, each parsed on first use.
+pub(super) struct Spine {
+    pub(super) names: Vec<String>,
+    html: Vec<String>,
+    parsed: Vec<OnceCell<Document>>,
+}
+
+impl Spine {
+    pub(super) fn len(&self) -> usize {
+        self.html.len()
+    }
+
+    pub(super) fn doc(&self, i: usize) -> &Document {
+        self.parsed[i].get_or_init(|| Document::parse(&self.html[i]))
+    }
 }
 
 pub fn parse(path: impl AsRef<Path>) -> Result<ParsedBook, IngestError> {
@@ -126,10 +154,14 @@ pub fn parse(path: impl AsRef<Path>) -> Result<ParsedBook, IngestError> {
                 .map(|n| {
                     let properties: Vec<&str> = n.attribute("properties").unwrap_or("").split(' ').collect();
                     let href = unquote(n.attribute("href").unwrap_or(""));
+                    let xhtml = n.attribute("media-type") == Some("application/xhtml+xml");
                     Item {
                         id: n.attribute("id").map(str::to_string),
                         path: normpath(&format!("{opf_dir}/{href}")),
-                        is_document: n.attribute("media-type") == Some("application/xhtml+xml") && !properties.contains(&"cover"),
+                        file_name: href,
+                        media_type: n.attribute("media-type").unwrap_or("").to_string(),
+                        is_nav: xhtml && properties.contains(&"nav"),
+                        is_document: xhtml && !properties.contains(&"cover"),
                     }
                 })
                 .collect()
@@ -140,7 +172,7 @@ pub fn parse(path: impl AsRef<Path>) -> Result<ParsedBook, IngestError> {
         .map(|spine| spine.children().filter(|n| n.is_element()).filter_map(|n| n.attribute("idref")).map(str::to_string).collect())
         .unwrap_or_default();
 
-    let mut chapters = Vec::new();
+    let mut docs = Spine { names: Vec::new(), html: Vec::new(), parsed: Vec::new() };
     for idref in &spine {
         let Some(item) = items.iter().find(|i| i.id.as_deref() == Some(idref.as_str())) else { continue };
         if !item.is_document {
@@ -148,8 +180,23 @@ pub fn parse(path: impl AsRef<Path>) -> Result<ParsedBook, IngestError> {
         }
         let bytes = read(&mut zip, &item.path)?;
         // lxml is told the page is UTF-8 whatever it declares; bad bytes become U+FFFD.
-        let html = String::from_utf8_lossy(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes)).into_owned();
-        let doc = Document::parse(&html);
+        docs.html.push(String::from_utf8_lossy(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes)).into_owned());
+        docs.names.push(item.file_name.clone());
+        docs.parsed.push(OnceCell::new());
+    }
+
+    let chapters = match toc::links(&mut zip, &items)? {
+        Some((toc_file, links)) => toc::chapters(&toc_file, &links, &docs),
+        None => Vec::new(),
+    };
+    if !chapters.is_empty() {
+        return Ok(ParsedBook { title, author, chapters });
+    }
+
+    // No usable TOC: one chapter per spine file.
+    let mut chapters = Vec::new();
+    for html in &docs.html {
+        let doc = Document::parse(html); // not cached: one page in memory at a time
         let text = doc.block_text();
         if pystr::len(&text) < MIN_CHAPTER_CHARS {
             continue; // skips cover pages, copyright blurbs, blank dividers
