@@ -43,3 +43,12 @@ fn respelling() {
         assert_eq!(actual, str_of(&case[1]), "{:?}", case[0]);
     }
 }
+
+#[test]
+fn lexicon() {
+    for case in cases("lexicon") {
+        let entries: Vec<(&str, &str)> = case[1].as_array().unwrap().iter().map(|e| (str_of(&e[0]), str_of(&e[1]))).collect();
+        let actual = audiobookify_core::text::apply_lexicon(str_of(&case[0]), entries);
+        assert_eq!(actual, str_of(&case[2]), "{}", case[1]);
+    }
+}
