@@ -1,7 +1,7 @@
 mod common;
 
 use audiobookify_core::db::{book_paragraphs, Database};
-use audiobookify_core::models::{ChapterOutcome, ChapterStatus, SourceFormat};
+use audiobookify_core::models::{ChapterOutcome, ChapterStatus, NewLexiconEntry, SourceFormat};
 use common::*;
 use tempfile::TempDir;
 
@@ -200,4 +200,57 @@ fn replace_breaks_rejects_a_chapter_with_no_words() {
     let dir = TempDir::new().unwrap();
     let (mut db, book_id) = three_chapter_book(dir.path(), &[("One", "a\n\n\n\nb")]); // paragraphs: a, "", b
     invalid(db.replace_chapter_breaks(book_id, &[(0, "X"), (1, "Empty"), (2, "B")]));
+}
+
+fn book_with_state(db: &Database, dir: &std::path::Path, name: &str)
+    -> (i64, Vec<audiobookify_core::models::Chapter>, Vec<audiobookify_core::models::Job>) {
+    let book = md_book(db, dir, &format!("/books/{name}.md"));
+    let chapters = db.add_chapters(book.id, &[raw("One", "a."), raw("Two", "b.")]).unwrap();
+    let jobs: Vec<_> = chapters.iter().map(|c| db.create_job(c.id).unwrap()).collect();
+    db.create_lexicon_entry(&NewLexiconEntry { book_id: book.id, ..NewLexiconEntry::new("Cadeyrn", "KAH-dern", "book") })
+        .unwrap();
+    (book.id, chapters, jobs)
+}
+
+#[test]
+fn delete_book_removes_its_chapters_jobs_lexicon_and_row() {
+    let dir = TempDir::new().unwrap();
+    let db = open(dir.path());
+    let (book_id, chapters, jobs) = book_with_state(&db, dir.path(), "gone");
+
+    let deleted = db.delete_book(book_id).unwrap();
+
+    assert_eq!(deleted, chapters);
+    assert!(db.find_book_by_source("/books/gone.md").unwrap().is_none());
+    assert!(db.list_chapters(book_id).unwrap().is_empty());
+    for job in &jobs {
+        not_found(db.get_job(job.id));
+    }
+    assert!(db.find_lexicon_entry("Cadeyrn", book_id).unwrap().is_none());
+}
+
+#[test]
+fn delete_book_leaves_other_books_and_global_lexicon_alone() {
+    let dir = TempDir::new().unwrap();
+    let db = open(dir.path());
+    let (book_id, _, _) = book_with_state(&db, dir.path(), "gone");
+    let (other_id, other_chapters, other_jobs) = book_with_state(&db, dir.path(), "kept");
+    db.create_lexicon_entry(&NewLexiconEntry::new("Aeneas", "ee-NEE-us", "global")).unwrap();
+
+    db.delete_book(book_id).unwrap();
+
+    assert_eq!(db.get_book(other_id).unwrap().title, "Test Book");
+    assert_eq!(db.list_chapters(other_id).unwrap(), other_chapters);
+    for job in &other_jobs {
+        assert_eq!(db.get_job(job.id).unwrap().chapter_id, job.chapter_id);
+    }
+    assert!(db.find_lexicon_entry("Cadeyrn", other_id).unwrap().is_some());
+    assert!(db.find_lexicon_entry("Aeneas", 0).unwrap().is_some());
+}
+
+#[test]
+fn delete_book_errors_for_a_missing_book() {
+    let dir = TempDir::new().unwrap();
+    let db = open(dir.path());
+    assert_eq!(not_found(db.delete_book(999)), "no book with id 999");
 }

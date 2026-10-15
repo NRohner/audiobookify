@@ -172,6 +172,24 @@ impl Database {
         Ok(())
     }
 
+    /// Delete the book with its chapters, their jobs and its book-scoped lexicon entries.
+    ///
+    /// Returns the deleted chapters, so callers can clean up their files.
+    pub fn delete_book(&self, book_id: i64) -> Result<Vec<Chapter>> {
+        self.get_book(book_id)?; // NotFound when missing
+        let chapters = self.list_chapters(book_id)?;
+        // `&self` is fine: only this transaction's own statements run inside it, and it never nests.
+        let tx = self.conn.unchecked_transaction()?;
+        for chapter in &chapters {
+            tx.execute("DELETE FROM jobs WHERE chapter_id = ?1", [chapter.id])?;
+        }
+        tx.execute("DELETE FROM chapters WHERE book_id = ?1", [book_id])?;
+        tx.execute("DELETE FROM lexicon_entries WHERE book_id = ?1", [book_id])?;
+        tx.execute("DELETE FROM books WHERE id = ?1", [book_id])?;
+        tx.commit()?;
+        Ok(chapters)
+    }
+
     /// Re-split the book's paragraphs at `breaks` [(start paragraph, title), ...].
     ///
     /// A chapter covering exactly the same paragraphs as before keeps its row (and so its

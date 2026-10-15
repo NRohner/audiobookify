@@ -217,6 +217,27 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
             raise HTTPException(status_code=404, detail="book not found")
         return _book_to_dict(db, book)
 
+    @app.delete("/api/books/{book_id}")
+    def delete_book(book_id: int, db: Database = Depends(get_db)):
+        try:
+            book = db.get_book(book_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="book not found")
+        for chapter in db.list_chapters(book_id):
+            latest = db.latest_job_for_chapter(chapter.id)
+            if latest is not None and latest.status in (JobStatus.QUEUED, JobStatus.GENERATING):
+                raise HTTPException(status_code=409, detail="This book is rendering. Stop rendering it "
+                                                            "before deleting it.")
+        chapters = db.delete_book(book_id)
+        for chapter in chapters:
+            clear_cache(chapter.id)
+        # Rendered MP3s stay. Only remove the copy we staged, never anything outside upload_dir.
+        root = Path(upload_dir).resolve()
+        staged = Path(book.source_path).resolve().parent
+        if staged != root and staged.is_relative_to(root):
+            shutil.rmtree(staged, ignore_errors=True)
+        return {"ok": True}
+
     @app.get("/api/books/{book_id}/text")
     def get_book_text(book_id: int, db: Database = Depends(get_db)):
         try:

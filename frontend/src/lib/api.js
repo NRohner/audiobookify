@@ -49,6 +49,7 @@ export const api = {
 
   listVoices: () => request("/api/voices"),
   createVoice: (formData) => request("/api/voices", { method: "POST", body: formData }),
+  deleteBook: (id) => request(`/api/books/${id}`, { method: "DELETE" }),
   deleteVoice: (id) => request(`/api/voices/${id}`, { method: "DELETE" }),
   updateVoiceTranscript: (id, transcript) =>
     request(`/api/voices/${id}`, {
