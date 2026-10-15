@@ -197,7 +197,7 @@ fn write_audio(dir: &Path, name: &str) -> String {
 
 fn is_stored_under_voices(dir: &Path, reference_audio_path: &str) -> bool {
     let stored = Path::new(reference_audio_path);
-    stored.starts_with(dir.join("voices")) && stored.is_file()
+    stored.is_file() && fs::canonicalize(stored).unwrap().starts_with(fs::canonicalize(dir).unwrap().join("voices"))
 }
 
 #[test]
@@ -276,4 +276,34 @@ fn migration_does_not_crash_when_storing_a_profile_raises_an_io_error() {
     assert_eq!(reopened.find_voice_profile_by_name("Broken").unwrap().unwrap().reference_audio_path, broken_audio);
     let fine = reopened.find_voice_profile_by_name("Fine").unwrap().unwrap();
     assert!(is_stored_under_voices(dir.path(), &fine.reference_audio_path));
+}
+
+#[test]
+fn migration_leaves_an_already_migrated_clip_alone_under_a_symlinked_voices_dir() {
+    let dir = TempDir::new().unwrap();
+    let resolved = fs::canonicalize(dir.path()).unwrap();
+    let real = resolved.join("real");
+    fs::create_dir_all(&real).unwrap();
+    std::os::unix::fs::symlink(&real, resolved.join("link")).unwrap();
+    // The profile already holds the resolved path, as Python's resolve() stored it.
+    let clip_dir = real.join("voices").join("1_Nova");
+    fs::create_dir_all(&clip_dir).unwrap();
+    let clip = clip_dir.join("reference.wav");
+    fs::write(&clip, b"precious audio").unwrap();
+    drop(audiobookify_core::db::Database::open(real.join("test.db"), real.join("voices")).unwrap()); // creates the schema
+    let conn = Connection::open(real.join("test.db")).unwrap();
+    conn.execute(
+        "INSERT INTO voice_profiles (id, name, engine, reference_audio_path, exaggeration, cfg_weight, \
+         temperature, created_at) VALUES (1, 'Nova', 'chatterbox', ?1, 0.5, 0.5, 0.8, 0)",
+        [clip.to_string_lossy().as_ref()],
+    ).unwrap();
+
+    let warnings = migrate_voice_reference_audio(&conn, &resolved.join("link").join("voices")).unwrap();
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(fs::read(&clip).unwrap(), b"precious audio");
+    let stored: String = conn
+        .query_row("SELECT reference_audio_path FROM voice_profiles WHERE id = 1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(stored, clip.to_string_lossy());
 }

@@ -2,6 +2,7 @@
 //! Each one checks first, so running them on an up-to-date file does nothing.
 
 use std::collections::HashSet;
+use std::fs;
 use std::path::Path;
 
 use rusqlite::Connection;
@@ -51,7 +52,8 @@ fn columns(conn: &Connection, table: &str) -> rusqlite::Result<HashSet<String>> 
 /// points the profile at the copy. A profile that can't be migrated is left as it
 /// is and reported in the returned warnings, so one bad file can't block startup.
 pub fn migrate_voice_reference_audio(conn: &Connection, voices_dir: &Path) -> Result<Vec<String>> {
-    let voices_root = std::path::absolute(voices_dir)?;
+    // Resolve symlinks like Python's Path.resolve(); the dir may not exist yet.
+    let voices_root = fs::canonicalize(voices_dir).or_else(|_| std::path::absolute(voices_dir))?;
     let profiles: Vec<(i64, String, String)> = {
         let mut stmt = conn.prepare("SELECT id, name, reference_audio_path FROM voice_profiles")?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
@@ -60,7 +62,8 @@ pub fn migrate_voice_reference_audio(conn: &Connection, voices_dir: &Path) -> Re
     let mut warnings = Vec::new();
     for (id, name, current) in profiles {
         let current_path = Path::new(&current);
-        if current_path.starts_with(&voices_root) {
+        let resolved = fs::canonicalize(current_path).unwrap_or_else(|_| current_path.to_path_buf());
+        if resolved.starts_with(&voices_root) {
             continue;
         }
         if !current_path.is_file() {
