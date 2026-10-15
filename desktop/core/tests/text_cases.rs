@@ -84,3 +84,14 @@ fn paragraphs() {
         assert_eq!(audiobookify_core::text::split_paragraphs(str_of(&case[0])), expected, "{}", case[0]);
     }
 }
+
+#[test]
+fn chunks() {
+    for (i, case) in cases("chunks").iter().enumerate() {
+        let (text, max, min) = (str_of(&case[0]), fixture::usize_of(&case[1]), fixture::usize_of(&case[2]));
+        let chunks = audiobookify_core::text::chunk_text(text, max, min);
+        let actual: Vec<(&str, &str)> = chunks.iter().map(|c| (c.text.as_str(), c.ends_with.as_str())).collect();
+        let expected: Vec<(&str, &str)> = case[3].as_array().unwrap().iter().map(|c| (str_of(&c[0]), str_of(&c[1]))).collect();
+        assert_eq!(actual, expected, "case {i}: {max}/{min} {text:?}");
+    }
+}
