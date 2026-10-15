@@ -1,5 +1,6 @@
 //! The audiobookify SQLite database, ported from `src/audiobookify/db.py`.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -155,6 +156,73 @@ impl Database {
         self.conn.execute("UPDATE chapters SET duration = ?1 WHERE id = ?2", params![duration, chapter_id])?;
         Ok(())
     }
+
+    /// Re-split the book's paragraphs at `breaks` [(start paragraph, title), ...].
+    ///
+    /// A chapter covering exactly the same paragraphs as before keeps its row (and so its
+    /// audio and status); any other range becomes a new pending chapter. Returns the old
+    /// chapters that no longer exist, so callers can clean up their files.
+    pub fn replace_chapter_breaks(&mut self, book_id: i64, breaks: &[(usize, &str)]) -> Result<Vec<Chapter>> {
+        let old = self.list_chapters(book_id)?;
+        let (paragraphs, old_starts) = book_paragraphs(&old);
+        let starts: Vec<usize> = breaks.iter().map(|&(start, _)| start).collect();
+        if starts.first() != Some(&0)
+            || starts.last().is_some_and(|&last| last >= paragraphs.len())
+            || starts.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(DbError::Invalid("chapter breaks must start at the first paragraph and go forward".into()));
+        }
+        let ends: Vec<usize> = starts[1..].iter().copied().chain([paragraphs.len()]).collect();
+        let texts: Vec<String> = starts.iter().zip(&ends).map(|(&s, &e)| paragraphs[s..e].join("\n\n")).collect();
+        let titles: Vec<&str> = breaks.iter().map(|&(_, title)| title.trim()).collect();
+        if titles.iter().any(|title| title.is_empty()) {
+            return Err(DbError::Invalid("every chapter needs a title".into()));
+        }
+        if texts.iter().any(|text| text.trim().is_empty()) {
+            return Err(DbError::Invalid("every chapter needs some words in it".into()));
+        }
+
+        let old_ends: Vec<usize> = old_starts[1..].iter().copied().chain([paragraphs.len()]).collect();
+        let by_range: HashMap<(usize, usize), i64> =
+            old_starts.iter().zip(&old_ends).zip(&old).map(|((&s, &e), c)| ((s, e), c.id)).collect();
+        let kept: Vec<Option<i64>> =
+            starts.iter().zip(&ends).map(|(&s, &e)| by_range.get(&(s, e)).copied()).collect();
+        let removed: Vec<Chapter> = old.iter().filter(|c| !kept.contains(&Some(c.id))).cloned().collect();
+
+        let tx = self.conn.transaction()?;
+        // Park every index out of the way so the UNIQUE(book_id, order_index) holds mid-update.
+        tx.execute("UPDATE chapters SET order_index = -1 - order_index WHERE book_id = ?1", [book_id])?;
+        for chapter in &removed {
+            tx.execute("DELETE FROM jobs WHERE chapter_id = ?1", [chapter.id])?;
+            tx.execute("DELETE FROM chapters WHERE id = ?1", [chapter.id])?;
+        }
+        for (i, (title, text)) in titles.iter().zip(&texts).enumerate() {
+            match kept[i] {
+                Some(id) => tx.execute("UPDATE chapters SET order_index = ?1, title = ?2 WHERE id = ?3",
+                                       params![i as i64, title, id])?,
+                None => tx.execute(
+                    "INSERT INTO chapters (book_id, order_index, title, text) VALUES (?1, ?2, ?3, ?4)",
+                    params![book_id, i as i64, title, text],
+                )?,
+            };
+        }
+        tx.commit()?;
+        Ok(removed)
+    }
+}
+
+/// The book as one paragraph list, plus the index each chapter starts at.
+///
+/// Chapter text is paragraphs joined by a blank line, and split/join on it are exact
+/// inverses, so chapter breaks can move between paragraphs without losing a character.
+pub fn book_paragraphs(chapters: &[Chapter]) -> (Vec<&str>, Vec<usize>) {
+    let mut paragraphs = Vec::new();
+    let mut starts = Vec::new();
+    for chapter in chapters {
+        starts.push(paragraphs.len());
+        paragraphs.extend(chapter.text.split("\n\n"));
+    }
+    (paragraphs, starts)
 }
 
 fn book_from_row(r: &Row<'_>) -> rusqlite::Result<Book> {
