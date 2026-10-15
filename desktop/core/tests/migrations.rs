@@ -307,3 +307,46 @@ fn migration_leaves_an_already_migrated_clip_alone_under_a_symlinked_voices_dir(
         .unwrap();
     assert_eq!(stored, clip.to_string_lossy());
 }
+
+#[test]
+fn migration_moves_a_clip_in_a_sibling_dir_sharing_the_voices_prefix() {
+    // Path::starts_with compares components, so "voices2" is not "voices" (a string prefix would say it is).
+    let dir = TempDir::new().unwrap();
+    let sibling = dir.path().join("voices2").join("1_Nova");
+    fs::create_dir_all(&sibling).unwrap();
+    let clip = sibling.join("reference.wav");
+    fs::write(&clip, b"audio").unwrap();
+    let db = open(dir.path());
+    voice_at(&db, "Nova", &clip.to_string_lossy());
+    drop(db);
+
+    let reopened = open(dir.path());
+
+    let profile = reopened.find_voice_profile_by_name("Nova").unwrap().unwrap();
+    assert!(is_stored_under_voices(dir.path(), &profile.reference_audio_path));
+}
+
+#[test]
+fn migration_skips_a_lexically_stored_path_that_is_a_symlink_elsewhere() {
+    let dir = TempDir::new().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let elsewhere = root.join("elsewhere.wav");
+    fs::write(&elsewhere, b"audio").unwrap();
+    fs::create_dir_all(root.join("voices")).unwrap();
+    let link = root.join("voices").join("ref.wav");
+    std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+    drop(open(&root));
+    let conn = raw_conn(&root);
+    conn.execute(
+        "INSERT INTO voice_profiles (id, name, engine, reference_audio_path, exaggeration, cfg_weight, \
+         temperature, created_at) VALUES (1, 'Nova', 'chatterbox', ?1, 0.5, 0.5, 0.8, 0)",
+        [link.to_string_lossy().as_ref()],
+    ).unwrap();
+
+    let warnings = migrate_voice_reference_audio(&conn, &root.join("voices")).unwrap();
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let stored: String = conn
+        .query_row("SELECT reference_audio_path FROM voice_profiles WHERE id = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(stored, link.to_string_lossy());
+}

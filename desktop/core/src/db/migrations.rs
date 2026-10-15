@@ -63,7 +63,7 @@ pub fn migrate_voice_reference_audio(conn: &Connection, voices_dir: &Path) -> Re
     for (id, name, current) in profiles {
         let current_path = Path::new(&current);
         let resolved = fs::canonicalize(current_path).unwrap_or_else(|_| current_path.to_path_buf());
-        if resolved.starts_with(&voices_root) {
+        if current_path.starts_with(&voices_root) || resolved.starts_with(&voices_root) {
             continue;
         }
         if !current_path.is_file() {

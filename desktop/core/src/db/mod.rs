@@ -48,7 +48,9 @@ pub struct Database {
 }
 
 impl Database {
-    /// `voices_dir` is where voice reference clips live permanently (repo `voices/` today).
+    /// `voices_dir` is where voice reference clips live permanently. While the Python app shares
+    /// this file it must be the Python app's `VOICES_DIR` (the repo's `voices/` dir); any other dir
+    /// makes every open rewrite `reference_audio_path` for all profiles (and Python rewrites them back).
     pub fn open(path: impl AsRef<Path>, voices_dir: impl AsRef<Path>) -> Result<Self> {
         let mut conn = Connection::open(path)?;
         // The API and the worker write this file from two processes at once.
@@ -56,8 +58,12 @@ impl Database {
         // "database is locked".
         conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0))?;
         conn.busy_timeout(Duration::from_secs(5))?;
-        // IMMEDIATE takes the write lock up front, so two processes opening at once
-        // can't both decide a column is missing and both try to add it.
+        // Match Python, which never enforced REFERENCES (the bundled SQLite defaults them on);
+        // existing DBs may hold dangling refs. Must precede the transaction: it's a no-op inside one.
+        conn.pragma_update(None, "foreign_keys", false)?;
+        // IMMEDIATE serializes Rust openers and takes the write lock before the column checks.
+        // Python's own migrations don't lock, so this is not a cross-language guarantee
+        // (real DBs are already migrated).
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute_batch(SCHEMA)?;
         migrations::migrate_columns(&tx)?;

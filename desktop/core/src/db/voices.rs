@@ -110,12 +110,14 @@ fn voice_from_row(r: &Row<'_>) -> rusqlite::Result<VoiceProfile> {
     })
 }
 
-/// A JSON text column; NULL or empty is None, as in db.py.
+/// A JSON text column; NULL, empty or JSON `null` is None, as in db.py.
 fn json_column(r: &Row<'_>, name: &str) -> rusqlite::Result<Option<serde_json::Value>> {
     let text: Option<String> = r.get(name)?;
     match text.as_deref() {
         None | Some("") => Ok(None),
-        Some(text) => serde_json::from_str(text).map(Some).map_err(|e| {
+        Some(text) => serde_json::from_str::<serde_json::Value>(text)
+            .map(|v| if v.is_null() { None } else { Some(v) })
+            .map_err(|e| {
             let index = r.as_ref().column_index(name).unwrap_or(0);
             rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(e))
         }),

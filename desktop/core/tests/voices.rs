@@ -171,3 +171,31 @@ fn voice_tempo_defaults_to_one_and_can_be_set() {
     assert_eq!(db.get_voice_profile_by_id(v.id).unwrap().unwrap().tempo, 0.88);
     not_found(db.set_voice_tempo(999, 0.9));
 }
+
+#[test]
+fn deleting_a_voice_used_by_a_text_clip_succeeds_like_python() {
+    // Python's sqlite3 never enforced the schema's REFERENCES; neither may we.
+    let dir = TempDir::new().unwrap();
+    let db = open(dir.path());
+    let v = voice_at(&db, "Nova", "/a.wav");
+    db.create_text_clip("Hi.", Some(v.id), audiobookify_core::models::DEFAULT_ENGINE, None).unwrap();
+    db.delete_voice_profile(v.id).unwrap();
+    assert!(db.get_voice_profile_by_id(v.id).unwrap().is_none());
+}
+
+#[test]
+fn a_text_clip_with_a_dangling_voice_id_can_be_created() {
+    let dir = TempDir::new().unwrap();
+    let db = open(dir.path());
+    db.create_text_clip("Hi.", Some(999), audiobookify_core::models::DEFAULT_ENGINE, None).unwrap();
+}
+
+#[test]
+fn stored_json_null_reference_words_reads_as_none() {
+    let dir = TempDir::new().unwrap();
+    let db = open(dir.path());
+    let v = voice_at(&db, "Nova", "/a.wav");
+    let conn = rusqlite::Connection::open(dir.path().join("test.db")).unwrap();
+    conn.execute("UPDATE voice_profiles SET reference_words = 'null' WHERE id = ?1", [v.id]).unwrap();
+    assert_eq!(db.get_voice_profile_by_id(v.id).unwrap().unwrap().reference_words, None);
+}
