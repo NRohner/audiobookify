@@ -52,3 +52,35 @@ fn lexicon() {
         assert_eq!(actual, str_of(&case[2]), "{}", case[1]);
     }
 }
+
+#[test]
+fn numbers() {
+    for case in cases("numbers") {
+        let actual = audiobookify_core::text::expand_numbers(str_of(&case[0]));
+        fixture::assert_same(str_of(&case[0]), str_of(&case[1]), &actual);
+    }
+}
+
+#[test]
+fn normalize() {
+    for case in cases("normalize") {
+        let actual = audiobookify_core::text::normalize_text(str_of(&case[0]));
+        assert_eq!(actual, str_of(&case[1]), "{}", case[0]);
+    }
+}
+
+#[test]
+fn sentences() {
+    for case in cases("sentences") {
+        let expected: Vec<&str> = case[1].as_array().unwrap().iter().map(str_of).collect();
+        assert_eq!(audiobookify_core::text::split_sentences(str_of(&case[0])), expected, "{}", case[0]);
+    }
+}
+
+#[test]
+fn paragraphs() {
+    for case in cases("paragraphs") {
+        let expected: Vec<&str> = case[1].as_array().unwrap().iter().map(str_of).collect();
+        assert_eq!(audiobookify_core::text::split_paragraphs(str_of(&case[0])), expected, "{}", case[0]);
+    }
+}
