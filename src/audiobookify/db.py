@@ -322,6 +322,21 @@ class Database:
         ).fetchall()
         return [_row_to_chapter(row) for row in rows]
 
+    def delete_book(self, book_id: int) -> List[Chapter]:
+        """Delete the book with its chapters, their jobs and its book-scoped lexicon entries.
+
+        Returns the deleted chapters, so callers can clean up their files.
+        """
+        self.get_book(book_id)  # KeyError when missing
+        chapters = self.list_chapters(book_id)
+        with self.conn:
+            for chapter in chapters:
+                self.conn.execute("DELETE FROM jobs WHERE chapter_id = ?", (chapter.id,))
+            self.conn.execute("DELETE FROM chapters WHERE book_id = ?", (book_id,))
+            self.conn.execute("DELETE FROM lexicon_entries WHERE book_id = ?", (book_id,))
+            self.conn.execute("DELETE FROM books WHERE id = ?", (book_id,))
+        return chapters
+
     def replace_chapter_breaks(self, book_id: int, breaks: List[tuple]) -> List[Chapter]:
         """Re-split the book's paragraphs at `breaks` [(start paragraph, title), ...].
 

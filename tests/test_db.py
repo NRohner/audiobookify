@@ -996,3 +996,54 @@ def test_text_clip_tempo_is_stored_and_defaults_to_the_voices(tmp_path):
     db = Database(str(tmp_path / "test.db"))
     assert db.create_text_clip("Hi.", None).tempo is None
     assert db.create_text_clip("Hi.", None, tempo=0.9).tempo == 0.9
+
+
+def _book_with_chapters_and_state(db, tmp_path, name):
+    book = db.create_book(
+        title=name, author=None, source_path=f"/books/{name}.md",
+        source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / name),
+    )
+    chapters = db.add_chapters(book.id, [RawChapter("One", "a."), RawChapter("Two", "b.")])
+    jobs = [db.create_job(c.id) for c in chapters]
+    entry = db.create_lexicon_entry("Cadeyrn", "KAH-dern", scope="book", book_id=book.id)
+    return book, chapters, jobs, entry
+
+
+def test_delete_book_removes_its_chapters_jobs_lexicon_and_row(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book, chapters, jobs, _ = _book_with_chapters_and_state(db, tmp_path, "gone")
+
+    deleted = db.delete_book(book.id)
+
+    assert [c.id for c in deleted] == [c.id for c in chapters]
+    assert db.find_book_by_source("/books/gone.md") is None
+    assert db.list_chapters(book.id) == []
+    for job in jobs:
+        with pytest.raises(KeyError):
+            db.get_job(job.id)
+    assert db.find_lexicon_entry("Cadeyrn", book_id=book.id) is None
+    db.close()
+
+
+def test_delete_book_leaves_other_books_and_global_lexicon_alone(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    book, _, _, _ = _book_with_chapters_and_state(db, tmp_path, "gone")
+    other, other_chapters, other_jobs, _ = _book_with_chapters_and_state(db, tmp_path, "kept")
+    db.create_lexicon_entry("Aeneas", "ee-NEE-us", scope="global")
+
+    db.delete_book(book.id)
+
+    assert db.get_book(other.id).title == "kept"
+    assert [c.id for c in db.list_chapters(other.id)] == [c.id for c in other_chapters]
+    for job in other_jobs:
+        assert db.get_job(job.id).chapter_id == job.chapter_id
+    assert db.find_lexicon_entry("Cadeyrn", book_id=other.id) is not None
+    assert db.find_lexicon_entry("Aeneas", book_id=0) is not None
+    db.close()
+
+
+def test_delete_book_raises_for_a_missing_book(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    with pytest.raises(KeyError):
+        db.delete_book(999)
+    db.close()
