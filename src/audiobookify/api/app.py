@@ -226,7 +226,7 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         for chapter in db.list_chapters(book_id):
             latest = db.latest_job_for_chapter(chapter.id)
             if latest is not None and latest.status in (JobStatus.QUEUED, JobStatus.GENERATING):
-                raise HTTPException(status_code=409, detail="This book is rendering. Pause or cancel it "
+                raise HTTPException(status_code=409, detail="This book is rendering. Stop rendering it "
                                                             "before deleting it.")
         chapters = db.delete_book(book_id)
         for chapter in chapters:

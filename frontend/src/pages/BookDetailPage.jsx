@@ -202,6 +202,7 @@ export default function BookDetailPage() {
     setError(null);
     try {
       await api.deleteBook(bookId);
+      if (player.book?.id === Number(bookId)) player.clear();
       navigate("/");
     } catch (e) {
       setError(e.message);

@@ -73,6 +73,18 @@ export function PlayerProvider({ children }) {
     setBook((current) => (current && fresh?.id === current.id ? fresh : current)); // callers may hold a stale closure
   }
 
+  // Back to the no-book state the app starts in (e.g. the playing book was deleted).
+  function clear() {
+    const a = audio.current;
+    a.pause();
+    a.removeAttribute("src");
+    a.load();
+    setBook(null);
+    setChapterId(null);
+    setTime(0);
+    setPlaying(false);
+  }
+
   function onEnded() {
     const i = timeline.chapters.findIndex((c) => c.id === chapterId);
     const next = timeline.chapters[i + 1];
@@ -91,7 +103,7 @@ export function PlayerProvider({ children }) {
 
   const value = {
     book, chapter, timeline, time, bookTime, playing, rate,
-    play, toggle, seekBook, step, setRate, refreshBook,
+    play, toggle, seekBook, step, setRate, refreshBook, clear,
     skip: (seconds) => seekBook(bookTime + seconds),
   };
 

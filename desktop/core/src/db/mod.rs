@@ -178,6 +178,7 @@ impl Database {
     pub fn delete_book(&self, book_id: i64) -> Result<Vec<Chapter>> {
         self.get_book(book_id)?; // NotFound when missing
         let chapters = self.list_chapters(book_id)?;
+        // `&self` is fine: only this transaction's own statements run inside it, and it never nests.
         let tx = self.conn.unchecked_transaction()?;
         for chapter in &chapters {
             tx.execute("DELETE FROM jobs WHERE chapter_id = ?1", [chapter.id])?;
