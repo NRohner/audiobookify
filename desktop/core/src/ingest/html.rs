@@ -38,8 +38,11 @@ const VOID_TAGS: [&str; 24] = [
 const STRING_CONTAINERS: [&str; 3] = ["template", "rt", "rp"];
 /// The attributes anything here reads; the rest are dropped at parse time.
 const KEPT_ATTRS: [&str; 4] = ["id", "name", "href", "epub:type"];
-/// Marks where a TOC anchor cuts a document (`SENTINEL` in `ingest/epub.py`).
-const SENTINEL: char = '\u{e000}';
+/// Private use area: candidates for the marker where a TOC anchor cuts a document
+/// (`SENTINEL_RANGE` in `ingest/epub.py`).
+const SENTINEL_RANGE: std::ops::RangeInclusive<u32> = 0xE000..=0xF8FF;
+/// Passed where there are no cuts, so the marker is never used.
+const SENTINEL_FILLER: char = '\u{e000}';
 
 enum Tok {
     Start(String, bool, Vec<(String, String)>),
@@ -207,14 +210,15 @@ impl Document {
 
     /// Strings in document order as (text, nearest block ancestor, counts for headings),
     /// with head/nav/script/style removed, `<br>` read as " ", and pretty-print whitespace.
-    /// A `SENTINEL` string goes just before each element in `cuts` (sorted node ids), as
-    /// `anchor.insert_before(NavigableString(SENTINEL))` puts it after the padding.
+    /// A `sentinel` string goes just before each element in `cuts` (sorted node ids), as
+    /// `anchor.insert_before(NavigableString(sentinel))` puts it after the padding.
     fn strings<'a>(
         &'a self,
         children: &'a [usize],
         formatted: bool,
         block: Option<usize>,
         cuts: &[usize],
+        sentinel: char,
         out: &mut Vec<(String, Option<usize>, bool)>,
     ) {
         // Explicit stack instead of recursion: nothing closes implicitly, so unclosed tags
@@ -249,7 +253,7 @@ impl Document {
             let (formatted, block) = (top.formatted, top.block);
             pad(out, formatted, block);
             if cuts.binary_search(&child).is_ok() {
-                out.push((SENTINEL.to_string(), block, true));
+                out.push((sentinel.to_string(), block, true));
             }
             match &self.nodes[child].kind {
                 Kind::Text { text, in_heading } => out.push((text.clone(), block, *in_heading)),
@@ -267,26 +271,31 @@ impl Document {
     /// `_block_text`: text under one block element joined as-is, paragraphs joined by
     /// blank lines, whitespace inside a paragraph collapsed.
     pub fn block_text(&self) -> String {
-        self.block_text_with_cuts(&[])
+        self.block_text_with_cuts(&[], SENTINEL_FILLER)
     }
 
     /// `_split_at_anchors`: the text cut just before each anchor (node ids from
-    /// `find_anchor`), each piece cleaned paragraph by paragraph. Like Python it splits
-    /// on every `SENTINEL`, so one already in the text makes an extra piece.
-    pub fn block_text_split(&self, anchors: &[usize]) -> Vec<String> {
+    /// `find_anchor`), each piece cleaned paragraph by paragraph. The cut marker is the
+    /// first private-use code point not in the page's text (books use them for
+    /// ornaments), so it can't be mistaken for text; with no anchors none is needed.
+    /// None when all 6,400 are taken: the caller gives up on the TOC.
+    pub fn block_text_split(&self, anchors: &[usize]) -> Option<Vec<String>> {
+        let text = self.block_text();
+        let clean = |piece: &str| piece.split("\n\n").map(pystr::strip).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n");
+        if anchors.is_empty() {
+            return Some(vec![clean(&text)]);
+        }
+        let sentinel = SENTINEL_RANGE.filter_map(char::from_u32).find(|&c| !text.contains(c))?;
         let mut cuts = anchors.to_vec();
         cuts.sort_unstable();
-        self.block_text_with_cuts(&cuts)
-            .split(SENTINEL)
-            .map(|piece| piece.split("\n\n").map(pystr::strip).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n"))
-            .collect()
+        Some(self.block_text_with_cuts(&cuts, sentinel).split(sentinel).map(clean).collect())
     }
 
-    fn block_text_with_cuts(&self, cuts: &[usize]) -> String {
+    fn block_text_with_cuts(&self, cuts: &[usize], sentinel: char) -> String {
         let (body, children) = self.body();
         let mut strings = Vec::new();
         let block = if BLOCK_TAGS.contains(&self.name(body).unwrap_or("")) { Some(body) } else { None };
-        self.strings(&children, true, block, cuts, &mut strings);
+        self.strings(&children, true, block, cuts, sentinel, &mut strings);
 
         let mut paragraphs = Vec::new();
         let mut current: Vec<&str> = Vec::new();
@@ -311,7 +320,7 @@ impl Document {
         let (_, children) = self.body();
         let heading = self.find_heading(&children)?;
         let mut strings = Vec::new();
-        self.strings(&self.nodes[heading].children, false, None, &[], &mut strings); // padding is stripped anyway
+        self.strings(&self.nodes[heading].children, false, None, &[], SENTINEL_FILLER, &mut strings); // padding is stripped anyway
         Some(strings.iter().filter(|(_, _, in_heading)| *in_heading).map(|(t, _, _)| pystr::strip(t)).collect())
     }
 
@@ -446,7 +455,8 @@ mod tests {
         ("two_anchors", "<body>\n<p id=\"a\">A.</p><div><p>B.</p><p id=\"c\">C.</p></div>\n</body>", &["a", "c"], &["", "A.\n\nB.", "C."]),
         ("minified_inline_siblings", "<body><p><span>a</span><span id=\"s\">b</span></p></body>", &["s"], &["a", "b"]),
         ("anchor_after_dropped_leading_text", "<body>lead<p id=\"x\">para</p>tail</body>", &["x"], &["", "para\n\ntail"]),
-        ("sentinel_in_the_text_splits_too", "<body>\n<p>x\u{e000}y</p>\n</body>", &[], &["x", "y"]),
+        ("private_use_char_in_the_text_without_anchors", "<body>\n<p>x\u{e000}y</p>\n</body>", &[], &["x\u{e000}y"]),
+        ("private_use_char_in_the_text_with_an_anchor", "<body><p>x\u{e000}y</p><p id=\"c\">C</p></body>", &["c"], &["x\u{e000}y", "C"]),
         ("anchor_in_template", "<body>\n<p>a <template><b id=\"t\">t</b></template> b</p>\n</body>", &["t"], &["a", "t b"]),
     ];
 
@@ -455,7 +465,7 @@ mod tests {
         for (name, page, fragments, pieces) in SPLIT_CASES {
             let doc = Document::parse(page);
             let anchors: Vec<usize> = fragments.iter().map(|f| doc.find_anchor(f).unwrap_or_else(|| panic!("{name}: no #{f}"))).collect();
-            assert_eq!(doc.block_text_split(&anchors), *pieces, "{name}");
+            assert_eq!(doc.block_text_split(&anchors).unwrap(), *pieces, "{name}");
         }
         assert_eq!(Document::parse("<body><p id=\"a\">x</p></body>").find_anchor("b"), None);
     }
@@ -498,7 +508,7 @@ mod tests {
                 assert_eq!(text.split("\n\n").filter(|p| *p == "x").count(), 50_000);
                 assert_eq!(doc.first_heading(), None);
                 assert_eq!(doc.find_anchor("nope"), None);
-                assert_eq!(doc.block_text_split(&[]).len(), 1);
+                assert_eq!(doc.block_text_split(&[]).unwrap().len(), 1);
                 let nav = format!("<nav epub:type=\"toc\">{}<a href=\"a\">deep</a>", "<li>".repeat(50_000));
                 assert_eq!(Document::parse(&nav).toc_links(), Some(vec![("deep".to_string(), "a".to_string())]));
             })

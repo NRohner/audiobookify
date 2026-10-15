@@ -257,6 +257,28 @@ def test_ncx_page_list_is_ignored(tmp_path):
     assert _titles(epub.parse(str(path)).chapters) == ["A", "B"]
 
 
+def test_private_use_char_already_in_the_text_is_kept_when_an_anchor_splits(tmp_path):
+    docs = {"all.xhtml": '<p>x\ue000y</p><p id="c">C</p>'}
+    chapters = _parse(tmp_path, docs, ncx=[("A", "all.xhtml"), ("C", "all.xhtml#c")])
+    assert _titles(chapters) == ["A", "C"]
+    assert [c.text for c in chapters] == ["x\ue000y", "C"]
+
+
+def test_anchors_in_one_file_listed_out_of_order_skip_the_second(tmp_path):
+    docs = {"all.xhtml": '<p id="a">A.</p><p id="b">B.</p><p id="c">C.</p>'}
+    ncx = [("A", "all.xhtml#a"), ("C", "all.xhtml#c"), ("B late", "all.xhtml#b")]
+    chapters = _parse(tmp_path, docs, ncx=ncx)
+    assert _titles(chapters) == ["A", "C"]
+    assert [c.text for c in chapters] == ["A.\n\nB.", "C."]
+
+
+def test_top_of_file_entry_and_anchor_entries_share_a_file(tmp_path):
+    docs = {"all.xhtml": '<p>Intro.</p><h2 id="c1">One</h2><p>x</p>'}
+    chapters = _parse(tmp_path, docs, ncx=[("Top", "all.xhtml"), ("One", "all.xhtml#c1")])
+    assert _titles(chapters) == ["Top", "One"]
+    assert [c.text for c in chapters] == ["Intro.", "One\n\nx"]
+
+
 def test_unknown_fragment_starts_at_top_of_file(tmp_path):
     docs = {"a.xhtml": "<p>A.</p>", "b.xhtml": "<p>B.</p>"}
     chapters = _parse(tmp_path, docs, ncx=[("A", "a.xhtml#nope"), ("B", "b.xhtml")])

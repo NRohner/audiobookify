@@ -250,6 +250,39 @@ fn ncx_page_list_is_ignored() {
 }
 
 #[test]
+fn private_use_char_already_in_the_text_is_kept_when_an_anchor_splits() {
+    let chapters = parse_zip(&ZipBook {
+        docs: docs(&[("all.xhtml", "<p>x\u{e000}y</p><p id=\"c\">C</p>")]),
+        ncx: Some(vec![("A", "all.xhtml"), ("C", "all.xhtml#c")]),
+        ..Default::default()
+    });
+    assert_eq!(titles(&chapters), ["A", "C"]);
+    assert_eq!(texts(&chapters), ["x\u{e000}y", "C"]);
+}
+
+#[test]
+fn anchors_in_one_file_listed_out_of_order_skip_the_second() {
+    let chapters = parse_zip(&ZipBook {
+        docs: docs(&[("all.xhtml", r#"<p id="a">A.</p><p id="b">B.</p><p id="c">C.</p>"#)]),
+        ncx: Some(vec![("A", "all.xhtml#a"), ("C", "all.xhtml#c"), ("B late", "all.xhtml#b")]),
+        ..Default::default()
+    });
+    assert_eq!(titles(&chapters), ["A", "C"]);
+    assert_eq!(texts(&chapters), ["A.\n\nB.", "C."]);
+}
+
+#[test]
+fn top_of_file_entry_and_anchor_entries_share_a_file() {
+    let chapters = parse_zip(&ZipBook {
+        docs: docs(&[("all.xhtml", r#"<p>Intro.</p><h2 id="c1">One</h2><p>x</p>"#)]),
+        ncx: Some(vec![("Top", "all.xhtml"), ("One", "all.xhtml#c1")]),
+        ..Default::default()
+    });
+    assert_eq!(titles(&chapters), ["Top", "One"]);
+    assert_eq!(texts(&chapters), ["Intro.", "One\n\nx"]);
+}
+
+#[test]
 fn unknown_fragment_starts_at_top_of_file() {
     let chapters = parse_zip(&ZipBook {
         docs: docs(&ABC[..2]),

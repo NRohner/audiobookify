@@ -9,7 +9,7 @@ from ebooklib import ITEM_DOCUMENT, epub as ebooklib_epub
 from .base import ParsedBook, RawChapter
 
 MIN_CHAPTER_CHARS = 200
-SENTINEL = "\ue000"  # private-use char marking where a TOC anchor cuts a document
+SENTINEL_RANGE = range(0xE000, 0xF8FF + 1)  # private use area: candidates for the cut marker
 BLOCK_TAGS = ["p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "tr", "td", "th"]
 
 
@@ -80,15 +80,28 @@ def _find_anchor(soup: BeautifulSoup, fragment: str):
     return soup.find(id=fragment) or soup.find("a", attrs={"name": fragment})
 
 
-def _split_at_anchors(soup: BeautifulSoup, fragments: list) -> list:
-    """Text of a document cut before each anchor (in document order): len(fragments) + 1 pieces."""
-    for fragment in fragments:
-        _find_anchor(soup, fragment).insert_before(NavigableString(SENTINEL))
+def _split_at_anchors(soup: BeautifulSoup, fragments: list) -> tuple:
+    """(pieces, sentinel): text of a document cut before each anchor (in document order).
+
+    len(fragments) + 1 pieces. The cut marker is the first private-use code point not in
+    the document's text (books use them for ornaments), so it can't be mistaken for text;
+    it is None when no anchor needs one. (None, None) when all 6,400 are taken: the caller
+    gives up on the TOC. Rust mirrors this in `block_text_split`.
+    """
+    text = _block_text(soup)
+    sentinel = None
+    if fragments:
+        sentinel = next((chr(c) for c in SENTINEL_RANGE if chr(c) not in text), None)
+        if sentinel is None:
+            return None, None
+        for fragment in fragments:
+            _find_anchor(soup, fragment).insert_before(NavigableString(sentinel))
+        text = _block_text(soup)
     pieces = []
-    for piece in _block_text(soup).split(SENTINEL):
+    for piece in (text.split(sentinel) if sentinel else [text]):
         paragraphs = (p.strip() for p in piece.split("\n\n"))
         pieces.append("\n\n".join(p for p in paragraphs if p))
-    return pieces
+    return pieces, sentinel
 
 
 def _toc_chapters(book, docs) -> list:
@@ -127,13 +140,16 @@ def _toc_chapters(book, docs) -> list:
         return []
 
     texts = [[] for _ in entries]  # pieces of each chapter's text
+    sentinels = {}  # document index -> the cut marker inserted into its soup, if any
     current = None  # entry owning the text at the current point in the spine
     for i in range(len(docs)):
         here = [k for k, entry in enumerate(entries) if entry[1] == i]
         if not here and current is None:
             continue  # front matter
         cuts = [k for k in here if entries[k][2]]
-        pieces = _split_at_anchors(soup_of(i), [entries[k][2] for k in cuts])
+        pieces, sentinels[i] = _split_at_anchors(soup_of(i), [entries[k][2] for k in cuts])
+        if pieces is None:
+            return []  # every private-use code point is taken: fall back to per-file chapters
         owners = [here[0] if here and not entries[here[0]][2] else current] + cuts
         for owner, piece in zip(owners, pieces):
             if owner is not None:
@@ -148,7 +164,7 @@ def _toc_chapters(book, docs) -> list:
         heading = soup_of(i).find(["h1", "h2"])
         title = (
             " ".join(label.split())
-            or (heading.get_text(strip=True).replace(SENTINEL, "") if heading else "")
+            or (heading.get_text(strip=True).replace(sentinels[i] or "", "") if heading else "")
             or f"Chapter {len(chapters) + 1}"
         )
         chapters.append(RawChapter(title=title, text=text))

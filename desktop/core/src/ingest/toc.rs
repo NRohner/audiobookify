@@ -151,13 +151,14 @@ pub(super) fn chapters(toc_file: &str, links: &[(String, String)], spine: &Spine
         }
         let cuts: Vec<usize> = here.iter().copied().filter(|&k| entries[k].anchor.is_some()).collect();
         let anchors: Vec<usize> = cuts.iter().filter_map(|&k| entries[k].anchor).collect();
-        let pieces = spine.doc(i).block_text_split(&anchors);
+        let Some(pieces) = spine.doc(i).block_text_split(&anchors) else {
+            return Vec::new(); // every private-use code point is taken: fall back to per-file chapters
+        };
         let top = match here.first() {
             Some(&k) if entries[k].anchor.is_none() => Some(k),
             _ => current,
         };
         let owners: Vec<Option<usize>> = std::iter::once(top).chain(cuts.into_iter().map(Some)).collect();
-        // zip(): a U+E000 already in the text makes extra pieces, which Python drops too.
         for (owner, piece) in owners.iter().zip(pieces) {
             if let Some(k) = owner {
                 texts[*k].push(piece);
@@ -174,7 +175,7 @@ pub(super) fn chapters(toc_file: &str, links: &[(String, String)], spine: &Spine
         }
         let mut title = pystr::collapse(entry.label);
         if title.is_empty() {
-            title = spine.doc(entry.doc).first_heading().map(|h| h.replace('\u{e000}', "")).unwrap_or_default();
+            title = spine.doc(entry.doc).first_heading().unwrap_or_default();
         }
         if title.is_empty() {
             title = format!("Chapter {}", chapters.len() + 1);
