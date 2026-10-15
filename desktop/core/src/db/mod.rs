@@ -9,6 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension, Params, Row, TransactionBe
 use crate::models::{Book, Chapter, ChapterOutcome, ChapterStatus, RawChapter, SourceFormat};
 
 mod jobs;
+mod lexicon;
 mod voices;
 
 const SCHEMA: &str = include_str!("schema.sql");
