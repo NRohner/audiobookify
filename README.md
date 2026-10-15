@@ -11,6 +11,10 @@ Fully local EPUB/Markdown → audiobook (MP3 per chapter) converter. Requires Ap
 
 **Note on `phonemizer` (GPL-3.0):** `lexicon add-from-audio` (see M3 below) loads `facebook/wav2vec2-lv-60-espeak-cv-ft` via Hugging Face `transformers`, whose phoneme tokenizer unconditionally requires the `phonemizer` package (and the `espeak-ng` system binary it wraps) just to construct the tokenizer, even though this project only ever calls `decode`, never `encode`. Every other dependency in this project is Apache-2.0/permissive; this is a deliberate, known exception, accepted for `facebook/wav2vec2-lv-60-espeak-cv-ft`'s zero-additional-*Python*-dependency footprint otherwise. If this project is ever distributed in a form where GPL-3.0 is a problem, revisit this before shipping.
 
+## Desktop app
+
+`make app-dev` opens Audiobookify in a native window (with hot reload). `make app` builds `desktop/target/release/bundle/macos/Audiobookify.app`. Both start the API and worker for you and stop them when you quit. The app runs this checkout's `.venv`, so build it after `make setup` and don't move the repo. The port to a full Rust backend is in progress; see `docs/superpowers/specs/2026-10-14-tauri-desktop-design.md`.
+
 ## Usage
 
 ```bash
