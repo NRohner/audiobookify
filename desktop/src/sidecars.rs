@@ -135,10 +135,9 @@ mod tests {
         PORTS.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn free_addr() -> String {
-        let l = TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().to_string() // listener drops here, port is free again
-    }
+    // Port 1 is privileged and outside the ephemeral range, so nothing listens there and connects are
+    // refused at once. Unlike a port picked by binding and dropping a listener, no other process can grab it.
+    const NOTHING_LISTENS: &str = "127.0.0.1:1";
 
     fn sleeper() -> Command {
         let mut c = Command::new("sleep");
@@ -175,7 +174,7 @@ mod tests {
         let _g = ports();
         let mut sc = Sidecars::start(vec![Command::new("false")]).unwrap();
         let started = Instant::now();
-        let err = sc.wait_ready(&free_addr(), Duration::from_secs(10)).unwrap_err();
+        let err = sc.wait_ready(NOTHING_LISTENS, Duration::from_secs(10)).unwrap_err();
         assert!(err.contains("exited"), "unexpected error: {err}");
         assert!(started.elapsed() < Duration::from_secs(5));
     }
@@ -184,7 +183,7 @@ mod tests {
     fn wait_ready_times_out() {
         let _g = ports();
         let mut sc = Sidecars::start(vec![sleeper()]).unwrap();
-        let err = sc.wait_ready(&free_addr(), Duration::from_millis(300)).unwrap_err();
+        let err = sc.wait_ready(NOTHING_LISTENS, Duration::from_millis(300)).unwrap_err();
         assert!(err.contains("timed out"), "unexpected error: {err}");
     }
 
@@ -323,7 +322,7 @@ mod tests {
     fn wait_port_free_true_immediately_for_free_port() {
         let _g = ports();
         let started = Instant::now();
-        assert!(wait_port_free(&free_addr(), Duration::from_secs(2)));
+        assert!(wait_port_free(NOTHING_LISTENS, Duration::from_secs(2)));
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 
