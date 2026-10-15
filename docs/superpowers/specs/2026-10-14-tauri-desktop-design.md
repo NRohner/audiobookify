@@ -104,6 +104,11 @@ The app data dir (`~/Library/Application Support/com.audiobookify.app/`) holds t
 - **Locating Python from a `.app` bundle:** dev uses the repo `.venv`. A packaged app needs an embedded Python or a first-run setup (see open question 1).
 - **ffmpeg / espeak-ng:** still external binaries (Homebrew) unless they get bundled.
 
+## Notes from phase 0
+
+- Phase 3: the Python engine worker must exit on stdin EOF. The JSON-lines protocol pipe then gives the same die-with-the-app guarantee, so don't stack the phase 0 `sh` wrapper on it. The wrapper takes over the child's stdin.
+- Phase 4: switch the release window from `WebviewUrl::External("http://127.0.0.1:8000")` to `WebviewUrl::App` (the bundled frontendDist). Remaining `fetch` calls go to `http://127.0.0.1:8000`, with CORS enabled on FastAPI. Never grant a `remote.urls` capability for 127.0.0.1:8000, because that would expose IPC to whatever serves the port. Set a real CSP at the same time. Phase 4 should also: log the children's output to a file under the app data dir, show a native dialog for setup errors, and avoid blocking the main thread before the window appears.
+
 ## Open questions
 
 1. **Distribution:** personal Macs only (unsigned `.app`, uses the Homebrew ffmpeg/espeak-ng and the repo venv), or a shareable signed `.dmg` (embedded Python via python-build-standalone + uv, bundled ffmpeg, models downloaded on first run, and the phonemizer GPL-3.0 question)? **Default: personal Macs only.** Phase 6 grows if the answer changes.

@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -27,6 +28,16 @@ pub fn wait_port_free(addr: &str, timeout: Duration) -> bool {
     }
 }
 
+/// Homebrew dirs first, then the existing PATH (only when present and non-empty, so no trailing `:`).
+fn child_path(existing: Option<OsString>) -> OsString {
+    let mut p = OsString::from("/opt/homebrew/bin:/usr/local/bin");
+    if let Some(e) = existing.filter(|e| !e.is_empty()) {
+        p.push(":");
+        p.push(e);
+    }
+    p
+}
+
 /// The two processes `make up` starts: the FastAPI app and the generation worker.
 pub fn audiobookify_commands(repo: &Path) -> Vec<Command> {
     let bin = repo.join(".venv/bin");
@@ -40,7 +51,7 @@ pub fn audiobookify_commands(repo: &Path) -> Vec<Command> {
         c.current_dir(repo).env("HF_HUB_OFFLINE", "1");
         // ponytail: Homebrew paths are hardcoded for this personal-Macs-only build; a shareable build
         // would bundle ffmpeg. A Finder-launched .app only has /usr/bin:/bin:/usr/sbin:/sbin.
-        c.env("PATH", format!("/opt/homebrew/bin:/usr/local/bin:{}", std::env::var("PATH").unwrap_or_default()));
+        c.env("PATH", child_path(std::env::var_os("PATH")));
     }
     cmds
 }
@@ -59,7 +70,7 @@ kill $w 2>/dev/null
 exit $s"#;
 
 fn wrap(cmd: &Command) -> Command {
-    let mut w = Command::new("sh");
+    let mut w = Command::new("/bin/sh");
     w.args(["-c", WRAPPER, "sh"]).arg(cmd.get_program()).args(cmd.get_args());
     for (k, v) in cmd.get_envs() {
         match v {
@@ -350,6 +361,16 @@ mod tests {
     }
 
     #[test]
+    fn child_path_handles_missing_empty_and_present() {
+        assert_eq!(child_path(None), OsString::from("/opt/homebrew/bin:/usr/local/bin"));
+        assert_eq!(child_path(Some(OsString::new())), OsString::from("/opt/homebrew/bin:/usr/local/bin"));
+        assert_eq!(
+            child_path(Some("/usr/bin:/bin".into())),
+            OsString::from("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+        );
+    }
+
+    #[test]
     fn audiobookify_commands_use_repo_venv() {
         let repo = Path::new("/repo");
         let cmds = audiobookify_commands(repo);
@@ -362,7 +383,7 @@ mod tests {
             assert_eq!(c.get_current_dir(), Some(repo));
             assert!(c.get_envs().any(|(k, v)| k == "HF_HUB_OFFLINE" && v == Some("1".as_ref())));
             let path = c.get_envs().find(|(k, _)| *k == "PATH").and_then(|(_, v)| v).unwrap().to_str().unwrap();
-            assert!(path.starts_with("/opt/homebrew/bin:/usr/local/bin:"), "PATH was {path}");
+            assert!(path.starts_with("/opt/homebrew/bin:/usr/local/bin"), "PATH was {path}");
         }
     }
 }

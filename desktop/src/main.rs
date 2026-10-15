@@ -22,7 +22,7 @@ fn main() {
                 .into());
             }
             let mut sc = Sidecars::start(audiobookify_commands(repo_root()))?;
-            sc.wait_ready(API_ADDR, Duration::from_secs(60))?;
+            sc.wait_ready(API_ADDR, Duration::from_secs(180))?;
             app.manage(Mutex::new(Some(sc)));
 
             // Dev: the Vite server (proxies /api). Release: FastAPI serves frontend/dist itself,

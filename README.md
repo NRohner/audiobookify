@@ -13,7 +13,7 @@ Fully local EPUB/Markdown → audiobook (MP3 per chapter) converter. Requires Ap
 
 ## Desktop app
 
-`make app-dev` opens Audiobookify in a native window (with hot reload). `make app` builds `desktop/target/release/bundle/macos/Audiobookify.app`. Both start the API and worker for you and stop them when you quit. The app runs this checkout's `.venv`, so build it after `make setup` and don't move the repo. The port to a full Rust backend is in progress; see `docs/superpowers/specs/2026-10-14-tauri-desktop-design.md`.
+`make app-dev` opens Audiobookify in a native window (with hot reload). `make app` builds `desktop/target/release/bundle/macos/Audiobookify.app`. Both start the API and worker for you and stop them when you quit. The app runs this checkout's `.venv`, so build it after `make setup` and don't move the repo. Building needs the Rust toolchain (rustup) and tauri-cli: `cargo install tauri-cli --version "^2"`. The app won't start while `make up` or `make dev` is running (port 8000), so run `make down` first. The port to a full Rust backend is in progress; see `docs/superpowers/specs/2026-10-14-tauri-desktop-design.md`.
 
 ## Usage
 
