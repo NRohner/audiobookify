@@ -13,7 +13,7 @@ Fully local EPUB/Markdown → audiobook (MP3 per chapter) converter. Requires Ap
 
 ## Desktop app
 
-`make app-dev` opens Audiobookify in a native window (with hot reload). `make app` builds `desktop/target/release/bundle/macos/Audiobookify.app`. Both start the API and worker for you and stop them when you quit. The app runs this checkout's `.venv`, so build it after `make setup` and don't move the repo. Building needs the Rust toolchain (rustup) and tauri-cli: `cargo install tauri-cli --version "^2"`. The app won't start while `make up` or `make dev` is running (port 8000), so run `make down` first. The port to a full Rust backend is in progress; see `docs/superpowers/specs/2026-10-14-tauri-desktop-design.md`.
+`make app-dev` opens Audiobookify in a native window (with hot reload). `make app` builds `desktop/target/release/bundle/macos/Audiobookify.app`. Open it from Finder or with `open desktop/target/release/bundle/macos/Audiobookify.app`. Both start the API and worker for you and stop them when you quit. The app runs this checkout's `.venv`, so build it after `make setup` and don't move the repo. Building needs the Rust toolchain (rustup) and tauri-cli: `cargo install tauri-cli --version "^2"`. The app won't start while `make up` or `make dev` is running (port 8000), so run `make down` first. The port to a full Rust backend is in progress; see `docs/superpowers/specs/2026-10-14-tauri-desktop-design.md`.
 
 ## Usage
 
@@ -25,8 +25,6 @@ Fully local EPUB/Markdown → audiobook (MP3 per chapter) converter. Requires Ap
 - `--out`: output directory; one `NN - Chapter Title.mp3` per chapter, tagged with ID3 album/track/title/artist.
 - `--voice`: sets the ID3 narrator/artist tag on the exported MP3s only — no effect on cloning. Defaults to `"default"`, or to the voice profile's name if `--voice-profile` is used.
 - `--db`: path to the SQLite job database (default `audiobookify.db` in the current directory). Re-running `generate` against the same `--input`/`--db` resumes: already-completed chapters are skipped. The voice used on a book's first `generate` call is locked in for that book — a later call naming a different (or no) `--voice-profile` prints a warning and keeps using the original voice, so chapters within one book never mix voices silently.
-
-The GUI is not yet implemented — see `project-spec.md` §9 for the milestone roadmap.
 
 ## Engines
 
