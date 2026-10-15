@@ -106,12 +106,14 @@ impl Document {
         let mut names: Vec<String> = vec![String::new()]; // tag names along `stack`
         let mut already_closed: Vec<String> = Vec::new(); // void tags whose end tag we ignore once
         let mut text = String::new();
+        let is_container = |n: &String| STRING_CONTAINERS.contains(&n.as_str());
+        let mut open_containers = 0usize; // how many of `names` are STRING_CONTAINERS
 
-        let flush = |doc: &mut Document, stack: &[usize], names: &[String], text: &mut String| {
+        let flush = |doc: &mut Document, stack: &[usize], open_containers: usize, text: &mut String| {
             if text.is_empty() {
                 return;
             }
-            let in_heading = !names.iter().any(|n| STRING_CONTAINERS.contains(&n.as_str()));
+            let in_heading = open_containers == 0;
             let parent = *stack.last().expect("root never pops");
             doc.add(parent, Kind::Text { text: std::mem::take(text), in_heading });
         };
@@ -121,7 +123,7 @@ impl Document {
                 text.push_str(t);
                 continue;
             }
-            flush(&mut doc, &stack, &names, &mut text);
+            flush(&mut doc, &stack, open_containers, &mut text);
             match tok {
                 Tok::Start(name, self_closing) => {
                     let id = doc.add(*stack.last().expect("root never pops"), Kind::Element(name.clone()));
@@ -133,6 +135,7 @@ impl Document {
                         continue;
                     }
                     stack.push(id);
+                    open_containers += usize::from(is_container(&name));
                     names.push(name);
                 }
                 Tok::End(name) => {
@@ -140,6 +143,7 @@ impl Document {
                         already_closed.remove(i);
                     } else if let Some(depth) = names.iter().rposition(|n| *n == name).filter(|d| *d > 0) {
                         stack.truncate(depth);
+                        open_containers -= names[depth..].iter().filter(|n| is_container(n)).count();
                         names.truncate(depth);
                     }
                 }
@@ -149,7 +153,7 @@ impl Document {
                 Tok::Text(_) => unreachable!("handled above"),
             }
         }
-        flush(&mut doc, &stack, &names, &mut text);
+        flush(&mut doc, &stack, open_containers, &mut text);
         doc
     }
 
