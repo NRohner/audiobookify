@@ -1,0 +1,75 @@
+{
+ "source": "md/flat.md",
+ "heading_level": 1,
+ "format": "md",
+ "title": "flat",
+ "author": null,
+ "chapters": [
+  {
+   "title": "flat",
+   "text": "Just plain text, no headings."
+  }
+ ],
+ "lexicon": [
+  [
+   "Holmes",
+   "HOHMZ"
+  ],
+  [
+   "Baker Street",
+   "BAY-ker street"
+  ],
+  [
+   "Watson",
+   "WOT-sun"
+  ],
+  [
+   "Abbess",
+   "AB-ess"
+  ],
+  [
+   "Winterfell",
+   "WIN-ter-fel"
+  ],
+  [
+   "Diaz",
+   "DEE-ahs"
+  ],
+  [
+   "Mr.",
+   "literal $1 and \\1"
+  ],
+  [
+   "the",
+   "the"
+  ]
+ ],
+ "chunkings": [
+  {
+   "max_chars": 300,
+   "min_chars": 80,
+   "lexicon": true,
+   "chapters": [
+    [
+     [
+      "Just plain text, no headings.",
+      "paragraph"
+     ]
+    ]
+   ]
+  },
+  {
+   "max_chars": 120,
+   "min_chars": 30,
+   "lexicon": false,
+   "chapters": [
+    [
+     [
+      "Just plain text, no headings.",
+      "paragraph"
+     ]
+    ]
+   ]
+  }
+ ]
+}

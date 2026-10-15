@@ -17,3 +17,4 @@ uploads/
 bench/
 desktop/target/
 desktop/gen/
+desktop/core/tests/fixtures/text/local/

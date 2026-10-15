@@ -1,0 +1,139 @@
+{
+ "source": "epub/basic.epub",
+ "heading_level": 1,
+ "format": "epub",
+ "title": "My Test Book",
+ "author": "Jane Author",
+ "chapters": [
+  {
+   "title": "Chapter One",
+   "text": "Chapter One\n\nOnce upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time."
+  },
+  {
+   "title": "Chapter Two",
+   "text": "Chapter Two\n\nThe story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues. The story continues."
+  }
+ ],
+ "lexicon": [
+  [
+   "Holmes",
+   "HOHMZ"
+  ],
+  [
+   "Baker Street",
+   "BAY-ker street"
+  ],
+  [
+   "Watson",
+   "WOT-sun"
+  ],
+  [
+   "Abbess",
+   "AB-ess"
+  ],
+  [
+   "Winterfell",
+   "WIN-ter-fel"
+  ],
+  [
+   "Diaz",
+   "DEE-ahs"
+  ],
+  [
+   "Mr.",
+   "literal $1 and \\1"
+  ],
+  [
+   "the",
+   "the"
+  ]
+ ],
+ "chunkings": [
+  {
+   "max_chars": 300,
+   "min_chars": 80,
+   "lexicon": true,
+   "chapters": [
+    [
+     [
+      "Chapter One. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time.",
+      "sentence"
+     ],
+     [
+      "Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "Chapter Two. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the",
+      "word"
+     ],
+     [
+      "story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues. the story continues.",
+      "word"
+     ],
+     [
+      "the story continues. the story continues. the story continues. the story continues.",
+      "paragraph"
+     ]
+    ]
+   ]
+  },
+  {
+   "max_chars": 120,
+   "min_chars": 30,
+   "lexicon": false,
+   "chapters": [
+    [
+     [
+      "Chapter One. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time.",
+      "sentence"
+     ],
+     [
+      "Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time.",
+      "sentence"
+     ],
+     [
+      "Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time.",
+      "sentence"
+     ],
+     [
+      "Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time.",
+      "sentence"
+     ],
+     [
+      "Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time. Once upon a time.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "Chapter Two. The story continues. The story continues. The story continues. The story continues. The story continues.",
+      "sentence"
+     ],
+     [
+      "The story continues. The story continues. The story continues. The story continues. The story continues.",
+      "sentence"
+     ],
+     [
+      "The story continues. The story continues. The story continues. The story continues. The story continues.",
+      "sentence"
+     ],
+     [
+      "The story continues. The story continues. The story continues. The story continues. The story continues.",
+      "sentence"
+     ],
+     [
+      "The story continues. The story continues. The story continues. The story continues. The story continues.",
+      "sentence"
+     ],
+     [
+      "The story continues. The story continues. The story continues. The story continues. The story continues.",
+      "paragraph"
+     ]
+    ]
+   ]
+  }
+ ]
+}
