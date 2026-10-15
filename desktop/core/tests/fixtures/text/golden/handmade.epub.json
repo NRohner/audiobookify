@@ -1,0 +1,311 @@
+{
+ "source": "epub/handmade.epub",
+ "heading_level": 1,
+ "format": "epub",
+ "title": "Handmade Book",
+ "author": null,
+ "chapters": [
+  {
+   "title": "Chapter 1",
+   "text": "The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night."
+  },
+  {
+   "title": "",
+   "text": "First line & more—and — text.\n\nLoose div text\n\nnested para\n\ntail of div\n\nA\n\nB\n\nC\n\nThe rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night."
+  },
+  {
+   "title": "PartTwoAgain",
+   "text": "Part Two Again\n\nLoose section textfig text\n\ncell1\n\ncell2\n\nruby 漢kan and tmpl end\n\nPrice: 1,000.50 dollars, ISBN 9780593420317, code 0801, 27.50, 80,000.3, COVID-19, pages 12-34b, the 1980-90s, 3-2.\n\nDr. Smith vs. Mr. Jones met Mrs. Ng at St. Paul’s, etc. FIRST. The 5-year-old said 7 more.\n\n“Wait—”\n\n* * *\n\nThe End.\n\nThe rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night."
+  },
+  {
+   "title": "Aside",
+   "text": "Aside\n\none twothree\n\nThe rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night."
+  },
+  {
+   "title": "Byte\n\nOrder",
+   "text": "Byte Order\n\nThe rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night."
+  },
+  {
+   "title": "ChapterNine",
+   "text": "SmallCaps stay glued.\n\na b\n\nChapter Nine\n\nx y\n\nThe rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night."
+  },
+  {
+   "title": "Bad�bytes",
+   "text": "Bad�bytes\n\ncaf� and � end\n\nThe rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night."
+  }
+ ],
+ "lexicon": [
+  [
+   "Holmes",
+   "HOHMZ"
+  ],
+  [
+   "Baker Street",
+   "BAY-ker street"
+  ],
+  [
+   "Watson",
+   "WOT-sun"
+  ],
+  [
+   "Abbess",
+   "AB-ess"
+  ],
+  [
+   "Winterfell",
+   "WIN-ter-fel"
+  ],
+  [
+   "Diaz",
+   "DEE-ahs"
+  ],
+  [
+   "Mr.",
+   "literal $1 and \\1"
+  ],
+  [
+   "the",
+   "the"
+  ]
+ ],
+ "chunkings": [
+  {
+   "max_chars": 300,
+   "min_chars": 80,
+   "lexicon": true,
+   "chapters": [
+    [
+     [
+      "the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "First line & more—and — text. Loose div text. nested para. tail of div. A. B. C. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "Part Two Again. Loose section textfig text. cell1. cell2. ruby 漢kan and tmpl end",
+      "paragraph"
+     ],
+     [
+      "Price: one thousand point five dollars, ISBN nine trillion, seven hundred and eighty billion, five hundred and ninety-three million, four hundred and twenty thousand, three hundred and seventeen, code eight hundred and one,",
+      "clause"
+     ],
+     [
+      "twenty-seven point five, eighty thousand point three, COVID-19, pages 12-34b, the 1980-90s, 3-2.",
+      "paragraph"
+     ],
+     [
+      "Doctor Smith versus Mister Jones met Missus Ng at Saint Paul’s, et cetera FIRST. the five-year-old said seven more. “Wait.”",
+      "scene"
+     ],
+     [
+      "the End. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "Aside. one twothree. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "Byte Order. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "SmallCaps stay glued. a b. Chapter Nine. x y. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "Bad�bytes. caf� and � end. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ]
+   ]
+  },
+  {
+   "max_chars": 120,
+   "min_chars": 30,
+   "lexicon": false,
+   "chapters": [
+    [
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "First line & more—and — text. Loose div text",
+      "paragraph"
+     ],
+     [
+      "nested para. tail of div. A. B",
+      "paragraph"
+     ],
+     [
+      "C. The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "Part Two Again. Loose section textfig text",
+      "paragraph"
+     ],
+     [
+      "cell1. cell2. ruby 漢kan and tmpl end",
+      "paragraph"
+     ],
+     [
+      "Price: one thousand point five dollars, ISBN nine trillion, seven hundred and eighty billion,",
+      "clause"
+     ],
+     [
+      "five hundred and ninety-three million, four hundred and twenty thousand, three hundred and seventeen,",
+      "clause"
+     ],
+     [
+      "code eight hundred and one, twenty-seven point five, eighty thousand point three, COVID-19,",
+      "clause"
+     ],
+     [
+      "pages 12-34b, the 1980-90s, 3-2.",
+      "paragraph"
+     ],
+     [
+      "Doctor Smith versus Mister Jones met Missus Ng at Saint Paul’s, et cetera FIRST. The five-year-old said seven more. “Wait.”",
+      "scene"
+     ],
+     [
+      "The End. The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "Aside. one twothree. The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "Byte Order. The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "SmallCaps stay glued. a b. Chapter Nine",
+      "paragraph"
+     ],
+     [
+      "x y. The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "Bad�bytes. caf� and � end. The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "paragraph"
+     ]
+    ]
+   ]
+  }
+ ]
+}

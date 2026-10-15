@@ -1,0 +1,95 @@
+{
+ "source": "md/messy.md",
+ "heading_level": 1,
+ "format": "md",
+ "title": "messy",
+ "author": null,
+ "chapters": [
+  {
+   "title": "One",
+   "text": "See a map and the docs.\n\ncode block\n\nBold italic and under and ab*.\n\nNoSpace heading"
+  },
+  {
+   "title": "Two",
+   "text": "Old Mac line\n\ndeep heading\n\nDr. Who has 3 cats.\n\n  *\n\nEnd."
+  }
+ ],
+ "lexicon": [
+  [
+   "Holmes",
+   "HOHMZ"
+  ],
+  [
+   "Baker Street",
+   "BAY-ker street"
+  ],
+  [
+   "Watson",
+   "WOT-sun"
+  ],
+  [
+   "Abbess",
+   "AB-ess"
+  ],
+  [
+   "Winterfell",
+   "WIN-ter-fel"
+  ],
+  [
+   "Diaz",
+   "DEE-ahs"
+  ],
+  [
+   "Mr.",
+   "literal $1 and \\1"
+  ],
+  [
+   "the",
+   "the"
+  ]
+ ],
+ "chunkings": [
+  {
+   "max_chars": 300,
+   "min_chars": 80,
+   "lexicon": true,
+   "chapters": [
+    [
+     [
+      "See a map and the docs. code block. Bold italic and under and ab*. NoSpace heading",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "Old Mac line. deep heading. Doctor Who has three cats. End.",
+      "paragraph"
+     ]
+    ]
+   ]
+  },
+  {
+   "max_chars": 120,
+   "min_chars": 30,
+   "lexicon": false,
+   "chapters": [
+    [
+     [
+      "See a map and the docs. code block",
+      "paragraph"
+     ],
+     [
+      "Bold italic and under and ab*. NoSpace heading",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "Old Mac line. deep heading. Doctor Who has three cats. End.",
+      "paragraph"
+     ]
+    ]
+   ]
+  }
+ ]
+}

@@ -1,0 +1,91 @@
+{
+ "source": "md/nested.md",
+ "heading_level": 2,
+ "format": "md",
+ "title": "nested",
+ "author": null,
+ "chapters": [
+  {
+   "title": "Part A",
+   "text": "first"
+  },
+  {
+   "title": "Part B",
+   "text": "second"
+  }
+ ],
+ "lexicon": [
+  [
+   "Holmes",
+   "HOHMZ"
+  ],
+  [
+   "Baker Street",
+   "BAY-ker street"
+  ],
+  [
+   "Watson",
+   "WOT-sun"
+  ],
+  [
+   "Abbess",
+   "AB-ess"
+  ],
+  [
+   "Winterfell",
+   "WIN-ter-fel"
+  ],
+  [
+   "Diaz",
+   "DEE-ahs"
+  ],
+  [
+   "Mr.",
+   "literal $1 and \\1"
+  ],
+  [
+   "the",
+   "the"
+  ]
+ ],
+ "chunkings": [
+  {
+   "max_chars": 300,
+   "min_chars": 80,
+   "lexicon": true,
+   "chapters": [
+    [
+     [
+      "first",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "second",
+      "paragraph"
+     ]
+    ]
+   ]
+  },
+  {
+   "max_chars": 120,
+   "min_chars": 30,
+   "lexicon": false,
+   "chapters": [
+    [
+     [
+      "first",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "second",
+      "paragraph"
+     ]
+    ]
+   ]
+  }
+ ]
+}

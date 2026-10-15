@@ -1,0 +1,115 @@
+{
+ "source": "epub/dashes.epub",
+ "heading_level": 1,
+ "format": "epub",
+ "title": "Dashes",
+ "author": null,
+ "chapters": [
+  {
+   "title": "Chapter 1",
+   "text": "The air was heavy over the marsh, and the reeds bent low under the wind from the sea. “The air is bad there, and if we were to—”\n\nThe air was heavy over the marsh, and the reeds bent low under the wind from the sea. They could build a city, or an aqueduct, or a—\n\nThe air was heavy over the marsh, and the reeds bent low under the wind from the sea. “But, Cosimo, only look–’\n\nThe air was heavy over the marsh, and the reeds bent low under the wind from the sea. He stopped short--\n\nThe air was heavy over the marsh, and the reeds bent low under the wind from the sea. The end came quickly."
+  }
+ ],
+ "lexicon": [
+  [
+   "Holmes",
+   "HOHMZ"
+  ],
+  [
+   "Baker Street",
+   "BAY-ker street"
+  ],
+  [
+   "Watson",
+   "WOT-sun"
+  ],
+  [
+   "Abbess",
+   "AB-ess"
+  ],
+  [
+   "Winterfell",
+   "WIN-ter-fel"
+  ],
+  [
+   "Diaz",
+   "DEE-ahs"
+  ],
+  [
+   "Mr.",
+   "literal $1 and \\1"
+  ],
+  [
+   "the",
+   "the"
+  ]
+ ],
+ "chunkings": [
+  {
+   "max_chars": 300,
+   "min_chars": 80,
+   "lexicon": true,
+   "chapters": [
+    [
+     [
+      "the air was heavy over the marsh, and the reeds bent low under the wind from the sea. “the air is bad there, and if we were to.”",
+      "paragraph"
+     ],
+     [
+      "the air was heavy over the marsh, and the reeds bent low under the wind from the sea. They could build a city, or an aqueduct, or a.",
+      "paragraph"
+     ],
+     [
+      "the air was heavy over the marsh, and the reeds bent low under the wind from the sea. “But, Cosimo, only look.’",
+      "paragraph"
+     ],
+     [
+      "the air was heavy over the marsh, and the reeds bent low under the wind from the sea. He stopped short.",
+      "paragraph"
+     ],
+     [
+      "the air was heavy over the marsh, and the reeds bent low under the wind from the sea. the end came quickly.",
+      "paragraph"
+     ]
+    ]
+   ]
+  },
+  {
+   "max_chars": 120,
+   "min_chars": 30,
+   "lexicon": false,
+   "chapters": [
+    [
+     [
+      "The air was heavy over the marsh, and the reeds bent low under the wind from the sea.",
+      "sentence"
+     ],
+     [
+      "“The air is bad there, and if we were to.”",
+      "paragraph"
+     ],
+     [
+      "The air was heavy over the marsh, and the reeds bent low under the wind from the sea.",
+      "sentence"
+     ],
+     [
+      "They could build a city, or an aqueduct, or a.",
+      "paragraph"
+     ],
+     [
+      "The air was heavy over the marsh, and the reeds bent low under the wind from the sea. “But, Cosimo, only look.’",
+      "paragraph"
+     ],
+     [
+      "The air was heavy over the marsh, and the reeds bent low under the wind from the sea. He stopped short.",
+      "paragraph"
+     ],
+     [
+      "The air was heavy over the marsh, and the reeds bent low under the wind from the sea. The end came quickly.",
+      "paragraph"
+     ]
+    ]
+   ]
+  }
+ ]
+}

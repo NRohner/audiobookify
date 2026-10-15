@@ -1,0 +1,91 @@
+{
+ "source": "epub/dashes_inside.epub",
+ "heading_level": 1,
+ "format": "epub",
+ "title": "Dashes",
+ "author": null,
+ "chapters": [
+  {
+   "title": "Chapter 1",
+   "text": "The air was heavy over the marsh, and the reeds bent low under the wind from the sea. She paused—only for a moment—and went on.\n\nThe air was heavy over the marsh, and the reeds bent low under the wind from the sea. The air was heavy over the marsh, and the reeds bent low under the wind from the sea."
+  }
+ ],
+ "lexicon": [
+  [
+   "Holmes",
+   "HOHMZ"
+  ],
+  [
+   "Baker Street",
+   "BAY-ker street"
+  ],
+  [
+   "Watson",
+   "WOT-sun"
+  ],
+  [
+   "Abbess",
+   "AB-ess"
+  ],
+  [
+   "Winterfell",
+   "WIN-ter-fel"
+  ],
+  [
+   "Diaz",
+   "DEE-ahs"
+  ],
+  [
+   "Mr.",
+   "literal $1 and \\1"
+  ],
+  [
+   "the",
+   "the"
+  ]
+ ],
+ "chunkings": [
+  {
+   "max_chars": 300,
+   "min_chars": 80,
+   "lexicon": true,
+   "chapters": [
+    [
+     [
+      "the air was heavy over the marsh, and the reeds bent low under the wind from the sea. She paused—only for a moment—and went on.",
+      "paragraph"
+     ],
+     [
+      "the air was heavy over the marsh, and the reeds bent low under the wind from the sea. the air was heavy over the marsh, and the reeds bent low under the wind from the sea.",
+      "paragraph"
+     ]
+    ]
+   ]
+  },
+  {
+   "max_chars": 120,
+   "min_chars": 30,
+   "lexicon": false,
+   "chapters": [
+    [
+     [
+      "The air was heavy over the marsh, and the reeds bent low under the wind from the sea.",
+      "sentence"
+     ],
+     [
+      "She paused—only for a moment—and went on.",
+      "paragraph"
+     ],
+     [
+      "The air was heavy over the marsh, and the reeds bent low under the wind from the sea.",
+      "sentence"
+     ],
+     [
+      "The air was heavy over the marsh, and the reeds bent low under the wind from the sea.",
+      "paragraph"
+     ]
+    ]
+   ]
+  }
+ ]
+}

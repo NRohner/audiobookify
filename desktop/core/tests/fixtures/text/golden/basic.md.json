@@ -1,0 +1,91 @@
+{
+ "source": "md/basic.md",
+ "heading_level": 1,
+ "format": "md",
+ "title": "basic",
+ "author": null,
+ "chapters": [
+  {
+   "title": "Chapter One: A Beginning",
+   "text": "This is bold and italic text with a link."
+  },
+  {
+   "title": "Chapter Two",
+   "text": "More code and content here."
+  }
+ ],
+ "lexicon": [
+  [
+   "Holmes",
+   "HOHMZ"
+  ],
+  [
+   "Baker Street",
+   "BAY-ker street"
+  ],
+  [
+   "Watson",
+   "WOT-sun"
+  ],
+  [
+   "Abbess",
+   "AB-ess"
+  ],
+  [
+   "Winterfell",
+   "WIN-ter-fel"
+  ],
+  [
+   "Diaz",
+   "DEE-ahs"
+  ],
+  [
+   "Mr.",
+   "literal $1 and \\1"
+  ],
+  [
+   "the",
+   "the"
+  ]
+ ],
+ "chunkings": [
+  {
+   "max_chars": 300,
+   "min_chars": 80,
+   "lexicon": true,
+   "chapters": [
+    [
+     [
+      "This is bold and italic text with a link.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "More code and content here.",
+      "paragraph"
+     ]
+    ]
+   ]
+  },
+  {
+   "max_chars": 120,
+   "min_chars": 30,
+   "lexicon": false,
+   "chapters": [
+    [
+     [
+      "This is bold and italic text with a link.",
+      "paragraph"
+     ]
+    ],
+    [
+     [
+      "More code and content here.",
+      "paragraph"
+     ]
+    ]
+   ]
+  }
+ ]
+}

@@ -1,0 +1,87 @@
+{
+ "source": "epub/blocks.epub",
+ "heading_level": 1,
+ "format": "epub",
+ "title": "Blocks",
+ "author": null,
+ "chapters": [
+  {
+   "title": "Chapter One",
+   "text": "Chapter One\n\nThe rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night. The rain kept on falling over the quiet town all through the night.\n\nSecond paragraph."
+  }
+ ],
+ "lexicon": [
+  [
+   "Holmes",
+   "HOHMZ"
+  ],
+  [
+   "Baker Street",
+   "BAY-ker street"
+  ],
+  [
+   "Watson",
+   "WOT-sun"
+  ],
+  [
+   "Abbess",
+   "AB-ess"
+  ],
+  [
+   "Winterfell",
+   "WIN-ter-fel"
+  ],
+  [
+   "Diaz",
+   "DEE-ahs"
+  ],
+  [
+   "Mr.",
+   "literal $1 and \\1"
+  ],
+  [
+   "the",
+   "the"
+  ]
+ ],
+ "chunkings": [
+  {
+   "max_chars": 300,
+   "min_chars": 80,
+   "lexicon": true,
+   "chapters": [
+    [
+     [
+      "Chapter One. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. the rain kept on falling over the quiet town all through the night. Second paragraph.",
+      "paragraph"
+     ]
+    ]
+   ]
+  },
+  {
+   "max_chars": 120,
+   "min_chars": 30,
+   "lexicon": false,
+   "chapters": [
+    [
+     [
+      "Chapter One. The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night.",
+      "sentence"
+     ],
+     [
+      "The rain kept on falling over the quiet town all through the night. Second paragraph.",
+      "paragraph"
+     ]
+    ]
+   ]
+  }
+ ]
+}
