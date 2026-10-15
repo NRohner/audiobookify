@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { ChevronLeft, ChevronRight, Laptop, Play, Square } from "lucide-react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { ChevronLeft, ChevronRight, Laptop, Play, Square, Trash2 } from "lucide-react";
 import { api, chapterInProgress } from "../lib/api.js";
 import { formatEta } from "../lib/eta.js";
 import { bookState, primaryAction } from "../lib/shelf.js";
 import Button, { ErrorNote, IconButton } from "../components/ui/Button.jsx";
+import ConfirmDialog from "../components/ui/ConfirmDialog.jsx";
 import ProgressBar from "../components/ui/ProgressBar.jsx";
 import EnginePicker from "../components/EnginePicker.jsx";
 import BookCover from "../components/BookCover.jsx";
@@ -159,6 +160,8 @@ export default function BookDetailPage() {
   const [busyAll, setBusyAll] = useState(false);
   const [busyChapters, setBusyChapters] = useState(new Set());
   const [error, setError] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const navigate = useNavigate();
   const player = usePlayer();
 
   async function refresh() {
@@ -189,6 +192,17 @@ export default function BookDetailPage() {
     try {
       await fn();
       await refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function handleDelete() {
+    setConfirmDelete(false);
+    setError(null);
+    try {
+      await api.deleteBook(bookId);
+      navigate("/");
     } catch (e) {
       setError(e.message);
     }
@@ -367,6 +381,17 @@ export default function BookDetailPage() {
                 <p className="text-meta font-semibold mb-1">Output folder</p>
                 <p className="font-mono text-[12px] text-ink-muted break-all">{book.output_dir}</p>
               </div>
+              <div>
+                <Button
+                  variant="quiet"
+                  className="-ml-2"
+                  disabled={state.rendering}
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  <Trash2 className="size-3.5" aria-hidden="true" />
+                  Delete book
+                </Button>
+              </div>
             </div>
           </details>
 
@@ -410,6 +435,14 @@ export default function BookDetailPage() {
           </div>
         </div>
       </div>
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Delete book"
+          message={`Delete “${book.title}”? Its chapters, render progress and book pronunciations are removed. MP3s already in ${book.output_dir} stay where they are.`}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmDelete(false)}
+        />
+      )}
     </div>
   );
 }
