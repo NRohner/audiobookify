@@ -7,6 +7,8 @@ use rusqlite::{params, Connection, OptionalExtension, Params, Row, TransactionBe
 
 use crate::models::{Book, Chapter, ChapterOutcome, ChapterStatus, RawChapter, SourceFormat};
 
+mod jobs;
+
 const SCHEMA: &str = include_str!("schema.sql");
 
 #[derive(Debug, thiserror::Error)]
@@ -28,7 +30,6 @@ pub enum DbError {
 pub type Result<T> = std::result::Result<T, DbError>;
 
 /// Seconds since the epoch, like Python's `time.time()`.
-#[allow(dead_code)] // used by later tasks' modules
 pub(crate) fn now() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).expect("clock before 1970").as_secs_f64()
 }
