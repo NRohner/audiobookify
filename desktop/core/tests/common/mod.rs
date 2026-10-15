@@ -7,7 +7,7 @@ use audiobookify_core::db::{Database, DbError};
 use audiobookify_core::models::*;
 
 pub fn open(dir: &Path) -> Database {
-    Database::open(dir.join("test.db")).unwrap()
+    Database::open(dir.join("test.db"), dir.join("voices")).unwrap()
 }
 
 pub fn path(dir: &Path, name: &str) -> String {

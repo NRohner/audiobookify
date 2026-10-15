@@ -48,7 +48,8 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    /// `voices_dir` is where voice reference clips live permanently (repo `voices/` today).
+    pub fn open(path: impl AsRef<Path>, voices_dir: impl AsRef<Path>) -> Result<Self> {
         let mut conn = Connection::open(path)?;
         // The API and the worker write this file from two processes at once.
         // WAL + a busy timeout turn lock contention into a brief wait instead of
@@ -60,7 +61,12 @@ impl Database {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute_batch(SCHEMA)?;
         migrations::migrate_columns(&tx)?;
+        let warnings = migrations::migrate_voice_reference_audio(&tx, voices_dir.as_ref())?;
         tx.commit()?;
+        // ponytail: no warn-once dedupe like db.py; the app opens the DB once, add it if it ever opens per request.
+        for warning in warnings {
+            eprintln!("Warning: {warning}");
+        }
         Ok(Self { conn })
     }
 

@@ -183,3 +183,97 @@ fn reopening_a_migrated_old_db_changes_nothing() {
     // open must not relabel audio made after the migration.
     assert_eq!(db.get_chapter(done.id).unwrap().engine, None);
 }
+
+use std::fs;
+
+use audiobookify_core::db::migrations::migrate_voice_reference_audio;
+
+fn write_audio(dir: &Path, name: &str) -> String {
+    let file = dir.join("original-upload").join(name);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, b"fake audio bytes").unwrap();
+    file.to_string_lossy().into_owned()
+}
+
+fn is_stored_under_voices(dir: &Path, reference_audio_path: &str) -> bool {
+    let stored = Path::new(reference_audio_path);
+    stored.starts_with(dir.join("voices")) && stored.is_file()
+}
+
+#[test]
+fn existing_voice_profile_gets_migrated_to_permanent_voices_dir() {
+    let dir = TempDir::new().unwrap();
+    let source = write_audio(dir.path(), "clip.wav");
+    let db = open(dir.path());
+    voice_at(&db, "Nova", &source);
+    drop(db);
+
+    let reopened = open(dir.path()); // a fresh open triggers the migration
+
+    let profile = reopened.find_voice_profile_by_name("Nova").unwrap().unwrap();
+    assert!(is_stored_under_voices(dir.path(), &profile.reference_audio_path));
+    assert!(profile.reference_audio_path.ends_with("_Nova/reference.wav"));
+}
+
+#[test]
+fn migration_skips_a_voice_profile_whose_source_file_no_longer_exists() {
+    let dir = TempDir::new().unwrap();
+    let missing = path(dir.path(), "does-not-exist.wav");
+    let db = open(dir.path());
+    voice_at(&db, "Ghost", &missing);
+    drop(db);
+
+    let reopened = open(dir.path()); // must not fail even though the source file is gone
+
+    assert_eq!(reopened.find_voice_profile_by_name("Ghost").unwrap().unwrap().reference_audio_path, missing);
+}
+
+#[test]
+fn migration_of_one_profile_does_not_block_migration_of_others() {
+    let dir = TempDir::new().unwrap();
+    let source = write_audio(dir.path(), "clip.wav");
+    let missing = path(dir.path(), "does-not-exist.wav");
+    let db = open(dir.path());
+    voice_at(&db, "Ghost", &missing);
+    voice_at(&db, "Nova", &source);
+    drop(db);
+
+    let reopened = open(dir.path());
+
+    assert_eq!(reopened.find_voice_profile_by_name("Ghost").unwrap().unwrap().reference_audio_path, missing);
+    let nova = reopened.find_voice_profile_by_name("Nova").unwrap().unwrap();
+    assert!(is_stored_under_voices(dir.path(), &nova.reference_audio_path));
+}
+
+#[test]
+fn migration_does_not_crash_when_storing_a_profile_raises_an_io_error() {
+    let dir = TempDir::new().unwrap();
+    let broken_audio = write_audio(dir.path(), "broken.wav");
+    let fine_audio = write_audio(dir.path(), "fine.wav");
+    drop(open(dir.path())); // creates the schema
+    // Insert through a raw connection, so no open migrates either profile before the trap is set.
+    let conn = raw_conn(dir.path());
+    let mut ids = Vec::new();
+    for (name, file) in [("Broken", &broken_audio), ("Fine", &fine_audio)] {
+        conn.execute(
+            "INSERT INTO voice_profiles (name, engine, reference_audio_path, exaggeration, cfg_weight, \
+             temperature, created_at) VALUES (?1, 'chatterbox', ?2, 0.5, 0.5, 0.8, 0)",
+            [name, file.as_str()],
+        ).unwrap();
+        ids.push(conn.last_insert_rowid());
+    }
+    let broken_id = ids[0];
+    // A plain file where Broken's voice directory belongs makes create_dir_all fail.
+    fs::create_dir_all(dir.path().join("voices")).unwrap();
+    fs::write(dir.path().join("voices").join(format!("{broken_id}_Broken")), b"").unwrap();
+
+    let warnings = migrate_voice_reference_audio(&conn, &dir.path().join("voices")).unwrap();
+
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("could not be migrated"), "{warnings:?}");
+    drop(conn);
+    let reopened = open(dir.path());
+    assert_eq!(reopened.find_voice_profile_by_name("Broken").unwrap().unwrap().reference_audio_path, broken_audio);
+    let fine = reopened.find_voice_profile_by_name("Fine").unwrap().unwrap();
+    assert!(is_stored_under_voices(dir.path(), &fine.reference_audio_path));
+}
