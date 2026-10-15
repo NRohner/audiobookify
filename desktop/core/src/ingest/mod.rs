@@ -2,6 +2,7 @@
 
 pub mod epub;
 mod html;
+mod toc;
 pub mod markdown;
 
 use std::path::Path;

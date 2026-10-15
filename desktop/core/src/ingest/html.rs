@@ -14,6 +14,10 @@
 //! - Pretty-printing: an element whose children include no text (and whose ancestors
 //!   are the same) gets whitespace around each child, so `<p><span>a</span><span>b</span></p>`
 //!   reads "a b".
+//!
+//! For chapters from the table of contents it also finds a TOC anchor (`find_anchor`),
+//! cuts the text there (`block_text_split`), and reads the links of a nav document
+//! (`toc_links`), which Python parses from the raw file with html.parser, not via lxml.
 
 use std::cell::RefCell;
 
@@ -32,9 +36,13 @@ const VOID_TAGS: [&str; 24] = [
 ];
 /// BeautifulSoup gives strings under these their own class, which get_text() skips.
 const STRING_CONTAINERS: [&str; 3] = ["template", "rt", "rp"];
+/// The attributes anything here reads; the rest are dropped at parse time.
+const KEPT_ATTRS: [&str; 4] = ["id", "name", "href", "epub:type"];
+/// Marks where a TOC anchor cuts a document (`SENTINEL` in `ingest/epub.py`).
+const SENTINEL: char = '\u{e000}';
 
 enum Tok {
-    Start(String, bool),
+    Start(String, bool, Vec<(String, String)>),
     End(String),
     Text(String),
     Comment,
@@ -58,7 +66,14 @@ impl TokenSink for Sink {
                     _ => None,
                 };
                 let self_closing = tag.self_closing;
-                toks.push(Tok::Start(name, self_closing));
+                // The tokenizer drops a repeated attribute, keeping the first, as libxml2 does.
+                let attrs = tag
+                    .attrs
+                    .iter()
+                    .filter(|a| KEPT_ATTRS.contains(&&*a.name.local))
+                    .map(|a| (a.name.local.to_string(), a.value.to_string()))
+                    .collect();
+                toks.push(Tok::Start(name, self_closing, attrs));
                 if let (Some(kind), false) = (raw, self_closing) {
                     return TokenSinkResult::RawData(kind);
                 }
@@ -92,6 +107,8 @@ enum Kind {
 struct Node {
     kind: Kind,
     children: Vec<usize>,
+    /// `KEPT_ATTRS` only; empty for text and comments.
+    attrs: Vec<(String, String)>,
 }
 
 /// A parsed spine document. `nodes[0]` is the root.
@@ -101,7 +118,7 @@ pub struct Document {
 
 impl Document {
     pub fn parse(html: &str) -> Self {
-        let mut doc = Document { nodes: vec![Node { kind: Kind::Element(String::new()), children: Vec::new() }] };
+        let mut doc = Document { nodes: vec![Node { kind: Kind::Element(String::new()), children: Vec::new(), attrs: Vec::new() }] };
         let mut stack = vec![0usize];
         let mut names: Vec<String> = vec![String::new()]; // tag names along `stack`
         let mut already_closed: Vec<String> = Vec::new(); // void tags whose end tag we ignore once
@@ -125,8 +142,9 @@ impl Document {
             }
             flush(&mut doc, &stack, open_containers, &mut text);
             match tok {
-                Tok::Start(name, self_closing) => {
+                Tok::Start(name, self_closing, attrs) => {
                     let id = doc.add(*stack.last().expect("root never pops"), Kind::Element(name.clone()));
+                    doc.nodes[id].attrs = attrs;
                     if self_closing {
                         continue; // opened and closed at once
                     }
@@ -158,7 +176,7 @@ impl Document {
     }
 
     fn add(&mut self, parent: usize, kind: Kind) -> usize {
-        self.nodes.push(Node { kind, children: Vec::new() });
+        self.nodes.push(Node { kind, children: Vec::new(), attrs: Vec::new() });
         let id = self.nodes.len() - 1;
         self.nodes[parent].children.push(id);
         id
@@ -169,6 +187,10 @@ impl Document {
             Kind::Element(name) => Some(name),
             _ => None,
         }
+    }
+
+    fn attr(&self, id: usize, name: &str) -> Option<&str> {
+        self.nodes[id].attrs.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
     }
 
     fn is_text(&self, id: usize) -> bool {
@@ -185,7 +207,16 @@ impl Document {
 
     /// Strings in document order as (text, nearest block ancestor, counts for headings),
     /// with head/nav/script/style removed, `<br>` read as " ", and pretty-print whitespace.
-    fn strings<'a>(&'a self, children: &'a [usize], formatted: bool, block: Option<usize>, out: &mut Vec<(String, Option<usize>, bool)>) {
+    /// A `SENTINEL` string goes just before each element in `cuts` (sorted node ids), as
+    /// `anchor.insert_before(NavigableString(SENTINEL))` puts it after the padding.
+    fn strings<'a>(
+        &'a self,
+        children: &'a [usize],
+        formatted: bool,
+        block: Option<usize>,
+        cuts: &[usize],
+        out: &mut Vec<(String, Option<usize>, bool)>,
+    ) {
         // Explicit stack instead of recursion: nothing closes implicitly, so unclosed tags
         // nest as deep as the input is long. A frame is a child list being walked.
         struct Frame<'a> {
@@ -217,6 +248,9 @@ impl Document {
             top.next += 1;
             let (formatted, block) = (top.formatted, top.block);
             pad(out, formatted, block);
+            if cuts.binary_search(&child).is_ok() {
+                out.push((SENTINEL.to_string(), block, true));
+            }
             match &self.nodes[child].kind {
                 Kind::Text { text, in_heading } => out.push((text.clone(), block, *in_heading)),
                 Kind::Comment => {}
@@ -233,10 +267,26 @@ impl Document {
     /// `_block_text`: text under one block element joined as-is, paragraphs joined by
     /// blank lines, whitespace inside a paragraph collapsed.
     pub fn block_text(&self) -> String {
+        self.block_text_with_cuts(&[])
+    }
+
+    /// `_split_at_anchors`: the text cut just before each anchor (node ids from
+    /// `find_anchor`), each piece cleaned paragraph by paragraph. Like Python it splits
+    /// on every `SENTINEL`, so one already in the text makes an extra piece.
+    pub fn block_text_split(&self, anchors: &[usize]) -> Vec<String> {
+        let mut cuts = anchors.to_vec();
+        cuts.sort_unstable();
+        self.block_text_with_cuts(&cuts)
+            .split(SENTINEL)
+            .map(|piece| piece.split("\n\n").map(pystr::strip).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n"))
+            .collect()
+    }
+
+    fn block_text_with_cuts(&self, cuts: &[usize]) -> String {
         let (body, children) = self.body();
         let mut strings = Vec::new();
         let block = if BLOCK_TAGS.contains(&self.name(body).unwrap_or("")) { Some(body) } else { None };
-        self.strings(&children, true, block, &mut strings);
+        self.strings(&children, true, block, cuts, &mut strings);
 
         let mut paragraphs = Vec::new();
         let mut current: Vec<&str> = Vec::new();
@@ -261,8 +311,71 @@ impl Document {
         let (_, children) = self.body();
         let heading = self.find_heading(&children)?;
         let mut strings = Vec::new();
-        self.strings(&self.nodes[heading].children, false, None, &mut strings); // padding is stripped anyway
+        self.strings(&self.nodes[heading].children, false, None, &[], &mut strings); // padding is stripped anyway
         Some(strings.iter().filter(|(_, _, in_heading)| *in_heading).map(|(t, _, _)| pystr::strip(t)).collect())
+    }
+
+    /// `_find_anchor`: the first element whose id is `fragment`, else the first `<a>`
+    /// whose name is, among what BeautifulSoup keeps (body, minus head/nav/script/style).
+    /// Node ids follow document order, so the result also orders anchors.
+    pub fn find_anchor(&self, fragment: &str) -> Option<usize> {
+        let (_, children) = self.body();
+        let elements = self.elements(&children, true);
+        elements
+            .iter()
+            .copied()
+            .find(|&e| self.attr(e, "id") == Some(fragment))
+            .or_else(|| elements.iter().copied().find(|&e| self.name(e) == Some("a") && self.attr(e, "name") == Some(fragment)))
+    }
+
+    /// `_toc_links` on a nav document: (label, href) of every `<a href>` in the first
+    /// `<nav>` whose epub:type includes "toc", in document order; None without one.
+    pub fn toc_links(&self) -> Option<Vec<(String, String)>> {
+        let all = self.elements(&self.nodes[0].children, false);
+        let toc = all.iter().copied().find(|&e| {
+            self.name(e) == Some("nav") && self.attr(e, "epub:type").unwrap_or("").split(pystr::is_space).any(|t| t == "toc")
+        })?;
+        let links = self
+            .elements(&self.nodes[toc].children, false)
+            .into_iter()
+            .filter(|&e| self.name(e) == Some("a"))
+            .filter_map(|a| Some((self.get_text(a), self.attr(a, "href")?.to_string())))
+            .collect();
+        Some(links)
+    }
+
+    /// Elements under `roots` in document order, optionally leaving out the subtrees
+    /// `_load_soup` decomposes. Iterative, see `strings`.
+    fn elements(&self, roots: &[usize], skip_removed: bool) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut stack: Vec<usize> = roots.iter().rev().copied().collect();
+        while let Some(c) = stack.pop() {
+            match self.name(c) {
+                Some(n) if skip_removed && SKIPPED_TAGS.contains(&n) => {}
+                Some(_) => {
+                    out.push(c);
+                    stack.extend(self.nodes[c].children.iter().rev());
+                }
+                None => {}
+            }
+        }
+        out
+    }
+
+    /// BeautifulSoup's `get_text()` on the raw (html.parser) tree: every string below,
+    /// as written, except those under script/style/template/rt/rp.
+    fn get_text(&self, id: usize) -> String {
+        let mut text = String::new();
+        let mut stack: Vec<usize> = self.nodes[id].children.iter().rev().copied().collect();
+        while let Some(c) = stack.pop() {
+            match &self.nodes[c].kind {
+                Kind::Text { text: t, in_heading: true } => text.push_str(t),
+                Kind::Element(n) if n == "script" || n == "style" => {}
+                Kind::Element(_) => stack.extend(self.nodes[c].children.iter().rev()),
+                _ => {}
+            }
+        }
+        text
     }
 
     fn find_heading(&self, children: &[usize]) -> Option<usize> {
@@ -321,6 +434,59 @@ mod tests {
         }
     }
 
+    /// (name, page, fragments, pieces): `_split_at_anchors` in `ingest/epub.py` on the
+    /// page as ebooklib + BeautifulSoup read it.
+    const SPLIT_CASES: &[(&str, &str, &[&str], &[&str])] = &[
+        ("mid_paragraph_anchor", "<body>\n<p>Alpha beta <a id=\"mid\"></a>gamma.</p>\n</body>", &["mid"], &["Alpha beta", "gamma."]),
+        ("anchor_on_heading_minified", "<body><p>Pre.</p><h2 id=\"c1\">One</h2><p>x</p></body>", &["c1"], &["Pre.", "One\n\nx"]),
+        ("a_name_inside_heading", "<body>\n<p>Pre.</p><h2><a name=\"c2\"></a>Two</h2><p>x</p>\n</body>", &["c2"], &["Pre.", "Two\n\nx"]),
+        ("id_wins_over_earlier_a_name", "<body>\n<p><a name=\"x\">first</a></p><p id=\"x\">second</p>\n</body>", &["x"], &["first", "second"]),
+        ("anchor_in_nav_is_ignored", "<body>\n<nav><p id=\"x\">n</p></nav><p>a</p><p id=\"x\">b</p>\n</body>", &["x"], &["a", "b"]),
+        ("br_anchor", "<body>\n<p>one<br id=\"b\"/>two</p>\n</body>", &["b"], &["one", "two"]),
+        ("two_anchors", "<body>\n<p id=\"a\">A.</p><div><p>B.</p><p id=\"c\">C.</p></div>\n</body>", &["a", "c"], &["", "A.\n\nB.", "C."]),
+        ("minified_inline_siblings", "<body><p><span>a</span><span id=\"s\">b</span></p></body>", &["s"], &["a", "b"]),
+        ("anchor_after_dropped_leading_text", "<body>lead<p id=\"x\">para</p>tail</body>", &["x"], &["", "para\n\ntail"]),
+        ("sentinel_in_the_text_splits_too", "<body>\n<p>x\u{e000}y</p>\n</body>", &[], &["x", "y"]),
+        ("anchor_in_template", "<body>\n<p>a <template><b id=\"t\">t</b></template> b</p>\n</body>", &["t"], &["a", "t b"]),
+    ];
+
+    #[test]
+    fn pages_split_at_anchors_like_the_python_pipeline() {
+        for (name, page, fragments, pieces) in SPLIT_CASES {
+            let doc = Document::parse(page);
+            let anchors: Vec<usize> = fragments.iter().map(|f| doc.find_anchor(f).unwrap_or_else(|| panic!("{name}: no #{f}"))).collect();
+            assert_eq!(doc.block_text_split(&anchors), *pieces, "{name}");
+        }
+        assert_eq!(Document::parse("<body><p id=\"a\">x</p></body>").find_anchor("b"), None);
+    }
+
+    /// (name, nav document, links): `_toc_links` in `ingest/epub.py` reading the raw page
+    /// with html.parser; None when no `<nav>` has epub:type "toc".
+    type Links = Option<&'static [(&'static str, &'static str)]>;
+    const NAV_CASES: &[(&str, &str, Links)] = &[
+        (
+            "first_toc_nav_nesting_flattened",
+            "<?xml version=\"1.0\"?><html><head><title>Contents</title></head><body><nav epub:type=\"landmarks\"><a href=\"x.xhtml\">L</a></nav><nav epub:type=\" toc\n\"><ol><li><a href=\"a.xhtml\">Part <em>One</em></a><ol><li><a href=\"b.xhtml#c\">Nested</a></li></ol></li><li><a>no href</a><a href=\"\">empty</a></li></ol></nav><nav epub:type=\"toc\"><a href=\"z.xhtml\">second toc</a></nav></body></html>",
+            Some(&[("Part One", "a.xhtml"), ("Nested", "b.xhtml#c"), ("empty", "")]),
+        ),
+        (
+            "label_skips_script_rt_comments",
+            "<nav epub:type=\"toc\"><a href=\"a.xhtml\">A<script>s</script><rt>r</rt><!--c--><br>B<style>t</style><template>u</template></a><a href=\"b.xhtml\">&amp; Co</a></nav>",
+            Some(&[("AB", "a.xhtml"), ("& Co", "b.xhtml")]),
+        ),
+        ("no_toc_nav", "<nav epub:type=\"page-list\"><a href=\"a.xhtml\">1</a></nav><nav><a href=\"b.xhtml\">2</a></nav>", None),
+        ("toc_in_head", "<html><head><nav epub:type=\"toc\"><a href=\"h.xhtml\">H</a></nav></head><body></body></html>", Some(&[("H", "h.xhtml")])),
+    ];
+
+    #[test]
+    fn nav_links_read_like_the_python_pipeline() {
+        for (name, page, links) in NAV_CASES {
+            let got = Document::parse(page).toc_links();
+            let want = links.map(|l| l.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>());
+            assert_eq!(got, want, "{name}");
+        }
+    }
+
     #[test]
     fn deeply_nested_unclosed_paragraphs_do_not_overflow_the_stack() {
         let page = format!("<body>{}</body>", "<p>x".repeat(50_000));
@@ -331,6 +497,10 @@ mod tests {
                 let text = doc.block_text();
                 assert_eq!(text.split("\n\n").filter(|p| *p == "x").count(), 50_000);
                 assert_eq!(doc.first_heading(), None);
+                assert_eq!(doc.find_anchor("nope"), None);
+                assert_eq!(doc.block_text_split(&[]).len(), 1);
+                let nav = format!("<nav epub:type=\"toc\">{}<a href=\"a\">deep</a>", "<li>".repeat(50_000));
+                assert_eq!(Document::parse(&nav).toc_links(), Some(vec![("deep".to_string(), "a".to_string())]));
             })
             .unwrap()
             .join()
