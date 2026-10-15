@@ -250,3 +250,28 @@ fn a_whole_scene_under_the_minimum_merges_across_the_break_rather_than_stand_alo
     let text = "The door closed behind him for good.\n\n* * *\n\nThe End.";
     assert_eq!(chunk_text(text, 300, 20), [chunk("The door closed behind him for good. The End.", Paragraph)]);
 }
+
+mod fixture;
+
+use audiobookify_core::ingest::epub;
+use fixture::fixtures;
+
+fn epub_chapter_text(name: &str) -> String {
+    epub::parse(fixtures().join("epub").join(name)).unwrap().chapters.remove(0).text
+}
+
+#[test]
+fn an_interrupted_line_ending_a_chunk_gets_a_clean_stop() {
+    // Turbo babbled or repeated words after chunks ending in a dash (1 in 20 runs
+    // with the dash, 0 in 20 with a period); the pause stays a paragraph pause.
+    let chunks = chunk_text(&epub_chapter_text("dashes.epub"), 300, 80);
+    let last_words: Vec<&str> = chunks.iter().map(|c| c.text.rsplit(' ').next().unwrap()).collect();
+    assert_eq!(last_words, ["to.”", "a.", "look.’", "short.", "quickly."]);
+    assert!(chunks.iter().all(|c| c.ends_with == Paragraph));
+}
+
+#[test]
+fn dashes_inside_a_chunk_are_left_alone() {
+    let chunks = chunk_text(&epub_chapter_text("dashes_inside.epub"), 300, 80);
+    assert!(chunks[0].text.contains("paused—only for a moment—and went on."));
+}
