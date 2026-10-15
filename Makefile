@@ -15,7 +15,7 @@ ifneq ($(NVM_NODE_BIN),)
 export PATH := $(NVM_NODE_BIN):$(PATH)
 endif
 
-.PHONY: setup models build up dev down clean check-not-running
+.PHONY: setup models build up dev app-dev app down clean check-not-running
 
 setup:
 	python3.12 -m venv $(VENV)
@@ -57,6 +57,16 @@ dev: check-not-running
 	HF_HUB_OFFLINE=1 $(VENV)/bin/audiobookify worker & echo $$! > .run/worker.pid
 	cd frontend && npm run dev & echo $$! > .run/frontend.pid
 	@echo "dev stack running - api http://127.0.0.1:8000, frontend http://127.0.0.1:5173 - 'make down' to stop."
+
+# Native window around the same API + worker. Quitting the app stops both.
+app-dev: check-not-running
+	cd desktop && cargo tauri dev
+
+# Builds desktop/target/release/bundle/macos/Audiobookify.app. It runs this checkout's
+# .venv, so keep the repo where it is.
+app:
+	cd desktop && cargo tauri build
+	@echo "built desktop/target/release/bundle/macos/Audiobookify.app"
 
 down:
 	@for f in .run/*.pid; do [ -f "$$f" ] && kill "$$(cat "$$f")" 2>/dev/null; rm -f "$$f"; done
