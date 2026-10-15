@@ -96,7 +96,11 @@ def _toc_chapters(book, docs) -> list:
     toc_file, links = _toc_links(book)
     index = {item.file_name: i for i, item in enumerate(docs)}
     soups = {}  # document index -> soup, parsed on demand
-    soup_of = lambda i: soups.setdefault(i, _load_soup(docs[i]))
+
+    def soup_of(i):
+        if i not in soups:
+            soups[i] = _load_soup(docs[i])
+        return soups[i]
 
     entries = []  # (label, document index, fragment or None)
     last = None
@@ -106,11 +110,15 @@ def _toc_chapters(book, docs) -> list:
         if path not in index:
             continue
         i = index[path]
+        fragment = unquote(fragment)
         anchor = _find_anchor(soup_of(i), fragment) if fragment else None
         if anchor is None:
             fragment = None  # no fragment, or one that matches nothing: starts at the top
         # position in reading order; the top of a document sorts before every element in it
-        position = (i, list(soup_of(i).find_all(True)).index(anchor) if anchor else -1)
+        order = -1
+        if anchor:
+            order = next(n for n, tag in enumerate(soup_of(i).find_all(True)) if tag is anchor)
+        position = (i, order)
         if last is not None and position <= last:
             continue
         entries.append((label, i, fragment))

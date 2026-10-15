@@ -105,7 +105,7 @@ def test_real_epub_output_chunks_into_paragraph_aware_chunks(tmp_path):
 # --- chapters from the table of contents -------------------------------------
 # Built with zipfile, not ebooklib, which rewrites the content it writes.
 
-def _zip_epub(path, docs, ncx=None, nav=None, spine=None):
+def _zip_epub(path, docs, ncx=None, nav=None, spine=None, nav_path="nav.xhtml"):
     """docs: {file name under OEBPS/: body html}. ncx: [(label, href)]. nav: raw nav html."""
     items = [
         f'<item id="d{i}" href="{quote(name)}" media-type="application/xhtml+xml"/>'
@@ -115,7 +115,7 @@ def _zip_epub(path, docs, ncx=None, nav=None, spine=None):
     if ncx is not None:
         items.append('<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>')
     if nav is not None:
-        items.append('<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>')
+        items.append(f'<item id="nav" href="{nav_path}" media-type="application/xhtml+xml" properties="nav"/>')
     spine = spine or list(docs)
     opf = (
         '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" '
@@ -154,7 +154,7 @@ def _zip_epub(path, docs, ncx=None, nav=None, spine=None):
             )
         if nav is not None:
             z.writestr(
-                "OEBPS/nav.xhtml",
+                f"OEBPS/{nav_path}",
                 '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">'
                 f"<body>{nav}</body></html>",
             )
@@ -296,6 +296,38 @@ def test_toc_hrefs_resolve_against_the_toc_files_directory(tmp_path):
         '<li><a href="./sub/../b.xhtml#">B</a></li></ol></nav>'
     )
     assert _titles(_parse(tmp_path, docs, nav=nav)) == ["A", "B"]
+
+
+def test_fragment_is_percent_decoded(tmp_path):
+    docs = {"a.xhtml": '<p>Top.</p><h2 id="\u00e9t\u00e9">Summer</h2><p>Sun.</p>'}
+    chapters = _parse(tmp_path, docs, ncx=[("Top", "a.xhtml"), ("Summer", "a.xhtml#%C3%A9t%C3%A9")])
+    assert [c.text for c in chapters] == ["Top.", "Summer\n\nSun."]
+
+
+def test_anchor_in_a_later_file_leaves_its_top_in_the_previous_chapter(tmp_path):
+    docs = {
+        "a.xhtml": "<p>A.</p>",
+        "b.xhtml": '<p>B top.</p><h2 id="x">Two</h2><p>B rest.</p>',
+        "c.xhtml": "<p>C.</p>",
+    }
+    chapters = _parse(tmp_path, docs, ncx=[("A", "a.xhtml"), ("Two", "b.xhtml#x")])
+    assert [c.text for c in chapters] == ["A.\n\nB top.", "Two\n\nB rest.\n\nC."]
+
+
+def test_toc_in_another_directory_resolves_relative_to_itself(tmp_path):
+    docs = {"text/a.xhtml": "<p>A.</p>", "text/b.xhtml": "<p>B.</p>"}
+    nav = (
+        '<nav epub:type="toc"><ol><li><a href="../text/a.xhtml">A</a></li>'
+        '<li><a href="../text/b.xhtml">B</a></li></ol></nav>'
+    )
+    assert _titles(_parse(tmp_path, docs, nav=nav, nav_path="nav/nav.xhtml")) == ["A", "B"]
+
+
+def test_nav_with_one_entry_falls_back_to_per_file_chapters(tmp_path):
+    long = "<p>" + "Once upon a time. " * 20 + "</p>"
+    docs = {"a.xhtml": long, "b.xhtml": long}
+    nav = '<nav epub:type="toc"><ol><li><a href="a.xhtml">A</a></li></ol></nav>'
+    assert _titles(_parse(tmp_path, docs, nav=nav)) == ["Chapter 1", "Chapter 2"]
 
 
 def test_books_without_a_usable_toc_keep_per_file_chapters(tmp_path):
