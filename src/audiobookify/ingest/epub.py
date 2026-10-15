@@ -1,3 +1,4 @@
+import copy
 import posixpath
 from pathlib import Path
 from urllib.parse import unquote
@@ -88,14 +89,16 @@ def _split_at_anchors(soup: BeautifulSoup, fragments: list) -> tuple:
     it is None when no anchor needs one. (None, None) when all 6,400 are taken: the caller
     gives up on the TOC. Rust mirrors this in `block_text_split`.
     """
-    text = _block_text(soup)
     sentinel = None
     if fragments:
+        text = _block_text(copy.copy(soup))  # a copy: _block_text replaces <br> tags, which may be anchors
         sentinel = next((chr(c) for c in SENTINEL_RANGE if chr(c) not in text), None)
         if sentinel is None:
             return None, None
         for fragment in fragments:
             _find_anchor(soup, fragment).insert_before(NavigableString(sentinel))
+        text = _block_text(soup)
+    else:
         text = _block_text(soup)
     pieces = []
     for piece in (text.split(sentinel) if sentinel else [text]):

@@ -279,6 +279,12 @@ def test_top_of_file_entry_and_anchor_entries_share_a_file(tmp_path):
     assert [c.text for c in chapters] == ["Intro.", "One\n\nx"]
 
 
+def test_anchor_on_a_br_splits_the_paragraph(tmp_path):
+    docs = {"all.xhtml": '<p>one<br id="b"/>two</p>'}
+    chapters = _parse(tmp_path, docs, ncx=[("A", "all.xhtml"), ("B", "all.xhtml#b")])
+    assert [c.text for c in chapters] == ["one", "two"]
+
+
 def test_unknown_fragment_starts_at_top_of_file(tmp_path):
     docs = {"a.xhtml": "<p>A.</p>", "b.xhtml": "<p>B.</p>"}
     chapters = _parse(tmp_path, docs, ncx=[("A", "a.xhtml#nope"), ("B", "b.xhtml")])
