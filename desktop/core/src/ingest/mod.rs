@@ -1,5 +1,7 @@
 //! Books in, chapters out: `src/audiobookify/ingest/` in Rust.
 
+#[allow(dead_code)] // epub.rs (Task 8) is its only caller
+mod html;
 pub mod markdown;
 
 use crate::models::RawChapter;
