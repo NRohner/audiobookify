@@ -232,9 +232,10 @@ def create_app(db_path: str = "audiobookify.db", upload_dir: str = "uploads",
         for chapter in chapters:
             clear_cache(chapter.id)
         # Rendered MP3s stay. Only remove the copy we staged, never anything outside upload_dir.
-        source = Path(book.source_path).resolve()
-        if source.is_relative_to(Path(upload_dir).resolve()):
-            shutil.rmtree(source.parent, ignore_errors=True)
+        root = Path(upload_dir).resolve()
+        staged = Path(book.source_path).resolve().parent
+        if staged != root and staged.is_relative_to(root):
+            shutil.rmtree(staged, ignore_errors=True)
         return {"ok": True}
 
     @app.get("/api/books/{book_id}/text")

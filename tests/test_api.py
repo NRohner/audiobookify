@@ -1379,3 +1379,36 @@ def test_delete_book_returns_409_while_a_job_is_queued(tmp_path):
 
     assert response.status_code == 409
     assert len(client.get("/api/books").json()) == 1
+
+
+def test_delete_book_never_removes_upload_dir_for_a_file_directly_inside_it(tmp_path):
+    client = _client(tmp_path)
+    sibling = _upload_book(client, tmp_path)
+    sibling_dir = Path(Database(str(tmp_path / "test.db")).get_book(sibling["id"]).source_path).parent
+    uploads = tmp_path / "uploads"
+    loose = uploads / "b.md"
+    loose.write_text("# One\n\nHello.\n")
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(title="B", author=None, source_path=str(loose),
+                          source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"))
+
+    assert client.delete(f"/api/books/{book.id}").status_code == 200
+
+    assert uploads.is_dir()
+    assert sibling_dir.is_dir()
+
+
+def test_delete_book_never_removes_anything_when_source_path_is_upload_dir(tmp_path):
+    client = _client(tmp_path)
+    sibling = _upload_book(client, tmp_path)
+    sibling_dir = Path(Database(str(tmp_path / "test.db")).get_book(sibling["id"]).source_path).parent
+    uploads = tmp_path / "uploads"
+    marker = tmp_path / "marker.txt"
+    marker.write_text("x")
+    db = Database(str(tmp_path / "test.db"))
+    book = db.create_book(title="B", author=None, source_path=str(uploads),
+                          source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"))
+
+    assert client.delete(f"/api/books/{book.id}").status_code == 200
+
+    assert uploads.is_dir() and sibling_dir.is_dir() and marker.exists()
