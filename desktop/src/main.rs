@@ -1,6 +1,6 @@
 mod sidecars;
 
-use sidecars::{audiobookify_commands, port_in_use, Sidecars, API_ADDR};
+use sidecars::{audiobookify_commands, wait_port_free, Sidecars, API_ADDR};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -15,7 +15,7 @@ fn repo_root() -> &'static Path {
 fn main() {
     let app = tauri::Builder::default()
         .setup(|app| {
-            if port_in_use(API_ADDR) {
+            if !wait_port_free(API_ADDR, Duration::from_secs(6)) {
                 return Err(format!(
                     "{API_ADDR} is already in use. Run `make down` or quit the other Audiobookify, then relaunch."
                 )

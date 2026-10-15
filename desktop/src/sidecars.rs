@@ -8,7 +8,23 @@ pub const API_ADDR: &str = "127.0.0.1:8000";
 
 pub fn port_in_use(addr: &str) -> bool {
     let addr: SocketAddr = addr.parse().expect("valid socket address");
-    TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
+    // Connecting to a free ephemeral port can TCP self-connect (source port == destination port);
+    // that is not a listener.
+    TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok_and(|s| s.local_addr().ok() != Some(addr))
+}
+
+/// Waits for `addr` to stop accepting connections, e.g. an old instance's uvicorn still in graceful shutdown.
+pub fn wait_port_free(addr: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !port_in_use(addr) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        sleep(Duration::from_millis(100));
+    }
 }
 
 /// The two processes `make up` starts: the FastAPI app and the generation worker.
@@ -22,14 +38,20 @@ pub fn audiobookify_commands(repo: &Path) -> Vec<Command> {
     for c in &mut cmds {
         // The repo root as cwd: create_app() and the worker default to ./audiobookify.db, ./uploads, ./voices.
         c.current_dir(repo).env("HF_HUB_OFFLINE", "1");
+        // ponytail: Homebrew paths are hardcoded for this personal-Macs-only build; a shareable build
+        // would bundle ffmpeg. A Finder-launched .app only has /usr/bin:/bin:/usr/sbin:/sbin.
+        c.env("PATH", format!("/opt/homebrew/bin:/usr/local/bin:{}", std::env::var("PATH").unwrap_or_default()));
     }
     cmds
 }
 
 // Runs "$@" and ties it to stdin: when the app dies the kernel closes the pipe, `read` sees EOF,
 // and the child gets SIGTERM, then SIGKILL after ~5 s. (Async lists get /dev/null as stdin, hence fd 3.)
+// The child gets /dev/null as stdin (not a closed fd 0, which the next open() would take over) and no fd 3.
+// A non-interactive sh starts async children with SIGINT/SIGQUIT ignored (inherited across exec), so
+// Ctrl+C in the terminal no longer reaches the worker directly; cleanup still happens through the pipe.
 const WRAPPER: &str = r#"exec 3<&0
-"$@" <&- & c=$!
+"$@" </dev/null 3<&- & c=$!
 { read _ <&3; kill -TERM $c 2>/dev/null; i=0; while kill -0 $c 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; kill -KILL $c 2>/dev/null; } &
 w=$!
 wait $c; s=$?
@@ -89,8 +111,11 @@ impl Drop for Sidecars {
         // ponytail: closing stdin makes each wrapper SIGTERM its child, then SIGKILL after ~5 s.
         // Do not kill the wrapper itself: that would orphan the real child. The worker resets
         // stale jobs on startup and the chunk cache resumes, so a forced kill is safe.
+        // Close every stdin first so the children shut down in parallel, then reap them.
         for child in &mut self.0 {
             drop(child.stdin.take());
+        }
+        for child in &mut self.0 {
             let _ = child.wait();
         }
     }
@@ -132,7 +157,7 @@ mod tests {
         let addr = l.local_addr().unwrap().to_string();
         assert!(port_in_use(&addr));
         drop(l);
-        assert!(!port_in_use(&addr));
+        assert!(wait_port_free(&addr, Duration::from_secs(2)));
     }
 
     #[test]
@@ -263,6 +288,69 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_child_has_dev_null_stdin_and_no_fd3() {
+        let f = tmp_file("fds");
+        let script = format!(
+            "import os,stat\ntry:\n s=os.fstat(0); a='ok' if stat.S_ISCHR(s.st_mode) and s.st_rdev==os.stat('/dev/null').st_rdev else 'bad'\nexcept OSError: a='bad'\ntry:\n os.fstat(3); b='open'\nexcept OSError: b='closed'\nopen('{}','w').write(a+' '+b)",
+            f.display()
+        );
+        let mut c = Command::new("python3");
+        c.args(["-c", &script]);
+        let sc = Sidecars::start(vec![c]).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while std::fs::read_to_string(&f).map_or(true, |s| s.is_empty()) {
+            assert!(Instant::now() < deadline, "child never wrote {f:?}");
+            sleep(Duration::from_millis(20));
+        }
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "ok closed");
+        sc.shutdown();
+    }
+
+    #[test]
+    fn drop_shuts_children_down_in_parallel() {
+        let (f1, f2) = (tmp_file("p1"), tmp_file("p2"));
+        let stubborn = "trap '' TERM; while :; do sleep 1; done";
+        let sc = Sidecars::start(vec![pid_writer(&f1, stubborn), pid_writer(&f2, stubborn)]).unwrap();
+        let pids = [read_pid(&f1), read_pid(&f2)];
+        sleep(Duration::from_millis(300)); // let the traps install
+        let started = Instant::now();
+        drop(sc);
+        assert!(started.elapsed() < Duration::from_secs(7), "drop took {:?}", started.elapsed());
+        assert!(pids.iter().all(|p| dies_within(*p, Duration::from_secs(1))));
+    }
+
+    #[test]
+    fn wait_port_free_true_immediately_for_free_port() {
+        let _g = ports();
+        let started = Instant::now();
+        assert!(wait_port_free(&free_addr(), Duration::from_secs(2)));
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn wait_port_free_false_for_held_port() {
+        let _g = ports();
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap().to_string();
+        let started = Instant::now();
+        assert!(!wait_port_free(&addr, Duration::from_millis(500)));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn wait_port_free_true_once_listener_drops() {
+        let _g = ports();
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap().to_string();
+        let t = std::thread::spawn(move || {
+            sleep(Duration::from_millis(300));
+            drop(l);
+        });
+        assert!(wait_port_free(&addr, Duration::from_secs(3)));
+        t.join().unwrap();
+    }
+
+    #[test]
     fn audiobookify_commands_use_repo_venv() {
         let repo = Path::new("/repo");
         let cmds = audiobookify_commands(repo);
@@ -274,6 +362,8 @@ mod tests {
         for c in &cmds {
             assert_eq!(c.get_current_dir(), Some(repo));
             assert!(c.get_envs().any(|(k, v)| k == "HF_HUB_OFFLINE" && v == Some("1".as_ref())));
+            let path = c.get_envs().find(|(k, _)| *k == "PATH").and_then(|(_, v)| v).unwrap().to_str().unwrap();
+            assert!(path.starts_with("/opt/homebrew/bin:/usr/local/bin:"), "PATH was {path}");
         }
     }
 }
