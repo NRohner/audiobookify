@@ -1311,3 +1311,71 @@ def test_worker_stores_the_chapter_duration_when_it_finishes(tmp_path):
 
     assert stored and stored > 0
     assert client.get(f"/api/books/{created['id']}").json()["chapters"][0]["duration"] == stored
+
+
+def _upload_book(client, tmp_path):
+    out = tmp_path / "out"
+    response = client.post(
+        "/api/books",
+        files={"file": ("tiny.md", b"# One\n\nHello.\n\n# Two\n\nWorld.\n", "text/markdown")},
+        data={"output_dir": str(out)},
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_delete_book_removes_book_cache_and_staged_upload_but_keeps_mp3s(tmp_path):
+    import audiobookify.synth.chunk_cache as chunk_cache
+
+    client = _client(tmp_path)
+    created = _upload_book(client, tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    book = db.get_book(created["id"])
+    staged_dir = Path(book.source_path).parent
+    chapter = db.list_chapters(book.id)[0]
+    mp3 = tmp_path / "out" / "one.mp3"
+    mp3.write_bytes(b"mp3")
+    db.update_chapter_status(chapter.id, ChapterStatus.DONE, output_mp3_path=str(mp3))
+    chunk_cache.save_chunk(chapter.id, 0, np.zeros(10, dtype="float32"), sample_rate=22050)
+    assert staged_dir.is_dir() and chunk_cache.chapter_cache_dir(chapter.id).is_dir()
+
+    response = client.delete(f"/api/books/{book.id}")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert client.get("/api/books").json() == []
+    assert not staged_dir.exists()
+    assert not chunk_cache.chapter_cache_dir(chapter.id).exists()
+    assert mp3.exists()
+
+
+def test_delete_book_keeps_a_source_file_outside_the_upload_dir(tmp_path):
+    client = _client(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    source = elsewhere / "b.md"
+    source.write_text("# One\n\nHello.\n")
+    book = db.create_book(title="B", author=None, source_path=str(source),
+                          source_format=SourceFormat.MARKDOWN, output_dir=str(tmp_path / "out"))
+
+    assert client.delete(f"/api/books/{book.id}").status_code == 200
+
+    assert source.exists()
+    assert client.get("/api/books").json() == []
+
+
+def test_delete_book_returns_404_for_unknown_book(tmp_path):
+    assert _client(tmp_path).delete("/api/books/999").status_code == 404
+
+
+def test_delete_book_returns_409_while_a_job_is_queued(tmp_path):
+    client = _client(tmp_path)
+    created = _upload_book(client, tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    db.create_job(db.list_chapters(created["id"])[0].id)
+
+    response = client.delete(f"/api/books/{created['id']}")
+
+    assert response.status_code == 409
+    assert len(client.get("/api/books").json()) == 1
