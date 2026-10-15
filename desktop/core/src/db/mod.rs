@@ -8,6 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension, Params, Row, TransactionBe
 
 use crate::models::{Book, Chapter, ChapterOutcome, ChapterStatus, RawChapter, SourceFormat};
 
+pub mod migrations;
 mod jobs;
 mod lexicon;
 mod voices;
@@ -58,6 +59,7 @@ impl Database {
         // can't both decide a column is missing and both try to add it.
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute_batch(SCHEMA)?;
+        migrations::migrate_columns(&tx)?;
         tx.commit()?;
         Ok(Self { conn })
     }
