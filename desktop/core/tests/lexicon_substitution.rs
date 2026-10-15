@@ -40,3 +40,13 @@ fn apply_lexicon_prefers_longer_overlapping_term_regardless_of_order() {
     assert_eq!(apply_lexicon(text, [("York", "Yorrk"), ("New York", "Noo Yawk")]), "She flew to Noo Yawk yesterday.");
     assert_eq!(apply_lexicon(text, [("New York", "Noo Yawk"), ("York", "Yorrk")]), "She flew to Noo Yawk yesterday.");
 }
+
+#[test]
+fn apply_lexicon_handles_a_multi_megabyte_chapter_with_substring_only_hits() {
+    // "Ser" appears only inside "Service" until the very end; scanning must not hit a backtrack limit.
+    let text = format!("{}and then Ser spoke.", "Service ".repeat(100_000));
+    let out = apply_lexicon(&text, [("Ser", "SIR")]);
+    assert!(out.ends_with("and then SIR spoke."));
+    assert!(out.starts_with("Service Service "));
+    assert_eq!(out.len(), text.len());
+}

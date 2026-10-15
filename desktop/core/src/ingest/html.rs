@@ -181,15 +181,38 @@ impl Document {
 
     /// Strings in document order as (text, nearest block ancestor, counts for headings),
     /// with head/nav/script/style removed, `<br>` read as " ", and pretty-print whitespace.
-    fn strings(&self, children: &[usize], formatted: bool, block: Option<usize>, out: &mut Vec<(String, Option<usize>, bool)>) {
-        let formatted = formatted && !children.iter().any(|&c| self.is_text(c));
-        let pad = |out: &mut Vec<(String, Option<usize>, bool)>| {
-            if formatted {
-                out.push((" ".to_string(), block, true));
-            }
+    fn strings<'a>(&'a self, children: &'a [usize], formatted: bool, block: Option<usize>, out: &mut Vec<(String, Option<usize>, bool)>) {
+        // Explicit stack instead of recursion: nothing closes implicitly, so unclosed tags
+        // nest as deep as the input is long. A frame is a child list being walked.
+        struct Frame<'a> {
+            children: &'a [usize],
+            next: usize,
+            formatted: bool,
+            block: Option<usize>,
+        }
+        let frame = |children: &'a [usize], formatted: bool, block| Frame {
+            children,
+            next: 0,
+            formatted: formatted && !children.iter().any(|&c| self.is_text(c)),
+            block,
         };
-        for &child in children {
-            pad(out);
+        let mut stack = vec![frame(children, formatted, block)];
+        while let Some(top) = stack.last_mut() {
+            let pad = |out: &mut Vec<(String, Option<usize>, bool)>, f: bool, b| {
+                if f {
+                    out.push((" ".to_string(), b, true));
+                }
+            };
+            let Some(&child) = top.children.get(top.next) else {
+                if !top.children.is_empty() {
+                    pad(out, top.formatted, top.block);
+                }
+                stack.pop();
+                continue;
+            };
+            top.next += 1;
+            let (formatted, block) = (top.formatted, top.block);
+            pad(out, formatted, block);
             match &self.nodes[child].kind {
                 Kind::Text { text, in_heading } => out.push((text.clone(), block, *in_heading)),
                 Kind::Comment => {}
@@ -197,12 +220,9 @@ impl Document {
                 Kind::Element(name) if name == "br" => out.push((" ".to_string(), block, true)),
                 Kind::Element(name) => {
                     let inner = if BLOCK_TAGS.contains(&name.as_str()) { Some(child) } else { block };
-                    self.strings(&self.nodes[child].children, formatted, inner, out);
+                    stack.push(frame(&self.nodes[child].children, formatted, inner));
                 }
             }
-        }
-        if !children.is_empty() {
-            pad(out);
         }
     }
 
@@ -242,12 +262,17 @@ impl Document {
     }
 
     fn find_heading(&self, children: &[usize]) -> Option<usize> {
-        children.iter().find_map(|&c| match self.name(c) {
-            Some(n) if SKIPPED_TAGS.contains(&n) => None,
-            Some("h1" | "h2") => Some(c),
-            Some(_) => self.find_heading(&self.nodes[c].children),
-            None => None,
-        })
+        // Document-order search with an explicit stack (reverse-pushed), see `strings`.
+        let mut stack: Vec<usize> = children.iter().rev().copied().collect();
+        while let Some(c) = stack.pop() {
+            match self.name(c) {
+                Some(n) if SKIPPED_TAGS.contains(&n) => {}
+                Some("h1" | "h2") => return Some(c),
+                Some(_) => stack.extend(self.nodes[c].children.iter().rev()),
+                None => {}
+            }
+        }
+        None
     }
 }
 
@@ -279,6 +304,7 @@ mod tests {
         ("minified_text_child_turns_padding_off", "<body><p><span>Small</span><span>Caps</span> glued.</p></body>", "SmallCaps glued.", None),
         ("leading_body_text_is_dropped", "<body>lead<p>para</p>tail</body>", "para\n\ntail", None),
         ("content_after_body_is_dropped", "<body>\n<p>in</p>\n</body><p>after</p>", "in", None),
+        ("h1_inside_nav_is_skipped", "<body>\n<nav><h1>Contents</h1></nav><p>text</p>\n</body>", "text", None),
         ("no_body_element", "<p>just a fragment</p>", "just a fragment", None),
     ];
 
@@ -289,5 +315,21 @@ mod tests {
             assert_eq!(doc.block_text(), *text, "{name}: block text");
             assert_eq!(doc.first_heading().as_deref(), *heading, "{name}: heading");
         }
+    }
+
+    #[test]
+    fn deeply_nested_unclosed_paragraphs_do_not_overflow_the_stack() {
+        let page = format!("<body>{}</body>", "<p>x".repeat(50_000));
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let doc = Document::parse(&page);
+                let text = doc.block_text();
+                assert_eq!(text.split("\n\n").filter(|p| *p == "x").count(), 50_000);
+                assert_eq!(doc.first_heading(), None);
+            })
+            .unwrap()
+            .join()
+            .expect("walks must not overflow a 2 MB stack");
     }
 }

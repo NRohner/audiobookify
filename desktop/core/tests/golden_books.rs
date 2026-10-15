@@ -33,6 +33,11 @@ fn check(golden_path: &Path) -> usize {
         golden["lexicon"].as_array().unwrap().iter().map(|e| (str_of(&e[0]), str_of(&e[1]))).collect();
     for chunking in golden["chunkings"].as_array().unwrap() {
         let (max, min) = (usize_of(&chunking["max_chars"]), usize_of(&chunking["min_chars"]));
+        assert_eq!(
+            book.chapters.len(),
+            chunking["chapters"].as_array().unwrap().len(),
+            "{name}: chapter count vs chunking at {max}/{min}"
+        );
         for (i, (chapter, expected)) in book.chapters.iter().zip(chunking["chapters"].as_array().unwrap()).enumerate() {
             let text = if chunking["lexicon"].as_bool().unwrap() { apply_lexicon(&chapter.text, lexicon.iter().copied()) } else { chapter.text.clone() };
             let chunks = chunk_text(&text, max, min);
@@ -70,7 +75,7 @@ fn committed_fixtures_match_python() {
 #[test]
 fn local_books_match_python() {
     let paths = goldens_in(&fixtures().join("local"));
-    if paths.is_empty() {
+    if paths.is_empty() && std::env::var("REQUIRE_LOCAL_GOLDENS").is_err() {
         eprintln!("no local book goldens in tests/fixtures/text/local; skipped");
         return;
     }
@@ -79,4 +84,12 @@ fn local_books_match_python() {
         eprintln!("ok {} ({chapters} chapters)", path.file_name().unwrap().to_string_lossy());
     }
     eprintln!("checked {} local books", paths.len());
+    require_local_goldens(paths.len());
+}
+
+fn require_local_goldens(checked: usize) {
+    if let Ok(v) = std::env::var("REQUIRE_LOCAL_GOLDENS") {
+        let want: usize = v.parse().expect("REQUIRE_LOCAL_GOLDENS must be a number");
+        assert_eq!(checked, want, "REQUIRE_LOCAL_GOLDENS={want} but checked {checked} local goldens");
+    }
 }

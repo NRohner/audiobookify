@@ -275,3 +275,18 @@ fn dashes_inside_a_chunk_are_left_alone() {
     let chunks = chunk_text(&epub_chapter_text("dashes_inside.epub"), 300, 80);
     assert!(chunks[0].text.contains("paused—only for a moment—and went on."));
 }
+
+#[test]
+fn normalize_text_handles_a_megabyte_without_numbers() {
+    let text = format!("{}It cost 42 coins.", "word ".repeat(200_000));
+    let out = normalize_text(&text);
+    assert!(out.ends_with("It cost forty-two coins."));
+}
+
+#[test]
+fn split_sentences_handles_a_megabyte_with_one_break_at_the_end() {
+    let text = format!("{}end. Next one.", "word ".repeat(200_000));
+    let sentences = split_sentences(&text);
+    assert_eq!(sentences.len(), 2);
+    assert_eq!(sentences[1], "Next one.");
+}

@@ -1,4 +1,4 @@
-use fancy_regex::{NoExpand, Regex};
+use fancy_regex::{NoExpand, RegexBuilder};
 
 use crate::pystr::{self, BOUNDARY};
 
@@ -16,8 +16,13 @@ pub fn apply_lexicon<'a>(text: &str, entries: impl IntoIterator<Item = (&'a str,
         if !present.is_match(&text) {
             continue;
         }
-        let pattern = Regex::new(&format!("(?i){BOUNDARY}{}{BOUNDARY}", fancy_regex::escape(term)))
-            .expect("escaped term is a valid regex");
+        // fancy-regex counts backtracks across a whole unanchored search (about one per byte
+        // scanned), so the default cap would panic on a long chapter. This pattern has no
+        // catastrophic case: the work is linear in the text, so the limit is lifted.
+        let pattern = RegexBuilder::new(&format!("(?i){BOUNDARY}{}{BOUNDARY}", fancy_regex::escape(term)))
+            .backtrack_limit(usize::MAX)
+            .build()
+            .expect("escaped term is a valid regex, and unlimited backtracking cannot fail");
         text = pattern.replace_all(&text, NoExpand(value)).into_owned();
     }
     text
