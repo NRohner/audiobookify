@@ -1,30 +1,37 @@
 import { useEffect, useState } from "react";
 import { AudioLines, ChevronRight, Loader2, Play, Plus, RotateCcw, Save, Target, Trash2 } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api.js";
 import { textClipInProgress } from "../lib/status.js";
 import FileAudio from "../components/FileAudio.jsx";
 import { transcriptState } from "../lib/engines.js";
 import { SWEET_SPOT, TEMPO_MAX, TEMPO_MIN, pacedWpm, sweetSpotTempo, tempoPosition } from "../lib/pace.js";
 import Button, { ErrorNote, PageHeader } from "../components/ui/Button.jsx";
+import PathPick from "../components/PathPick.jsx";
 import Modal from "../components/ui/Modal.jsx";
 import ConfirmDialog from "../components/ui/ConfirmDialog.jsx";
 
 function CloneVoiceModal({ onClose, onCloned }) {
   const [name, setName] = useState("");
   const [transcript, setTranscript] = useState("");
+  const [path, setPath] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+
+  async function chooseFile() {
+    const picked = await open({
+      multiple: false,
+      filters: [{ name: "Audio", extensions: ["wav", "mp3", "flac", "ogg", "m4a", "aif", "aiff"] }],
+    });
+    if (picked) setPath(picked);
+  }
 
   async function handleSubmit(event) {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
     try {
-      const form = new FormData();
-      form.append("file", event.target.elements.file.files[0]);
-      form.append("name", name);
-      if (transcript.trim()) form.append("reference_transcript", transcript.trim());
-      const voice = await api.createVoice(form);
+      const voice = await api.createVoice(path, name, transcript.trim());
       onCloned(voice);
     } catch (e) {
       setError(e.message);
@@ -50,19 +57,11 @@ function CloneVoiceModal({ onClose, onCloned }) {
         </div>
 
         <div>
-          <label htmlFor="file" className="block text-meta font-semibold mb-1.5">
+          <p className="text-meta font-semibold mb-1.5">
             A recording of the voice
             <span className="block font-normal text-ink-muted">10 to 30 seconds of one person reading, somewhere quiet.</span>
-          </label>
-          <input
-            id="file"
-            type="file"
-            name="file"
-            accept="audio/*"
-            required
-            className="block w-full text-meta text-ink-muted file:mr-3 file:h-9 file:rounded-full file:border file:border-line
-              file:bg-card file:px-4 file:text-meta file:font-semibold file:text-ink file:cursor-pointer"
-          />
+          </p>
+          <PathPick label="Choose recording…" icon={AudioLines} path={path} onPick={chooseFile} />
         </div>
 
         <div>
@@ -85,7 +84,7 @@ function CloneVoiceModal({ onClose, onCloned }) {
           <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" loading={submitting}>
+          <Button type="submit" loading={submitting} disabled={!path}>
             Save voice
           </Button>
         </div>

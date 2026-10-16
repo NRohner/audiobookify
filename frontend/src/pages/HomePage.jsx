@@ -1,39 +1,40 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Plus, Search, Upload } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { FileText, Plus, Search, Upload } from "lucide-react";
 import { api } from "../lib/api.js";
 import { bookState, groupShelves, spineLook, spineNote } from "../lib/shelf.js";
 import Button, { ErrorNote } from "../components/ui/Button.jsx";
 import Modal from "../components/ui/Modal.jsx";
 import DirectoryBrowser from "../components/DirectoryBrowser.jsx";
+import PathPick from "../components/PathPick.jsx";
 import BookCover from "../components/BookCover.jsx";
 
 const SPINE_GAP = 8;
 const SHELF_PAD = 22;
 
-function ImportBookModal({ initialFile, onClose, onImported }) {
-  const fileRef = useRef(null);
+function ImportBookModal({ initialPath, onClose, onImported }) {
+  const [path, setPath] = useState(initialPath ?? null);
   const [outputDir, setOutputDir] = useState("");
   const [outputDirWritable, setOutputDirWritable] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    if (!initialFile) return;
-    const transfer = new DataTransfer();
-    transfer.items.add(initialFile);
-    fileRef.current.files = transfer.files;
-  }, [initialFile]);
+  async function chooseFile() {
+    const picked = await open({
+      multiple: false,
+      filters: [{ name: "EPUB or Markdown", extensions: ["epub", "md"] }],
+    });
+    if (picked) setPath(picked);
+  }
 
   async function handleSubmit(event) {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
     try {
-      const form = new FormData();
-      form.append("file", fileRef.current.files[0]);
-      form.append("output_dir", outputDir.trim());
-      onImported(await api.createBook(form));
+      onImported(await api.createBook(path, outputDir));
     } catch (e) {
       setError(e.message);
       setSubmitting(false);
@@ -44,19 +45,8 @@ function ImportBookModal({ initialFile, onClose, onImported }) {
     <Modal title="Add a book" onClose={onClose} wide>
       <form onSubmit={handleSubmit} className="flex flex-col gap-5">
         <div>
-          <label htmlFor="file" className="block text-meta font-semibold mb-1.5">
-            EPUB or Markdown file
-          </label>
-          <input
-            ref={fileRef}
-            id="file"
-            type="file"
-            name="file"
-            accept=".epub,.md"
-            required
-            className="block w-full text-meta text-ink-muted file:mr-3 file:h-9 file:rounded-full file:border file:border-line
-              file:bg-card file:px-4 file:text-meta file:font-semibold file:text-ink file:cursor-pointer"
-          />
+          <p className="text-meta font-semibold mb-1.5">EPUB or Markdown file</p>
+          <PathPick label="Choose file…" icon={FileText} path={path} onPick={chooseFile} />
         </div>
         <div>
           <p className="text-meta font-semibold mb-1.5">Where should the finished MP3s go?</p>
@@ -67,7 +57,7 @@ function ImportBookModal({ initialFile, onClose, onImported }) {
           <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" loading={submitting} disabled={!outputDirWritable}>
+          <Button type="submit" loading={submitting} disabled={!path || !outputDirWritable}>
             Add to shelf
           </Button>
         </div>
@@ -237,7 +227,7 @@ export default function HomePage() {
   const [voices, setVoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [importing, setImporting] = useState(null); // null | { file?: File }
+  const [importing, setImporting] = useState(null); // null | { path?: string }
   const [dragging, setDragging] = useState(false);
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
@@ -278,12 +268,19 @@ export default function HomePage() {
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
 
-  function handleDrop(e) {
-    e.preventDefault();
-    setDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) setImporting({ file });
-  }
+  useEffect(() => {
+    const stop = getCurrentWebview().onDragDropEvent(({ payload }) => {
+      if (payload.type === "enter" || payload.type === "over") setDragging(true);
+      else if (payload.type === "leave") setDragging(false);
+      else if (payload.type === "drop") {
+        setDragging(false);
+        if (payload.paths[0]) setImporting({ path: payload.paths[0] });
+      }
+    });
+    return () => {
+      stop.then((unlisten) => unlisten());
+    };
+  }, []);
 
   const narratorOf = (book) => voices.find((v) => v.id === book.voice_profile_id)?.name ?? "the default voice";
   const reviewCount = books.filter((b) => bookState(b).failed > 0).length;
@@ -296,17 +293,7 @@ export default function HomePage() {
   if (loading) return <p className="text-ink-muted">Opening the library…</p>;
 
   return (
-    <div
-      className="min-h-full"
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDragging(true);
-      }}
-      onDragLeave={(e) => {
-        if (!e.relatedTarget) setDragging(false);
-      }}
-      onDrop={handleDrop}
-    >
+    <div className="min-h-full">
       {books.length === 0 ? (
         <>
           <ErrorNote>{error}</ErrorNote>
@@ -382,7 +369,7 @@ export default function HomePage() {
 
       {importing && (
         <ImportBookModal
-          initialFile={importing.file}
+          initialPath={importing.path}
           onClose={() => setImporting(null)}
           onImported={(book) => navigate(`/books/${book.id}`)}
         />
