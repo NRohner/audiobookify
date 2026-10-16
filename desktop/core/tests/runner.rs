@@ -453,3 +453,19 @@ fn overlapping_unloads_are_each_answered_and_a_timeout_does_not_lie() {
     r.handle_unload();
     assert!(r.engine_pid().is_some());
 }
+
+#[test]
+fn the_control_tracks_the_loaded_engine() {
+    let dir = TempDir::new().unwrap();
+    let mut r = runner(dir.path(), &[]);
+    assert_eq!(r.control().loaded_engine(), None);
+    r.db.create_text_clip(LONG, None, "fake", None).unwrap();
+    assert!(r.run_once().unwrap());
+    assert_eq!(r.control().loaded_engine().as_deref(), Some("fake"));
+    let control = r.control();
+    let waiter = std::thread::spawn(move || control.unload_and_wait(Duration::from_secs(5)));
+    std::thread::sleep(Duration::from_millis(100));
+    r.handle_unload();
+    assert!(waiter.join().unwrap());
+    assert_eq!(r.control().loaded_engine(), None);
+}

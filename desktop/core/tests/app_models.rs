@@ -48,11 +48,10 @@ fn list_models_shows_only_the_registry_with_sizes() {
 #[test]
 fn delete_is_refused_while_queued_work_needs_the_engine() {
     let dir = TempDir::new().unwrap();
-    let (paths, db) = app(dir.path());
+    let (_paths, db) = app(dir.path());
     let hub = hub_at(dir.path());
     cache_model(&dir.path().join("hub"), "chatterbox-turbo");
     clips::create_text_clip(&db, hub.cache(), "Hi.", None, Some("chatterbox-turbo"), None).unwrap();
-    let _ = paths;
 
     let e = models::delete_model(&db, &hub, &answering_runner(), "chatterbox-turbo").unwrap_err();
     assert!(e.0.contains("in use"), "{e}");
@@ -80,7 +79,9 @@ fn transcription_delete_is_refused_while_anything_is_working() {
     cache_model(&dir.path().join("hub"), "whisper");
     cache_model(&dir.path().join("hub"), "chatterbox-turbo");
     clips::create_text_clip(&db, hub.cache(), "Hi.", None, Some("chatterbox-turbo"), None).unwrap();
-    assert!(models::delete_model(&db, &hub, &answering_runner(), "whisper").is_err());
+    let e = models::delete_model(&db, &hub, &answering_runner(), "whisper").unwrap_err();
+    assert_eq!(e.0, "Voice transcription is needed by queued work. Cancel it or let it finish, then delete.");
+    assert!(hub.cache().is_present(audiobookify_core::hub::model("whisper").unwrap()));
 }
 
 #[test]
@@ -89,10 +90,14 @@ fn idle_delete_unloads_first_and_frees_the_space() {
     let (_paths, db) = app(dir.path());
     let hub = hub_at(dir.path());
     cache_model(&dir.path().join("hub"), "chatterbox-turbo");
-    assert_eq!(models::delete_model(&db, &hub, &answering_runner(), "chatterbox-turbo").unwrap().freed, 28);
+    let answering = answering_runner();
+    answering.set_loaded_for_tests(Some("chatterbox-turbo"));
+    assert_eq!(models::delete_model(&db, &hub, &answering, "chatterbox-turbo").unwrap().freed, 28);
     // Idle, but nobody answers: refused rather than deleting under a loaded engine.
     cache_model(&dir.path().join("hub"), "chatterbox-turbo");
-    let e = models::delete_model(&db, &hub, &RunnerControl::default(), "chatterbox-turbo").unwrap_err();
+    let silent = RunnerControl::default();
+    silent.set_loaded_for_tests(Some("chatterbox-turbo"));
+    let e = models::delete_model(&db, &hub, &silent, "chatterbox-turbo").unwrap_err();
     assert!(e.0.contains("Try again"), "{e}");
 }
 
@@ -112,8 +117,17 @@ fn generating_with_a_missing_engine_is_refused() {
     let src = write_file(dir.path(), "book.md", TWO_CHAPTERS_MD);
     let book = audiobookify_core::app::books::create_book(&db, &paths, &src, &path(dir.path(), "out")).unwrap();
     let empty = HubCache::new(dir.path().join("empty"));
+    let msg = "Speed engine isn't downloaded yet. Download it in Settings.";
+    let e = jobs::generate_book(&db, &empty, book.id, Some("qwen3")).unwrap_err();
+    assert!(e.0.contains("needs a voice"), "{e}");
     let e = jobs::generate_book(&db, &empty, book.id, Some("chatterbox-turbo")).unwrap_err();
-    assert_eq!(e.0, "Speed engine isn't downloaded yet. Download it in Settings.");
+    assert_eq!(e.0, msg);
+    let chapter = book.chapters[0].id;
+    assert_eq!(jobs::generate_chapter(&db, &empty, book.id, chapter, Some("chatterbox-turbo")).unwrap_err().0, msg);
+    for c in &book.chapters {
+        assert!(db.list_jobs_for_chapter(c.id).unwrap().is_empty());
+    }
+    assert_eq!(db.get_book(book.id).unwrap().engine, book.engine);
     assert!(clips::create_text_clip(&db, &empty, "Hi.", None, Some("chatterbox-turbo"), None).is_err());
     assert!(db.list_text_clips().unwrap().iter().all(|c| c.status != JobStatus::Queued));
 }
@@ -125,4 +139,71 @@ fn list_engines_reports_readiness() {
     let engines = app::list_engines(&HubCache::new(dir.path()));
     let ready: Vec<_> = engines.engines.iter().map(|e| (e.spec.id, e.ready)).collect();
     assert_eq!(ready, [("qwen3", false), ("chatterbox-turbo", true)]);
+}
+
+fn book_in(dir: &std::path::Path) -> (audiobookify_core::app::AppPaths, audiobookify_core::db::Database,
+                                      audiobookify_core::app::books::BookDto) {
+    let (paths, db) = app(dir);
+    let src = write_file(dir, "book.md", TWO_CHAPTERS_MD);
+    let book = audiobookify_core::app::books::create_book(&db, &paths, &src, &path(dir, "out")).unwrap();
+    (paths, db, book)
+}
+
+#[test]
+fn delete_is_refused_for_a_queued_then_a_generating_book_job() {
+    let dir = TempDir::new().unwrap();
+    let hub = hub_at(dir.path());
+    let models_cache = ready_cache(dir.path());
+    let (_p, db, book) = book_in(dir.path());
+    jobs::generate_book(&db, &models_cache, book.id, Some("chatterbox-turbo")).unwrap();
+    let e = models::delete_model(&db, &hub, &answering_runner(), "chatterbox-turbo").unwrap_err();
+    assert!(e.0.contains("in use"), "{e}");
+    db.pop_next_queued_job().unwrap().unwrap(); // now Generating
+    let e = models::delete_model(&db, &hub, &answering_runner(), "chatterbox-turbo").unwrap_err();
+    assert!(e.0.contains("in use"), "{e}");
+    assert!(hub.cache().is_present(audiobookify_core::hub::model("chatterbox-turbo").unwrap()));
+}
+
+#[test]
+fn a_pending_transcription_blocks_deleting_whisper() {
+    let dir = TempDir::new().unwrap();
+    let (paths, db) = app(dir.path());
+    let hub = hub_at(dir.path());
+    cache_model(&dir.path().join("hub"), "whisper");
+    let clip = dir.path().join("nova.wav");
+    clean_tone_wav(&clip);
+    audiobookify_core::app::voices::create_voice(&db, &paths, &clip, "Nova", None).unwrap();
+    let e = models::delete_model(&db, &hub, &answering_runner(), "whisper").unwrap_err();
+    assert!(e.0.contains("needed by queued work"), "{e}");
+}
+
+#[test]
+fn transcribing_without_whisper_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let (paths, db) = app(dir.path());
+    let clip = dir.path().join("nova.wav");
+    clean_tone_wav(&clip);
+    let voice = audiobookify_core::app::voices::create_voice(&db, &paths, &clip, "Nova", Some("Hi.")).unwrap();
+    let empty = HubCache::new(dir.path().join("empty"));
+    let e = audiobookify_core::app::voices::transcribe_voice(&db, &empty, voice.id).unwrap_err();
+    assert_eq!(e.0, "Voice transcription isn't downloaded yet. Download it in Settings.");
+}
+
+#[test]
+fn deleting_the_loaded_engine_while_paused_and_busy_needs_an_unload() {
+    let dir = TempDir::new().unwrap();
+    let (_paths, db) = app(dir.path());
+    let hub = hub_at(dir.path());
+    cache_model(&dir.path().join("hub"), "chatterbox-turbo");
+    cache_model(&dir.path().join("hub"), "qwen3");
+    clips::create_text_clip(&db, hub.cache(), "Hi.", None, Some("chatterbox-turbo"), None).unwrap();
+    let control = RunnerControl::default();
+    control.set_loaded_for_tests(Some("qwen3"));
+    let e = models::delete_model(&db, &hub, &control, "qwen3").unwrap_err();
+    assert!(e.0.contains("Try again"), "{e}");
+    assert!(hub.cache().is_present(audiobookify_core::hub::model("qwen3").unwrap()));
+
+    let answering = answering_runner();
+    answering.set_loaded_for_tests(Some("qwen3"));
+    assert_eq!(models::delete_model(&db, &hub, &answering, "qwen3").unwrap().freed, 4 * 7);
 }

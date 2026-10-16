@@ -84,14 +84,19 @@ pub fn delete_model(db: &Database, h: &Hub, runner: &RunnerControl, id: &str) ->
                                m.label.to_lowercase()));
         }
         None if work.any() => {
-            return err("Voice transcription can't be deleted while the studio is working. Try again when it's idle.");
+            return err("Voice transcription is needed by queued work. Cancel it or let it finish, then delete.");
         }
         _ => {}
     }
-    // Busy with another engine: that engine is the loaded one, so this model isn't in memory.
-    // Idle: whatever was last used is still loaded, so drop the worker first.
+    // The worker keeps the last engine it used loaded, busy or not, so unload when this model's
+    // engine is the loaded one. Whisper is only deletable when no work exists, so the runner
+    // is idle and can answer; it may have held Whisper's weights too.
     // ponytail: work queued between this check and the delete fails with "isn't downloaded yet".
-    if !work.any() && !runner.unload_and_wait(Duration::from_secs(10)) {
+    let loaded = match m.engine {
+        Some(e) => runner.loaded_engine().as_deref() == Some(e),
+        None => true,
+    };
+    if loaded && !runner.unload_and_wait(Duration::from_secs(10)) {
         return err("The studio is still holding the model. Try again in a moment.");
     }
     Ok(Deleted { freed: h.delete(m).map_err(ApiError)? })

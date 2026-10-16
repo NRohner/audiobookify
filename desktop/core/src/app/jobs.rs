@@ -6,9 +6,9 @@ use serde::Serialize;
 
 use super::books::active_job;
 use super::models::require_engine;
-use crate::hub::HubCache;
 use super::{chosen_engine, err, found, ApiResult, AppPaths};
 use crate::db::Database;
+use crate::hub::HubCache;
 use crate::jobs::ChunkCache;
 use crate::models::{Chapter, ChapterOutcome, ChapterStatus, JobStatus};
 
@@ -56,10 +56,10 @@ pub fn generate_chapter(db: &Database, cache: &HubCache, book_id: i64, chapter_i
     let book = found(db.get_book(book_id), "book")?;
     let chapter = chapter_of(db, book_id, chapter_id)?;
     let engine = chosen_engine(engine, &book.engine, book.voice_profile_id)?;
-    require_engine(cache, &engine)?;
     if chapter.status == ChapterStatus::Done || active_job(db, chapter.id)?.is_some() {
         return Ok(QueuedOne { job_id: None });
     }
+    require_engine(cache, &engine)?;
     db.update_book_engine(book.id, &engine)?; // the book's chapters all use one engine
     Ok(QueuedOne { job_id: Some(db.create_job(chapter.id)?.id) })
 }

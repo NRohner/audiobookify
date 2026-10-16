@@ -6,7 +6,7 @@ use std::io;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -37,6 +37,8 @@ pub struct Paths {
 pub struct RunnerControl {
     requested: Arc<AtomicU64>,
     done: Arc<AtomicU64>,
+    /// The engine the worker has loaded, if any.
+    loaded: Arc<Mutex<Option<String>>>,
 }
 
 impl RunnerControl {
@@ -53,6 +55,21 @@ impl RunnerControl {
             std::thread::sleep(Duration::from_millis(20));
         }
         true
+    }
+
+    /// The engine the runner last loaded and hasn't unloaded since. A stale value after a
+    /// worker crash only costs a harmless extra unload request.
+    pub fn loaded_engine(&self) -> Option<String> {
+        self.loaded.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn set_loaded(&self, engine: Option<&str>) {
+        *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) = engine.map(str::to_string);
+    }
+
+    #[doc(hidden)]
+    pub fn set_loaded_for_tests(&self, engine: Option<&str>) {
+        self.set_loaded(engine);
     }
 
     /// Acknowledge outstanding requests without an engine, for tests of callers.
@@ -105,6 +122,7 @@ impl Runner {
         let requested = self.control.requested.load(Ordering::SeqCst);
         if requested > self.control.done.load(Ordering::SeqCst) {
             self.engine.shutdown();
+            self.control.set_loaded(None);
             self.control.done.store(requested, Ordering::SeqCst);
         }
     }
@@ -317,6 +335,7 @@ impl Runner {
             return Err(EngineError::Engine(hub::not_downloaded(label)).into());
         }
         let info = self.engine.load(engine)?;
+        self.control.set_loaded(Some(engine));
         let Some(id) = voice_profile_id else { return Ok((info, None)) };
         let Some(profile) = self.db.get_voice_profile_by_id(id)? else { return Ok((info, None)) };
         if !info.needs_transcript || !profile.reference_transcript.as_deref().unwrap_or("").trim().is_empty() {
@@ -329,6 +348,7 @@ impl Runner {
         self.transcribe_voice(&profile)?;
         // A worker crash during transcription drops the loaded engine; load is a no-op otherwise.
         let info = self.engine.load(engine)?;
+        self.control.set_loaded(Some(engine));
         Ok((info, self.db.get_voice_profile_by_id(id)?))
     }
 }
