@@ -127,7 +127,6 @@ pub fn list_engines() -> Engines {
 }
 
 /// The engine a request asks for (or the stored one), validated.
-#[allow(dead_code)] // used by the voice and job endpoints (tasks 4-5)
 pub(crate) fn chosen_engine(requested: Option<&str>, current: &str, voice_profile_id: Option<i64>) -> ApiResult<String> {
     let id = requested.filter(|e| !e.is_empty()).unwrap_or(current);
     let Some(spec) = ENGINES.iter().find(|e| e.id == id) else {
