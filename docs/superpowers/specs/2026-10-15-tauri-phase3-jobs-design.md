@@ -31,10 +31,10 @@ Entry point `python -m audiobookify.engine_worker`. Reads one JSON request per l
 | `load {engine}` | `{}` | `EngineSlot.get(engine)`; `"fake"` maps to `FakeEngine`. |
 | `engine_info {}` | `{name, max_chunk_chars, min_chunk_chars, sample_rate, needs_transcript}` | For the loaded engine. |
 | `synthesize {text, voice, out_wav}` | `{samples, sample_rate}` | `voice = {reference_path, reference_text, trim_end, tempo, exaggeration, cfg, temperature}`; any field may be null (default voice). Writes mono float32 WAV to `out_wav`. |
-
-`synthesize` writes `out_wav` atomically (temp file in the same dir, then `os.replace`), so Rust can trust any WAV that exists.
 | `transcribe {path}` | `{text, words: [{word, start, end}]}` | `analysis.transcribe`; loads and frees Whisper per call, as today. |
 | `shutdown {}` | `{}` | Then exits. |
+
+`synthesize` writes `out_wav` atomically (temp file in the same dir, then `os.replace`), so Rust can trust any WAV that exists.
 
 Voice handles: `synthesize` builds the engine params with the existing `params_from_profile` logic (reference clip, text, trim, tempo, sampling fields) and caches the handle in `EngineSlot.profile_cache`, keyed by `(reference_clip_path, reference_text)`, as `_ensure_profile_cached` does today. A `load` of a different engine clears it.
 
