@@ -8,7 +8,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 audiobookify-core = { path = "core" }
-tauri = { version = "2", features = [] }
+libc = "0.2"
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
 
 [workspace]
 members = ["core"]

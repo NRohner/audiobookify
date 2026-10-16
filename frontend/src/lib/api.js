@@ -1,123 +1,59 @@
-async function request(path, options) {
-  const res = await fetch(path, options);
-  const body = await res.json().catch(() => null);
-  if (!res.ok) {
-    throw new Error(body?.detail || `request failed: ${res.status}`);
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { numericIds } from "./ids.js";
+
+// Commands reject with the Rust error's message as a plain string; callers show e.message.
+async function call(command, args) {
+  try {
+    return await invoke(command, numericIds(args));
+  } catch (e) {
+    throw new Error(typeof e === "string" ? e : e?.message ?? String(e));
   }
-  return body;
 }
+
+// A command that returns a file path, as a URL an <audio> can play.
+const audioSrc = (command, args) => call(command, args).then((path) => convertFileSrc(path));
 
 export const api = {
-  listBooks: () => request("/api/books"),
-  getBook: (id) => request(`/api/books/${id}`),
-  createBook: (formData) => request("/api/books", { method: "POST", body: formData }),
-  browseDir: (path) => request(`/api/browse-dir${path ? `?path=${encodeURIComponent(path)}` : ""}`),
-  validateOutputDir: (path) => request(`/api/validate-output-dir?path=${encodeURIComponent(path)}`),
-  getWorkerStatus: () => request("/api/worker/status"),
-  pauseWorker: () => request("/api/worker/pause", { method: "POST" }),
-  resumeWorker: () => request("/api/worker/resume", { method: "POST" }),
-  listEngines: () => request("/api/engines"),
-  generateBook: (id, engine) =>
-    request(`/api/books/${id}/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ engine }),
-    }),
-  generateChapter: (bookId, chapterId, engine) =>
-    request(`/api/books/${bookId}/chapters/${chapterId}/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ engine }),
-    }),
-  cancelChapter: (bookId, chapterId) =>
-    request(`/api/books/${bookId}/chapters/${chapterId}/cancel`, { method: "POST" }),
-  cancelBook: (bookId) => request(`/api/books/${bookId}/cancel`, { method: "POST" }),
-  assignVoice: (bookId, voiceProfileId) =>
-    request(`/api/books/${bookId}/voice`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ voice_profile_id: voiceProfileId }),
-    }),
+  listBooks: () => call("list_books"),
+  getBook: (id) => call("get_book", { bookId: id }),
+  createBook: (path, outputDir) => call("create_book", { path, outputDir }),
+  validateOutputDir: (path) => call("validate_output_dir", { path }),
+  getWorkerStatus: () => call("worker_status"),
+  pauseWorker: () => call("pause_worker"),
+  resumeWorker: () => call("resume_worker"),
+  listEngines: () => call("list_engines"),
+  generateBook: (id, engine) => call("generate_book", { bookId: id, engine }),
+  generateChapter: (bookId, chapterId, engine) => call("generate_chapter", { bookId, chapterId, engine }),
+  cancelChapter: (bookId, chapterId) => call("cancel_chapter", { bookId, chapterId }),
+  cancelBook: (bookId) => call("cancel_book", { bookId }),
+  assignVoice: (bookId, voiceProfileId) => call("assign_voice", { bookId, voiceProfileId }),
+  chapterAudioSrc: (bookId, chapterId) => audioSrc("chapter_audio_path", { bookId, chapterId }),
 
-  getBookText: (id) => request(`/api/books/${id}/text`),
+  getBookText: (id) => call("get_book_text", { bookId: id }),
   saveChapterBreaks: (id, breaks) =>
-    request(`/api/books/${id}/chapters`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chapters: breaks.map(({ start, title }) => ({ start, title })) }),
-    }),
+    call("save_chapter_breaks", { bookId: id, chapters: breaks.map(({ start, title }) => ({ start, title })) }),
 
-  listVoices: () => request("/api/voices"),
-  createVoice: (formData) => request("/api/voices", { method: "POST", body: formData }),
-  deleteBook: (id) => request(`/api/books/${id}`, { method: "DELETE" }),
-  deleteVoice: (id) => request(`/api/voices/${id}`, { method: "DELETE" }),
-  updateVoiceTranscript: (id, transcript) =>
-    request(`/api/voices/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reference_transcript: transcript }),
-    }),
-  setVoiceTempo: (id, tempo) =>
-    request(`/api/voices/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tempo }),
-    }),
-  transcribeVoice: (id) => request(`/api/voices/${id}/transcribe`, { method: "POST" }),
+  listVoices: () => call("list_voices"),
+  createVoice: (path, name, transcript) =>
+    call("create_voice", { path, name, referenceTranscript: transcript || null }),
+  deleteBook: (id) => call("delete_book", { bookId: id }),
+  deleteVoice: (id) => call("delete_voice", { voiceId: id }),
+  updateVoiceTranscript: (id, transcript) => call("set_voice_transcript", { voiceId: id, transcript }),
+  setVoiceTempo: (id, tempo) => call("set_voice_tempo", { voiceId: id, tempo }),
+  transcribeVoice: (id) => call("transcribe_voice", { voiceId: id }),
+  voiceAudioSrc: (id, tempo) => audioSrc("voice_audio_path", { voiceId: id, tempo }),
 
-  listPronunciations: () => request("/api/pronunciations"),
-  createPronunciation: (payload) =>
-    request("/api/pronunciations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }),
-  updatePronunciation: (term, overrideValue) =>
-    request(`/api/pronunciations/${encodeURIComponent(term)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ override_value: overrideValue }),
-    }),
-  deletePronunciation: (term) =>
-    request(`/api/pronunciations/${encodeURIComponent(term)}`, { method: "DELETE" }),
+  listPronunciations: () => call("list_pronunciations"),
+  createPronunciation: ({ term, override_value, notes }) =>
+    call("create_pronunciation", { term, overrideValue: override_value, notes: notes ?? null }),
+  updatePronunciation: (term, overrideValue) => call("update_pronunciation", { term, overrideValue }),
+  deletePronunciation: (term) => call("delete_pronunciation", { term }),
 
-  listTextClips: () => request("/api/text-clips"),
+  listTextClips: () => call("list_text_clips"),
   createTextClip: (text, voiceProfileId, engine, tempo = null) =>
-    request("/api/text-clips", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, voice_profile_id: voiceProfileId, engine, tempo }),
-    }),
-  getTextClip: (id) => request(`/api/text-clips/${id}`),
-  deleteTextClip: (id) => request(`/api/text-clips/${id}`, { method: "DELETE" }),
+    call("create_text_clip", { text, voiceProfileId, engine, tempo }),
+  getTextClip: (id) => call("get_text_clip", { clipId: id }),
+  deleteTextClip: (id) => call("delete_text_clip", { clipId: id }),
+  textClipAudioSrc: (id) => audioSrc("text_clip_audio_path", { clipId: id }),
+  saveTextClip: (id, dest) => call("save_text_clip", { clipId: id, dest }),
 };
-
-export function textClipInProgress(clip) {
-  return clip.status === "queued" || clip.status === "generating";
-}
-
-// A chapter with a queued job still reports status "pending" (chapters only flip to
-// "generating" once the worker actually picks the job up, which can take a while - e.g.
-// loading/cloning a voice profile for the first time). Treat "pending" + a non-null
-// progress (set the moment a job is created) as still in-flight, not idle.
-export function chapterInProgress(chapter) {
-  return chapter.status === "generating" || (chapter.status === "pending" && chapter.progress != null);
-}
-
-export function bookStatus(book) {
-  const chapters = book.chapters || [];
-  if (chapters.length === 0) return { key: "empty", label: "No chapters" };
-  if (chapters.some(chapterInProgress)) {
-    const progress =
-      chapters.reduce((sum, c) => sum + (c.progress ?? (c.status === "done" ? 1 : 0)), 0) /
-      chapters.length;
-    return { key: "converting", label: `Converting ${Math.round(progress * 100)}%` };
-  }
-  if (chapters.some((c) => c.status === "failed")) return { key: "failed", label: "Failed" };
-  if (chapters.every((c) => c.status === "done")) return { key: "done", label: "Done" };
-  return { key: "pending", label: "Not started" };
-}
-
-export function isBookInProgress(book) {
-  return bookStatus(book).key === "converting";
-}

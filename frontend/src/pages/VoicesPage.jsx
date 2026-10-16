@@ -1,28 +1,41 @@
 import { useEffect, useState } from "react";
 import { AudioLines, ChevronRight, Loader2, Play, Plus, RotateCcw, Save, Target, Trash2 } from "lucide-react";
-import { api, textClipInProgress } from "../lib/api.js";
+import { open } from "@tauri-apps/plugin-dialog";
+import { api } from "../lib/api.js";
+import { textClipInProgress } from "../lib/status.js";
+import FileAudio from "../components/FileAudio.jsx";
 import { transcriptState } from "../lib/engines.js";
 import { SWEET_SPOT, TEMPO_MAX, TEMPO_MIN, pacedWpm, sweetSpotTempo, tempoPosition } from "../lib/pace.js";
 import Button, { ErrorNote, PageHeader } from "../components/ui/Button.jsx";
+import PathPick from "../components/PathPick.jsx";
 import Modal from "../components/ui/Modal.jsx";
 import ConfirmDialog from "../components/ui/ConfirmDialog.jsx";
 
 function CloneVoiceModal({ onClose, onCloned }) {
   const [name, setName] = useState("");
   const [transcript, setTranscript] = useState("");
+  const [path, setPath] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+
+  async function chooseFile() {
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "Audio", extensions: ["wav", "mp3", "flac", "ogg", "m4a", "aif", "aiff"] }],
+      });
+      if (picked) setPath(picked);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
 
   async function handleSubmit(event) {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
     try {
-      const form = new FormData();
-      form.append("file", event.target.elements.file.files[0]);
-      form.append("name", name);
-      if (transcript.trim()) form.append("reference_transcript", transcript.trim());
-      const voice = await api.createVoice(form);
+      const voice = await api.createVoice(path, name, transcript.trim());
       onCloned(voice);
     } catch (e) {
       setError(e.message);
@@ -48,19 +61,11 @@ function CloneVoiceModal({ onClose, onCloned }) {
         </div>
 
         <div>
-          <label htmlFor="file" className="block text-meta font-semibold mb-1.5">
+          <p className="text-meta font-semibold mb-1.5">
             A recording of the voice
             <span className="block font-normal text-ink-muted">10 to 30 seconds of one person reading, somewhere quiet.</span>
-          </label>
-          <input
-            id="file"
-            type="file"
-            name="file"
-            accept="audio/*"
-            required
-            className="block w-full text-meta text-ink-muted file:mr-3 file:h-9 file:rounded-full file:border file:border-line
-              file:bg-card file:px-4 file:text-meta file:font-semibold file:text-ink file:cursor-pointer"
-          />
+          </p>
+          <PathPick label="Choose recording…" icon={AudioLines} path={path} onPick={chooseFile} />
         </div>
 
         <div>
@@ -83,7 +88,7 @@ function CloneVoiceModal({ onClose, onCloned }) {
           <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" loading={submitting}>
+          <Button type="submit" loading={submitting} disabled={!path}>
             Save voice
           </Button>
         </div>
@@ -216,7 +221,12 @@ function PaceSection({ voice, onChanged, onError }) {
       {previewTempo != null && (
         <div className="flex flex-col gap-1">
           <p className="text-[12px] text-ink-muted">Reference at {previewTempo.toFixed(2)}x (not saved)</p>
-          <audio controls autoPlay src={`/api/voices/${voice.id}/audio?tempo=${previewTempo}`} className="h-9 w-full" />
+          <FileAudio
+            load={() => api.voiceAudioSrc(voice.id, previewTempo)}
+            cacheKey={`${voice.id}@${previewTempo}@${voice.reference_trim_end}`}
+            autoPlay
+            className="h-9 w-full"
+          />
         </div>
       )}
       {sample && (
@@ -226,7 +236,7 @@ function PaceSection({ voice, onChanged, onError }) {
             {textClipInProgress(sample) && `: generating ${Math.round((sample.progress || 0) * 100)}%`}
           </p>
           {sample.status === "done" && (
-            <audio controls src={`/api/text-clips/${sample.id}/audio`} className="h-9 w-full" />
+            <FileAudio load={() => api.textClipAudioSrc(sample.id)} cacheKey={sample.id} className="h-9 w-full" />
           )}
           {sample.status === "failed" && <p className="text-[12px] text-accent-text">{sample.error}</p>}
         </div>
@@ -296,7 +306,11 @@ function VoiceCard({ voice, onDelete, onChanged, onError }) {
         </button>
       </div>
 
-      <audio controls src={`/api/voices/${voice.id}/audio?tempo=${voice.tempo}`} className="h-9 w-full" />
+      <FileAudio
+        load={() => api.voiceAudioSrc(voice.id, voice.tempo)}
+        cacheKey={`${voice.id}@${voice.tempo}@${voice.reference_trim_end}`}
+        className="h-9 w-full"
+      />
 
       <details className="group">
         <summary className="inline-flex h-8 items-center gap-1 text-meta font-semibold text-ink-muted hover:text-ink list-none [&::-webkit-details-marker]:hidden">

@@ -59,6 +59,15 @@ impl Database {
         Ok(())
     }
 
+    /// Cancels the job only if the runner hasn't claimed it yet; false means it has.
+    pub fn cancel_queued_job(&self, job_id: i64) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE jobs SET status = ?1, finished_at = ?2 WHERE id = ?3 AND status = ?4",
+            params![JobStatus::Cancelled, now(), job_id, JobStatus::Queued],
+        )?;
+        Ok(n > 0)
+    }
+
     pub fn reset_stale_generating_jobs(&self) -> Result<()> {
         self.conn.execute("UPDATE jobs SET status = ?1, started_at = NULL WHERE status = ?2",
                           params![JobStatus::Queued, JobStatus::Generating])?;

@@ -1,13 +1,12 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { bookTimeline, locate } from "../../lib/player.js";
+import { api } from "../../lib/api.js";
 
 export const SPEEDS = [0.8, 1, 1.1, 1.25, 1.5, 2];
 
 const PlayerCtx = createContext(null);
 
 export const usePlayer = () => useContext(PlayerCtx);
-
-const audioUrl = (bookId, chapterId) => `/api/books/${bookId}/chapters/${chapterId}/audio`;
 
 // Space plays/pauses unless the key belongs to a control that has focus.
 function ownsSpace(el) {
@@ -18,6 +17,7 @@ function ownsSpace(el) {
 export function PlayerProvider({ children }) {
   const audio = useRef(null);
   const startAt = useRef(0);
+  const pending = useRef(0);
   const [book, setBook] = useState(null);
   const [chapterId, setChapterId] = useState(null);
   const [time, setTime] = useState(0);
@@ -33,13 +33,28 @@ export function PlayerProvider({ children }) {
     setBook(nextBook);
     if (nextChapterId === chapterId && book?.id === nextBook.id) {
       a.currentTime = offset;
-    } else {
-      setChapterId(nextChapterId);
-      setTime(offset);
-      startAt.current = offset;
-      a.src = audioUrl(nextBook.id, nextChapterId);
+      if (autoplay) a.play().catch(() => {});
+      return;
     }
-    if (autoplay) a.play().catch(() => {});
+    setChapterId(nextChapterId);
+    setTime(offset);
+    startAt.current = offset;
+    // The path comes from a command; only the latest request may set the source.
+    const request = ++pending.current;
+    api.chapterAudioSrc(nextBook.id, nextChapterId).then(
+      (src) => {
+        if (request !== pending.current) return;
+        a.src = src;
+        if (autoplay) a.play().catch(() => {});
+      },
+      () => {
+        // Don't leave the previous chapter playing under the new chapter's title; onPause updates `playing`.
+        if (request !== pending.current) return;
+        a.pause();
+        a.removeAttribute("src");
+        a.load();
+      },
+    );
   }
 
   function toggle() {
@@ -76,6 +91,7 @@ export function PlayerProvider({ children }) {
   // Back to the no-book state the app starts in (e.g. the playing book was deleted).
   function clear() {
     const a = audio.current;
+    pending.current++; // a late resolve must not start the cleared book's audio
     a.pause();
     a.removeAttribute("src");
     a.load();

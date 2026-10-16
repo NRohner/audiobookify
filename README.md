@@ -13,7 +13,15 @@ Fully local EPUB/Markdown → audiobook (MP3 per chapter) converter. Requires Ap
 
 ## Desktop app
 
-`make app-dev` opens Audiobookify in a native window (with hot reload). `make app` builds `desktop/target/release/bundle/macos/Audiobookify.app`. Open it from Finder or with `open desktop/target/release/bundle/macos/Audiobookify.app`. Both start the API and worker for you and stop them when you quit. The app runs this checkout's `.venv`, so build it after `make setup` and don't move the repo. Building needs the Rust toolchain (rustup) and tauri-cli: `cargo install tauri-cli --version "^2"`. The app won't start while `make up` or `make dev` is running (port 8000), so run `make down` first. The port to a full Rust backend is in progress; see `docs/superpowers/specs/2026-10-14-tauri-desktop-design.md`.
+`make dev` opens Audiobookify in a native window (with hot reload). `make app` builds `desktop/target/release/bundle/macos/Audiobookify.app`, and `make up` builds it and opens it. You can also open it from Finder. The window serves everything itself; there is no separate API server or port. The app runs this checkout's `.venv` for the voice engine, so build it after `make setup` and don't move the repo. Building needs the Rust toolchain (rustup) and tauri-cli: `cargo install tauri-cli --version "^2"`. `make down` stops a Vite dev server left behind by an interrupted `make dev`.
+
+Only one copy runs at a time: a second launch (say the `.app` while `make dev` is open) shows an alert and exits, because both would share one database.
+
+**Where your data lives:** `~/Library/Application Support/com.audiobookify.app` holds the database (`audiobookify.db`), `uploads/`, `voices/`, `cache/synth/`, `text_clips/`, the `output/` fallback for chapters whose chosen folder can't be written, and (release builds only) `logs/audiobookify.log`. `make dev` and the `.app` use this same folder, so they see the same library.
+
+On first launch the app offers to import this repo's library (books, voices, pronunciations, text clips; the originals stay put). Choosing "Start empty" is permanent. To import later, quit the app and delete `audiobookify.db` from that folder.
+
+The port to a full Rust backend is in progress; see `docs/superpowers/specs/2026-10-14-tauri-desktop-design.md`.
 
 ## Usage
 
@@ -94,38 +102,25 @@ Import a short reference clip (10-30s recommended, clean single-speaker audio) a
 
 ## GUI (M4)
 
-The GUI wraps the same core library behind a local web UI: a FastAPI backend, a
-separate worker process that owns the loaded TTS engine, and a React frontend — all
-running on `localhost`, still fully local.
+The GUI wraps the same core library behind a desktop window (Tauri): a Rust backend,
+a runner thread that owns the loaded TTS engine, and a React frontend, still fully local.
+See "Desktop app" above for running it. (It began as a browser app on FastAPI. The
+app no longer uses that server; its code stays in the repo until it is deleted.)
 
-```bash
-make dev    # backend (autoreload) + worker + frontend dev server, hot reload
-```
-
-Open `http://127.0.0.1:5173`, upload an EPUB or Markdown file, browse to (or type) an
-output folder, click Import, then click "Generate all". The folder picker checks
-writability live and won't let you import into a folder it can't write to; if a folder
-somehow goes bad *after* import (permissions changed, drive unmounted), that chapter's
-audio is saved under this repo's `output/` folder instead, and the chapter list flags it.
-The chapter list polls the backend every couple of seconds and shows each chapter's status (`pending` / `generating` / `done` /
+In the Library, click "Add a book" (or drop an EPUB or Markdown file on the window),
+choose the file and an output folder with the native dialogs, click "Add to shelf",
+then click "Generate all". If a folder somehow goes bad *after*
+import (permissions changed, drive unmounted), that chapter's audio is saved under the
+app data folder's `output/` instead, and the chapter list flags it.
+The chapter list polls every couple of seconds and shows each chapter's status (`pending` / `generating` / `done` /
 `failed`), in-progress percentage, and — once done — the resulting MP3's path.
 
-For a non-hot-reload run (built frontend served by FastAPI itself):
+The CLI still shares the same SQLite database format, so `generate`/`voice`/`lexicon`
+work as before; you can run `audiobookify worker --db audiobookify.db` against a database
+of your own.
 
-```bash
-make up     # builds the frontend, then runs backend + worker
-make down   # stops everything make dev/up started
-```
-
-The API and worker communicate purely through the same SQLite database `generate`/
-`voice`/`lexicon` already use — there's no separate message broker. You can run
-`audiobookify worker --db audiobookify.db` and the API server independently if you want
-more control than the Makefile targets give you.
-
-This first GUI pass is deliberately bare: one page, upload → generate → watch chapters
-finish. Chapter review/editing, voice profile management, the pronunciation lexicon, and
-a real generation dashboard are still CLI-only (`voice`, `lexicon` subcommands) until
-later GUI sub-projects land.
+The app also covers chapter-break editing, voice cloning (with tempo previews), the
+pronunciation list, text clips and a player.
 
 ## Development
 

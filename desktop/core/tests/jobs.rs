@@ -270,3 +270,18 @@ fn delete_text_clip_removes_it_and_rejects_missing_ids() {
     assert_eq!(not_found(db.get_text_clip(clip.id)), format!("no text clip with id {}", clip.id));
     not_found(db.delete_text_clip(clip.id));
 }
+
+#[test]
+fn cancel_queued_job_only_cancels_a_job_the_runner_has_not_claimed() {
+    let dir = TempDir::new().unwrap();
+    let db = open(dir.path());
+    let (_, chapter) = book_with_chapter(&db, dir.path());
+    let queued = db.create_job(chapter.id).unwrap();
+    assert!(db.cancel_queued_job(queued.id).unwrap());
+    assert_eq!(db.get_job(queued.id).unwrap().status, JobStatus::Cancelled);
+
+    let claimed = db.create_job(chapter.id).unwrap();
+    db.pop_next_queued_job().unwrap(); // -> generating
+    assert!(!db.cancel_queued_job(claimed.id).unwrap());
+    assert_eq!(db.get_job(claimed.id).unwrap().status, JobStatus::Generating);
+}

@@ -26,6 +26,11 @@ pub fn store_reference_audio(voices_dir: &Path, staged: &Path, profile_id: i64, 
     Ok(dest)
 }
 
+/// Removes a voice's folder: the reference and its cached trims and tempo clips.
+pub fn delete_voice_storage(voices_dir: &Path, profile_id: i64, name: &str) {
+    let _ = fs::remove_dir_all(permanent_voice_dir(voices_dir, profile_id, name));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

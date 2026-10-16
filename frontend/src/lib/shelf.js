@@ -1,5 +1,5 @@
 // How books look and sit on the shelf, kept out of the components so it is testable.
-import { chapterInProgress } from "./api.js";
+import { chapterInProgress } from "./status.js";
 import { formatRuntime } from "./player.js";
 
 // [spine token, text tone] — the tone pairs are fixed by tokens.css.

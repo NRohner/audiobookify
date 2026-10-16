@@ -72,3 +72,64 @@ pub fn fake_engine(env: &[(&str, &str)]) -> PythonEngine {
     let repo = repo_root();
     env.iter().fold(PythonEngine::new(repo.join(".venv/bin/python"), &repo), |e, (k, v)| e.env(*k, *v))
 }
+
+/// A float WAV where every channel of frame `i` is `sample(i)`.
+pub fn wav(path: &Path, sample_rate: u32, channels: u16, frames: usize, sample: impl Fn(usize) -> f32) {
+    let spec = hound::WavSpec { channels, sample_rate, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
+    let mut w = hound::WavWriter::create(path, spec).unwrap();
+    for i in 0..frames {
+        for _ in 0..channels {
+            w.write_sample(sample(i)).unwrap();
+        }
+    }
+    w.finalize().unwrap();
+}
+
+/// test_api.py's `_clean_tone_wav_bytes`: 15 s of a 220 Hz tone with a silent last tenth.
+/// Passes `validate_reference_audio` with no warnings.
+pub fn clean_tone_wav(path: &Path) {
+    let rate = 22050;
+    let n = 15 * rate as usize;
+    wav(path, rate, 1, n, |i| {
+        if i < n * 9 / 10 { 0.6 * (2.0 * std::f32::consts::PI * 220.0 * i as f32 / rate as f32).sin() } else { 0.0 }
+    });
+}
+
+/// `seconds` of mono silence as an MP3, written by ffmpeg.
+pub fn silent_mp3(path: &Path, seconds: f64) {
+    let status = std::process::Command::new("ffmpeg")
+        .env("PATH", audiobookify_core::audio::child_path(std::env::var_os("PATH")))
+        .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=22050:cl=mono", "-t", &seconds.to_string()])
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+use audiobookify_core::app::{ApiResult, AppPaths};
+
+/// test_chapter_breaks.py's THREE: (title, text).
+pub const THREE: [(&str, &str); 3] = [("One", "a\n\nb"), ("Two", "c\n\nd\n\ne"), ("Three", "f")];
+
+pub const TWO_CHAPTERS_MD: &str = "# Chapter One\nFirst chapter body.\n\n# Chapter Two\nSecond chapter body.\n";
+
+/// The app's data under `<dir>/data`, and a connection to its DB.
+pub fn app(dir: &Path) -> (AppPaths, Database) {
+    let paths = AppPaths::new(dir.join("data"));
+    let db = paths.open_db().unwrap();
+    (paths, db)
+}
+
+pub fn write_file(dir: &Path, name: &str, body: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+pub fn api_err<T: Debug>(result: ApiResult<T>) -> String {
+    match result {
+        Err(e) => e.0,
+        Ok(v) => panic!("expected an error, got {v:?}"),
+    }
+}
