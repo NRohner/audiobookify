@@ -63,9 +63,13 @@ pub fn generate_chapter(db: &Database, book_id: i64, chapter_id: i64, engine: Op
 fn cancel_active(db: &Database, cache: &ChunkCache, chapter: &Chapter) -> ApiResult<()> {
     match active_job(db, chapter.id)? {
         Some(job) if job.status == JobStatus::Queued => {
-            db.finish_job(job.id, JobStatus::Cancelled, None)?;
-            db.update_chapter_status(chapter.id, ChapterStatus::Pending, ChapterOutcome::default())?;
-            cache.clear(chapter.id);
+            // The runner may have claimed it since we read it; then ask it to stop instead.
+            if db.cancel_queued_job(job.id)? {
+                db.update_chapter_status(chapter.id, ChapterStatus::Pending, ChapterOutcome::default())?;
+                cache.clear(chapter.id);
+            } else {
+                db.request_job_cancel(job.id)?;
+            }
         }
         Some(job) => db.request_job_cancel(job.id)?,
         None => {}
