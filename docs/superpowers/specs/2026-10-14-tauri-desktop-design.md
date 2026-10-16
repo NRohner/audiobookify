@@ -69,7 +69,7 @@ The protocol carries no paths except explicit in/out files, and no DB IDs. Pytho
 
 ## Frontend changes
 
-- `lib/api.js`: each function calls `invoke("cmd", args)`. During migration, unported endpoints still call `fetch` against the FastAPI sidecar.
+- `lib/api.js`: each function calls `invoke("cmd", args)`.
 - **Book and voice import:** the Tauri dialog plugin returns real file paths, so the multipart upload goes away. Rust copies the file into the app data dir, as today's staging dir does, so moving or deleting the original can't break a book.
 - **Output directory:** the native folder picker replaces `/api/browse-dir`. `validate-output-dir` stays as a command.
 - **Audio playback** (Player, voice preview, text clips): Tauri's asset protocol (`convertFileSrc`) instead of `FileResponse` URLs.
@@ -77,7 +77,7 @@ The protocol carries no paths except explicit in/out files, and no DB IDs. Pytho
 
 ## Data location
 
-The app data dir (`~/Library/Application Support/com.audiobookify.app/`) holds the DB, staged uploads, voices, the chunk cache and text clips. On first launch, if the app data dir has no DB and a repo-root `audiobookify.db` exists, the app offers to import it, rewriting the stored relative paths for uploads and voices. Model weights stay in the Hugging Face cache.
+The app has used the app data dir (`~/Library/Application Support/com.audiobookify.app/`) since phase 4. It holds the DB, staged uploads, voices, the chunk cache and text clips. On first launch, if the app data dir has no DB and a repo-root `audiobookify.db` exists, the app offers to import it, rewriting the stored relative paths for uploads and voices. The import copies the DB with `VACUUM INTO` plus `uploads/`, `voices/` and `text_clips/`, and rewrites the stored paths, including the relative `text_clips/…` ones the Python worker wrote. The chunk cache isn't copied. The repo's files are left in place. Model weights stay in the Hugging Face cache.
 
 ## Testing
 
@@ -141,7 +141,7 @@ On launch, if no TTS engine's models are present, the app opens Settings → Mod
 3. **Engine worker + Rust job runner.** Python `engine_worker.py` plus the Rust job loop, chunk cache and audio post-processing. Exit: Rust generates a full book with both real engines, and the listening check passes.
 4. **Commands + frontend switch.** Port the endpoint groups (books, chapters, worker, voices, pronunciations, text clips), add native dialogs and the asset protocol. Exit: no `fetch` calls left in `api.js`.
 5. **Settings page.** Stats, model management and first-run setup (see "Settings page"). Exit: on a fresh `HF_HOME` the app opens setup, downloads an engine and generates a chapter, and deleting a model frees the reported space without touching non-registry repos.
-6. **Delete Python app code.** Remove FastAPI, the CLI, and the Python pipeline/DB. Shrink Python dependencies, and replace the Makefile `up`/`dev` targets with Tauri ones.
+6. **Delete Python app code.** Remove FastAPI, the CLI, and the Python pipeline/DB, and shrink the Python dependencies. (The Makefile moved to Tauri targets in phase 4.)
 7. **Packaging.** The scope depends on open question 1.
 
 ## Risks
@@ -160,10 +160,21 @@ On launch, if no TTS engine's models are present, the app opens Settings → Mod
 
 - Exit check (2026-10-15), scaled down from "a full book": the same 2,200-character passage (Jim Dale voice) was generated as a text clip by the Python worker and by the Rust runner, with each engine. Speed matched (Turbo 71 s vs 68 s, Qwen3 128 s vs 131 s), and the user's listening check passed. Chapter resume, pause, cancel and respawn are covered by the Rust runner tests against the real engine worker child.
 - The listening check caught Rust MP3s coming out stereo, each channel 3 dB down: ffmpeg reads hound's float32 WAV header as stereo. The encode now forces `-ac 1`, and a test checks the output is mono. Loudness then matched Python (-26.8 vs -26.9 LUFS).
-- The Tauri app runs generation in Rust (`audiobookify_core::jobs::Runner`); `make up` still runs the Python worker until phase 6. Don't run both against the same DB at once (two engines loaded).
 - Engine WAVs are float32 and written atomically; Python's chunk cache was 16-bit. A chapter paused under the Python worker regenerates once under Rust (cache keys differ).
 - Still to move in phase 4: `relabel_chapter_mp3` (chapter rename) and wav2vec2 phonemes (a `phonemes` request), both unused by the runner. Runner and engine errors only reach stderr, so route them to the phase 4 log file.
 - Fake-engine test knobs (`AUDIOBOOKIFY_FAKE_*`) live on `FakeEngine` and `engine_worker`; the Rust runner tests rely on them. `engine_worker` imports `EngineSlot` from `worker.py`, so move it before phase 6 deletes that module.
+
+## Notes from phase 4
+
+- Every endpoint is a command in `desktop/src/commands.rs` over `audiobookify_core::app`, whose tests port `tests/test_api.py` and the API half of `tests/test_chapter_breaks.py`. The uvicorn sidecar is gone, so CORS was never needed.
+- The browser app stopped working here: the frontend calls `invoke`. `make dev`/`make up` are Tauri targets. FastAPI and the CLI stay, untested by the UI, until phase 6.
+- App data lives in `~/Library/Application Support/com.audiobookify.app` (see "Data location"). Release builds send stderr (runner errors, engine worker logging) to `logs/audiobookify.log` there, rotated at 5 MB on launch.
+- Dropped: wav2vec2 `phonemes` (only the CLI's `lexicon add --from-audio` used it; the GUI uses typed respellings) and `browse-dir` (the native folder picker replaced it, with no typed path).
+- The voice PATCH became `set_voice_transcript` and `set_voice_tempo`. Audio reaches `<audio>` through `*_audio_path` commands that add the one file to the asset scope; text-clip Download is a save dialog plus `save_text_clip`.
+- Audio files the user picks are read with symphonia (`core::media`). Reference trims are written as 16-bit WAV, matching soundfile, so Rust and the Python engine worker produce the same cached file.
+- `create_book` and `create_voice` both copy the picked file into the app data dir.
+- `relabel_chapter_mp3` failure handling changed: if retagging fails after the rename, the chapter keeps the renamed file. Python lost track of it.
+- `import_repo_data` refuses to run when the app data dir already has a DB, removes its temporary `audiobookify.db.importing` if it fails, and rewrites rows stored under either the canonical or the as-given spelling of the repo path.
 
 ## Open questions
 
