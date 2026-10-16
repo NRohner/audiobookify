@@ -139,7 +139,9 @@ pub fn api_err<T: Debug>(result: ApiResult<T>) -> String {
 pub fn cache_model(cache: &Path, id: &str) {
     for repo in hub::model(id).unwrap().repos {
         let root = cache.join(format!("models--{}", repo.repo.replace('/', "--")));
-        let commit = "c0ffee";
+        // Distinct per repo like real HF commits: delete_revisions attributes a hash to one repo only.
+        let commit = format!("c0ffee{:x}", repo.repo.bytes().map(u64::from).sum::<u64>());
+        let commit = commit.as_str();
         for (i, name) in repo.required.iter().enumerate() {
             let blob = root.join("blobs").join(format!("blob{i}"));
             std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
