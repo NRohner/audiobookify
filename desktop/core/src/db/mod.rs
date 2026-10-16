@@ -79,6 +79,15 @@ impl Database {
         Ok(Self { conn })
     }
 
+    /// Copies every voice clip outside `voices_dir` into it, as `open` does; returns the
+    /// profiles that couldn't be copied.
+    pub fn adopt_voices_dir(&mut self, voices_dir: &Path) -> Result<Vec<String>> {
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let warnings = migrations::migrate_voice_reference_audio(&tx, voices_dir)?;
+        tx.commit()?;
+        Ok(warnings)
+    }
+
     pub(crate) fn query_all<T>(&self, sql: &str, params: impl Params,
                                map: fn(&Row<'_>) -> rusqlite::Result<T>) -> Result<Vec<T>> {
         let mut stmt = self.conn.prepare(sql)?;
