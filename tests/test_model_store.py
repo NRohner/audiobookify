@@ -63,10 +63,50 @@ def test_delete_of_a_missing_repo_frees_nothing(cache):
     assert model_store.delete(["org/missing"]) == 0
 
 
-def test_blob_bytes_counts_partial_downloads(cache):
-    root = cache_repo(cache, "org/a", {"model.safetensors": 100})
-    (root / "blobs" / "zzz.incomplete").write_bytes(b"x" * 50)
-    assert model_store.blob_bytes(root) == 150
+XET_HASH = "ab" + "c" * 62
+PAYLOAD = 3000
+
+
+def cache_shared_repo(cache: Path, repo: str, commit: str, payload: bytes = b"w" * PAYLOAD) -> Path:
+    """A repo as HF 2.2 leaves it after a Xet download: config.json a regular blob, the weights
+    published to the cache-wide store at <cache>/blobs/ab/<xet hash> and symlinked from blobs/."""
+    from huggingface_hub.utils._shared_blobs import publish_blob_to_shared_store
+
+    root = cache_repo(cache, repo, {"config.json": 10}, commit=commit)
+    blob = root / "blobs" / f"etag-{commit}"
+    blob.write_bytes(payload)  # file_download writes the blob, then publishes it
+    assert publish_blob_to_shared_store(blob_path=str(blob), xet_hash=XET_HASH, cache_dir=cache,
+                                        expected_size=len(payload))
+    assert blob.is_symlink()
+    (root / "snapshots" / commit / "model.safetensors").symlink_to(blob)
+    return root
+
+
+def shared_payload(cache: Path) -> Path:
+    return cache / "blobs" / XET_HASH[:2] / XET_HASH
+
+
+def test_delete_frees_the_shared_store_payload(cache):
+    root = cache_shared_repo(cache, "org/a", "abc123")
+    assert shared_payload(cache).stat().st_size == PAYLOAD
+    assert model_store.delete(["org/a"]) == PAYLOAD + 10
+    assert not shared_payload(cache).exists()
+    assert not root.exists()
+
+
+def test_delete_keeps_a_shared_payload_a_foreign_repo_still_uses(cache):
+    other = cache_shared_repo(cache, "aaa/foreign", "abc123")  # scanned first, same hash and payload
+    root = cache_shared_repo(cache, "org/a", "abc123")
+    assert model_store.delete(["org/a"]) == 10  # only our regular blob was freed
+    assert not root.exists()
+    assert shared_payload(cache).stat().st_size == PAYLOAD
+    assert (other / "snapshots" / "abc123" / "model.safetensors").read_bytes() == b"w" * PAYLOAD
+    assert model_store.sizes(["aaa/foreign"]) == {"aaa/foreign": PAYLOAD + 10}
+
+
+def test_sizes_counts_a_shared_store_blob(cache):
+    cache_shared_repo(cache, "org/a", "abc123")
+    assert model_store.sizes(["org/a"]) == {"org/a": PAYLOAD + 10}
 
 
 def run_cli(*args, env=None):
@@ -112,7 +152,7 @@ def test_download_exits_when_stdin_closes(cache):
     assert p.wait(timeout=10) != 0
 
 
-def test_real_download_counts_matching_files_and_shares_the_cache_root(cache, monkeypatch, capsys):
+def test_real_download_reports_reconstructed_bytes(cache, monkeypatch, capsys):
     import time
     from types import SimpleNamespace
 
@@ -121,32 +161,47 @@ def test_real_download_counts_matching_files_and_shares_the_cache_root(cache, mo
     siblings = [SimpleNamespace(rfilename="config.json", size=10),
                 SimpleNamespace(rfilename="model.safetensors", size=1000),
                 SimpleNamespace(rfilename="readme.md", size=5)]
-    calls = {}
+    calls = []
 
     class FakeApi:
         def model_info(self, repo, files_metadata=False):
             return SimpleNamespace(siblings=siblings)
 
-    def fake_snapshot_download(repo_id, allow_patterns=None, cache_dir=None):
-        calls["cache_dir"] = cache_dir
-        time.sleep(0.7)  # long enough for the reporter to emit at least one progress line
-        root = cache / ("models--" + repo_id.replace("/", "--"))
-        for i, name in enumerate(["config.json", "model.safetensors"]):
-            blob = root / "blobs" / f"fake{i:04d}"
-            blob.parent.mkdir(parents=True, exist_ok=True)
-            blob.write_bytes(b"x" * (10 if name == "config.json" else 1000))
-        return str(root)
+    def fake_snapshot_download(repo_id, allow_patterns=None, cache_dir=None, tqdm_class=None):
+        # Drive tqdm_class the way HF 2.2 does: a transfer bar, a reconstruct bar fed by every
+        # file's bytes written, and the per-file counting bar of hf_thread_map.
+        calls.append((repo_id, cache_dir))
+        transfer = tqdm_class(desc="Downloading bytes", total=0, initial=0, unit="B", unit_scale=True)
+        reconstruct = tqdm_class(desc="Reconstructing (incomplete total...)", total=0, initial=0,
+                                 unit="B", unit_scale=True)
+        with tqdm_class(desc="Fetching 2 files", total=2) as files:
+            reconstruct.total = 1010
+            for _ in range(10):
+                time.sleep(0.1)
+                transfer.update(50)
+                reconstruct.update(100)
+            reconstruct.update(10)
+            files.update(2)
+        transfer.close()
+        reconstruct.close()
+        return str(cache)
 
     monkeypatch.setattr(huggingface_hub, "HfApi", FakeApi)
     monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
     monkeypatch.setattr(model_store, "_exit_on_stdin_eof", lambda: None)
 
-    items = [{"repo": "org/a", "allow_patterns": ["*.json", "*.safetensors"], "required": ["config.json"]}]
+    items = [{"repo": "org/a", "allow_patterns": ["*.json", "*.safetensors"], "required": ["config.json"]},
+             {"repo": "org/b", "allow_patterns": ["*.json", "*.safetensors"], "required": ["config.json"]}]
     assert model_store.main(["download", json.dumps(items)]) == 0
 
-    assert calls["cache_dir"] == cache
-    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    progress = [line for line in lines if "downloaded" in line]
-    assert progress, "expected at least one progress line"
-    assert all(line["total"] == 1010 for line in progress)  # readme.md excluded
+    assert calls == [("org/a", cache), ("org/b", cache)]
+    captured = capsys.readouterr()
+    assert captured.err == ""  # the bars draw nowhere
+    lines = [json.loads(line) for line in captured.out.splitlines()]
     assert lines[-1] == {"done": True}
+    progress = [line for line in lines if "downloaded" in line]
+    assert all(line["total"] == 2020 for line in progress)  # readme.md excluded, both repos
+    done = [line["downloaded"] for line in progress]
+    assert len(done) >= 4, done
+    assert done == sorted(done) and len(set(done)) == len(done), done  # rising, no repeats
+    assert any(0 < d < 1010 for d in done) and any(1010 < d < 2020 for d in done), done

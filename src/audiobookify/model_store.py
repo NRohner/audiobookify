@@ -5,11 +5,11 @@ JSON lines on stdout (logging goes to stderr). The cache is shared with other pr
 so it only ever touches the repos it is given; the Rust registry decides which.
 A download exits when stdin closes, so it dies with the app.
 """
+import dataclasses
 import fnmatch
 import hashlib
 import json
 import os
-import shutil
 import sys
 import threading
 import time
@@ -43,23 +43,26 @@ def sizes(repos: list[str]) -> dict[str, int]:
 
 
 def delete(repos: list[str]) -> int:
-    # Remove the matched repo directories directly: HF's delete_revisions assigns a commit hash
-    # to the first scanned repo holding it, which could be a repo we were not asked to touch.
+    """Delete the named model repos; return the bytes actually freed.
+
+    HF's delete_revisions maps a commit hash to the first scanned repo holding it, which
+    could be a repo we were not asked to touch, so each strategy is built from a view of the
+    cache holding only that one repo. The view keeps cache_dir, so execute() also sweeps the
+    repo's payloads from the cache-wide shared blob store (Xet downloads), each only once no
+    other repo still references it.
+    """
     info = _scan()
     if info is None:
         return 0
     freed = 0
     for repo in info.repos:
         if repo.repo_type == "model" and repo.repo_id in repos:
-            freed += repo.size_on_disk
-            shutil.rmtree(repo.repo_path)
+            # Every revision goes, so the strategy removes the whole repo dir.
+            strategy = dataclasses.replace(info, repos=frozenset({repo})).delete_revisions(
+                *(rev.commit_hash for rev in repo.revisions))
+            freed += strategy.expected_freed_size
+            strategy.execute()
     return freed
-
-
-def blob_bytes(repo_dir: Path) -> int:
-    """Bytes in a repo's blob store, partial (.incomplete) downloads included."""
-    blobs = repo_dir / "blobs"
-    return sum(f.stat().st_size for f in blobs.iterdir() if f.is_file()) if blobs.is_dir() else 0
 
 
 def _reply(message: dict) -> None:
@@ -91,28 +94,64 @@ def _fake_download(items: list[dict]) -> None:
         (root / "refs" / "main").write_text(commit)
 
 
+def _byte_bar_class(bars: list):
+    """A silent tqdm class for snapshot_download that collects its "Reconstructing" bars.
+
+    That bar sums the bytes written to disk across the repo's files (snapshot_download feeds
+    it from every per-file download, Xet or HTTP). tqdm only counts while enabled, so the bars
+    stay enabled and draw to os.devnull: our stdout is the JSON protocol.
+    """
+    from tqdm.auto import tqdm
+
+    class ByteBar(tqdm):
+        monitor_interval = 0  # no tqdm monitor thread
+
+        def __init__(self, *args, **kwargs):
+            kwargs.update(disable=False, file=open(os.devnull, "w"))
+            super().__init__(*args, **kwargs)
+            if str(kwargs.get("desc") or "").startswith("Reconstructing"):
+                bars.append(self)
+
+        def close(self):
+            file = self.fp
+            super().close()
+            file.close()
+
+    return ByteBar
+
+
 def _real_download(items: list[dict]) -> None:
     from huggingface_hub import HfApi, snapshot_download
     api = HfApi()
-    total = 0
+    totals = []
     for item in items:
         siblings = api.model_info(item["repo"], files_metadata=True).siblings or []
-        total += sum(s.size or 0 for s in siblings
-                     if any(fnmatch.fnmatch(s.rfilename, p) for p in item["allow_patterns"]))
-    dirs = [_repo_dir(i["repo"]) for i in items]
+        totals.append(sum(s.size or 0 for s in siblings
+                          if any(fnmatch.fnmatch(s.rfilename, p) for p in item["allow_patterns"])))
+    total = sum(totals)
+    done = 0  # bytes of the repos already finished
+    bars: list = []  # this repo's "Reconstructing" bar(s)
+    lock = threading.Lock()  # done and bars change together between repos
     stop = threading.Event()
 
-    # ponytail: progress is the blob store's size on disk, polled; independent of HF's tqdm
-    # internals. Coarse if a backend only writes each file at the end.
     def report():
-        while not stop.wait(0.5):
-            _reply({"downloaded": min(sum(blob_bytes(d) for d in dirs), total), "total": total})
+        last = None
+        while not stop.wait(0.25):
+            with lock:
+                downloaded = min(done + sum(int(b.n) for b in bars), total)
+            if downloaded != last:
+                _reply({"downloaded": downloaded, "total": total})
+                last = downloaded
 
     reporter = threading.Thread(target=report, daemon=True)
     reporter.start()
     try:
-        for item in items:
-            snapshot_download(item["repo"], allow_patterns=item["allow_patterns"], cache_dir=_cache_root())
+        for item, repo_total in zip(items, totals):
+            snapshot_download(item["repo"], allow_patterns=item["allow_patterns"], cache_dir=_cache_root(),
+                              tqdm_class=_byte_bar_class(bars))
+            with lock:
+                done += repo_total
+                bars.clear()
     finally:
         stop.set()
         reporter.join()

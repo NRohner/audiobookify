@@ -182,11 +182,11 @@ On launch, if no TTS engine's models are present, the app opens Settings → Mod
 - Presence is read by Rust from the HF cache layout (`refs/main` -> snapshot -> each `required` file), so generate can be gated without starting Python. Sizes, delete and downloads run `python -m audiobookify.model_store` one-shots on `huggingface_hub`'s cache API.
 - Turbo's registry entry includes `mlx-community/S3TokenizerV2`: mlx-audio fetches it at load, and offline a miss is only a logged warning.
 - Deleting is refused while queued or running work needs the model (Whisper: while anything runs). When the studio is idle, the runner drops its engine worker first, so the weights leave memory too.
-- `model_store delete` removes each matched repo dir (rmtree of HF's repo_path) rather than HF's `delete_revisions`, which maps a commit hash to the first repo that has it and could delete a non-registry repo sharing a hash.
+- `model_store delete` runs HF's `delete_revisions` per matched repo on a cache view holding only that repo (`delete_revisions` on the full scan maps a commit hash to the first repo that has it and could delete a non-registry repo sharing a hash). The view keeps `cache_dir`, so huggingface_hub 2.2's cache-wide shared Xet store (`<cache>/blobs/<2-hex>/<hash>`) is swept too: a payload goes only when no other repo's manifest reference remains, and the reply counts only bytes actually freed.
 - The runner tracks which engine its worker has loaded (RunnerControl). A delete unloads first when the model's engine is the loaded one, or always for Voice transcription (deletable only when no work exists). Unload requests are ticket-based so overlapping callers can't misreport.
 - Generating with a missing engine is refused at queue time, and the runner also fails such a job plainly ("<label> isn't downloaded yet. Download it in Settings."); a voice needing a transcript with Voice transcription missing fails the same way.
 - Text clips gained a `duration` column; stats backfill missing chapter and clip durations from the files on first load.
-- One download at a time. Progress is the repo's blob store size on disk, polled every 0.5 s.
+- One download at a time. Progress is snapshot_download's "Reconstructing" byte bar (bytes written to disk across files), captured through a silent `tqdm_class` and reported every 0.25 s when it changes.
 - `make models` is a development shortcut that runs the same `model_store download` the app does (stdin held open on a FIFO, since the download exits on stdin EOF; a `sleep | ...` pipe works but `make` then waits out the sleep).
 
 ## Open questions
