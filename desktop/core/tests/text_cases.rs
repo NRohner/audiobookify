@@ -37,14 +37,6 @@ fn word_class_is_pythons() {
 }
 
 #[test]
-fn respelling() {
-    for case in cases("respelling") {
-        let actual = audiobookify_core::text::phonemes_to_respelling(str_of(&case[0]));
-        assert_eq!(actual, str_of(&case[1]), "{:?}", case[0]);
-    }
-}
-
-#[test]
 fn lexicon() {
     for case in cases("lexicon") {
         let entries: Vec<(&str, &str)> = case[1].as_array().unwrap().iter().map(|e| (str_of(&e[0]), str_of(&e[1]))).collect();

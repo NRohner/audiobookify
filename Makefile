@@ -22,12 +22,10 @@ setup:
 	$(PIP) install --upgrade pip
 	$(PIP) install -e ".[dev]"
 	@command -v ffmpeg >/dev/null 2>&1 || { echo "ffmpeg not found - install it (brew install ffmpeg / choco install ffmpeg) then re-run make setup"; exit 1; }
-	@command -v espeak-ng >/dev/null 2>&1 || command -v espeak >/dev/null 2>&1 || { echo "espeak-ng not found - install it (brew install espeak-ng / apt install espeak-ng) then re-run make setup"; exit 1; }
 	@if [ -d frontend ]; then cd frontend && npm install; fi
 
 models:
 	$(PY) -c "from audiobookify.engines.turbo import ChatterboxTurboEngine; e = ChatterboxTurboEngine(); e.load(); e.teardown(); print('Chatterbox Turbo weights cached.')"
-	$(PY) -c "from audiobookify.phoneme.wav2vec2 import Wav2Vec2PhonemeExtractor; e = Wav2Vec2PhonemeExtractor(); e.load('cpu'); e.teardown(); print('Phoneme recognition weights cached.')"
 
 build:
 	cd frontend && npm run build

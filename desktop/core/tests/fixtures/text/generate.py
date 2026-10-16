@@ -25,7 +25,6 @@ from ebooklib import epub as ebooklib_epub
 from audiobookify.ingest import ingest_by_path
 from audiobookify.lexicon.substitution import apply_lexicon
 from audiobookify.normalize.text import chunk_text, expand_numbers, normalize_text, split_paragraphs, split_sentences
-from audiobookify.phoneme.respelling import phonemes_to_respelling
 
 HERE = Path(__file__).resolve().parent
 Entry = namedtuple("Entry", "term override_value")
@@ -425,14 +424,6 @@ def lexicon_cases():
     return out
 
 
-def respelling_cases():
-    rng = random.Random(7)
-    symbols = ["p", "b", "tʃ", "dʒ", "ə", "oʊ", "eɪ", "ɹ", "iː", "ŋ", "?", "x", "ʔ"]
-    inputs = ["k ə d eɪ ɹ n", "k ə ? n", "", "h ə l oʊ", "tʃ ɪ p", "dʒ ʌ m p", "  t ə \u001c n  "]
-    inputs += [" ".join(rng.choice(symbols) for _ in range(rng.randint(1, 12))) for _ in range(50)]
-    return [[p, phonemes_to_respelling(p)] for p in inputs]
-
-
 def char_ranges(pred):
     """[[first, last], ...] code point ranges where pred holds."""
     ranges = []
@@ -468,7 +459,6 @@ def cases():
         "paragraphs": [[t, split_paragraphs(t)] for t in paragraph_inputs],
         "chunks": chunk_cases(),
         "lexicon": lexicon_cases(),
-        "respelling": respelling_cases(),
     }
 
 
