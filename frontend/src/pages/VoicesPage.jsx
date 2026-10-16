@@ -77,13 +77,13 @@ function CloneVoiceModal({ onClose, onCloned }) {
   const live = useRef(true);
   const stage = useRef(flow.stage);
   stage.current = flow.stage;
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    live.current = true; // StrictMode remounts after a cleanup in dev
+    return () => {
       live.current = false;
       if (stage.current === "recording") api.stopRecording().catch(() => {});
-    },
-    [],
-  );
+    };
+  }, []);
 
   async function record() {
     setError(null);
