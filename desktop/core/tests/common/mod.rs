@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use audiobookify_core::db::{Database, DbError};
 use audiobookify_core::engine::PythonEngine;
+use audiobookify_core::hub::{self, HubCache};
 use audiobookify_core::models::*;
 
 pub fn open(dir: &Path) -> Database {
@@ -132,4 +133,31 @@ pub fn api_err<T: Debug>(result: ApiResult<T>) -> String {
         Err(e) => e.0,
         Ok(v) => panic!("expected an error, got {v:?}"),
     }
+}
+
+/// Writes `id`'s required files into an HF cache layout under `cache`, like a finished download.
+pub fn cache_model(cache: &Path, id: &str) {
+    for repo in hub::model(id).unwrap().repos {
+        let root = cache.join(format!("models--{}", repo.repo.replace('/', "--")));
+        let commit = "c0ffee";
+        for (i, name) in repo.required.iter().enumerate() {
+            let blob = root.join("blobs").join(format!("blob{i}"));
+            std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
+            std::fs::write(&blob, b"weights").unwrap();
+            let link = root.join("snapshots").join(commit).join(name);
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&blob, &link).unwrap();
+        }
+        std::fs::create_dir_all(root.join("refs")).unwrap();
+        std::fs::write(root.join("refs/main"), commit).unwrap();
+    }
+}
+
+/// An HF cache under `dir/hub` with every registry model downloaded.
+pub fn ready_cache(dir: &Path) -> HubCache {
+    let root = dir.join("hub");
+    for m in hub::REGISTRY.iter() {
+        cache_model(&root, m.id);
+    }
+    HubCache::new(root)
 }
