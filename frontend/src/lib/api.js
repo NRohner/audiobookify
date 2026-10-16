@@ -42,6 +42,8 @@ export const api = {
   setVoiceTempo: (id, tempo) => call("set_voice_tempo", { voiceId: id, tempo }),
   transcribeVoice: (id) => call("transcribe_voice", { voiceId: id }),
   voiceAudioSrc: (id, tempo) => audioSrc("voice_audio_path", { voiceId: id, tempo }),
+  // keep: [[startSec, endSec], ...] of the source, in order; dest ends in .wav or .mp3.
+  exportMonoClip: (source, dest, keep) => call("export_mono_clip", { source, dest, keep }),
 
   listPronunciations: () => call("list_pronunciations"),
   createPronunciation: ({ term, override_value, notes }) =>
