@@ -83,7 +83,7 @@ fn cache_dir_follows_huggingface_hub_precedence() {
 }
 
 #[test]
-fn cache_dir_treats_empty_as_unset() {
+fn cache_dir_skips_empty_values() {
     let env = lookup(&[("HF_HUB_CACHE", ""), ("HF_HOME", "/c"), ("HOME", "/h")]);
     assert_eq!(hub::cache_dir_from(env), std::path::PathBuf::from("/c/hub"));
 }
@@ -92,4 +92,11 @@ fn cache_dir_treats_empty_as_unset() {
 fn cache_dir_expands_a_leading_tilde() {
     let env = lookup(&[("HF_HOME", "~/x"), ("HOME", "/h")]);
     assert_eq!(hub::cache_dir_from(env), std::path::PathBuf::from("/h/x/hub"));
+}
+
+#[test]
+fn engine_labels_match_the_registry() {
+    for spec in audiobookify_core::app::ENGINES.iter() {
+        assert_eq!(spec.label, hub::model_for_engine(spec.id).unwrap().label);
+    }
 }

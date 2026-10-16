@@ -71,7 +71,7 @@ function ModelRow({ model, busy, onDownload, onCancel, onDelete }) {
             <p className="text-[12px] text-ink-muted mt-1 tabular-nums">Downloading · {downloadText(model.download)}</p>
           </div>
         )}
-        {failed && <p className="text-meta text-accent-text mt-2">Didn't finish: {model.download.error}</p>}
+        {failed && <p className="text-meta text-accent-text mt-2">{model.download.error}</p>}
       </div>
       <div className="flex items-center gap-3">
         <span className="text-meta text-ink-muted tabular-nums">
@@ -108,6 +108,7 @@ export default function SettingsPage() {
   const [confirm, setConfirm] = useState(null);
   const [busy, setBusy] = useState(false);
   const wasRunning = useRef(false);
+  const pollFailed = useRef(false);
 
   async function refreshModels() {
     const [rows, eng] = await Promise.all([api.listModels(), api.listEngines()]);
@@ -134,7 +135,12 @@ export default function SettingsPage() {
       try {
         const progress = await api.modelProgress();
         setModels((rows) => rows.map((r) => ({ ...r, ...progress.find((p) => p.id === r.id) })));
+        if (pollFailed.current) {
+          pollFailed.current = false;
+          setError(null);
+        }
       } catch (e) {
+        pollFailed.current = true;
         setError(e.message);
       }
     }, 1000);
@@ -143,6 +149,7 @@ export default function SettingsPage() {
 
   async function act(fn) {
     setBusy(true);
+    pollFailed.current = false;
     setError(null);
     try {
       await fn();
@@ -183,9 +190,9 @@ export default function SettingsPage() {
       </section>
 
       <section>
-        <h2 className="rr-eyebrow mb-1">Voice engines</h2>
+        <h2 className="rr-eyebrow mb-1">Downloads</h2>
         <p className="text-meta text-ink-muted mb-3">
-          Downloaded once from Hugging Face and kept on this Mac. Other apps' models in the same folder are never touched.
+          The voice engines and voice transcription are downloaded once from Hugging Face and kept on this Mac. Other apps' models in the same folder are never touched.
         </p>
         <ul>
           {models.map((m) => (

@@ -49,7 +49,7 @@ fn generate_book_rejects_unknown_books_and_bad_engines() {
     assert_eq!(api_err(jobs::generate_book(&db, &models, 999, None)), "book not found");
     assert_eq!(api_err(jobs::generate_book(&db, &models, book.id, Some("nope"))), "unknown engine 'nope'");
     assert_eq!(api_err(jobs::generate_book(&db, &models, book.id, Some("qwen3"))),
-               "Quality (Qwen3) needs a voice: pick one first");
+               "Quality engine needs a voice: pick one first");
 }
 
 // test_generating_a_book_stores_the_chosen_engine_for_every_later_job

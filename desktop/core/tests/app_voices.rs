@@ -212,7 +212,7 @@ fn text_clips_store_engine_and_tempo() {
     let clip = clips::create_text_clip(&db, &models, "Hi", Some(voice.id), Some("qwen3"), Some(0.9)).unwrap();
     assert_eq!((clip.engine.as_str(), clip.tempo), ("qwen3", Some(0.9)));
     assert_eq!(api_err(clips::create_text_clip(&db, &models, "Hi", None, Some("qwen3"), None)),
-               "Quality (Qwen3) needs a voice: pick one first");
+               "Quality engine needs a voice: pick one first");
     assert_eq!(api_err(clips::create_text_clip(&db, &models, "Hi", None, None, Some(0.9))), "a tempo needs a voice");
     assert_eq!(api_err(clips::create_text_clip(&db, &models, "Hi", Some(voice.id), None, Some(3.0))),
                "tempo must be a number from 0.75 to 1.25");

@@ -65,26 +65,30 @@ impl Hub {
         cmd
     }
 
-    fn one_shot(&self, args: &[&str]) -> Result<Value, String> {
+    fn one_shot(&self, args: &[&str], fail: &str) -> Result<Value, String> {
         let out = self.command(args).stdin(Stdio::null()).output()
-            .map_err(|e| format!("could not start {}: {e}", self.python.display()))?;
+            .map_err(|e| {
+                eprintln!("could not start {}: {e}", self.python.display());
+                fail.to_string()
+            })?;
         let line = String::from_utf8_lossy(&out.stdout);
         serde_json::from_str(line.trim()).map_err(|e| {
             let err = String::from_utf8_lossy(&out.stderr);
             let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
-            format!("model_store {} failed ({}): {e}: {last}", args[0], out.status)
+            eprintln!("model_store {} failed ({}): {e}: {last}", args[0], out.status);
+            fail.to_string()
         })
     }
 
     pub fn sizes(&self) -> Result<HashMap<String, u64>, String> {
         let repos: Vec<&str> = REGISTRY.iter().flat_map(|m| m.repos.iter().map(|r| r.repo)).collect();
-        let reply = self.one_shot(&[&["sizes"], repos.as_slice()].concat())?;
+        let reply = self.one_shot(&[&["sizes"], repos.as_slice()].concat(), "Couldn't read the model folder. Try again in a moment.")?;
         serde_json::from_value(reply["sizes"].clone()).map_err(|e| e.to_string())
     }
 
     pub fn delete(&self, m: &ModelSpec) -> Result<u64, String> {
         let repos: Vec<&str> = m.repos.iter().map(|r| r.repo).collect();
-        let reply = self.one_shot(&[&["delete"], repos.as_slice()].concat())?;
+        let reply = self.one_shot(&[&["delete"], repos.as_slice()].concat(), "Couldn't delete the files. Try again in a moment.")?;
         reply["freed"].as_u64().ok_or_else(|| format!("unexpected reply {reply}"))
     }
 
@@ -103,7 +107,10 @@ impl Hub {
             .collect();
         let mut child = self.command(&["download", &Value::from(items).to_string()])
             .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()
-            .map_err(|e| format!("could not start {}: {e}", self.python.display()))?;
+            .map_err(|e| {
+                eprintln!("could not start {}: {e}", self.python.display());
+                "Couldn't start the download. Try again in a moment.".to_string()
+            })?;
         downloads.insert(m.id.to_string(), Entry {
             state: DownloadState::Running { downloaded: 0, total: m.download_bytes },
             pid: child.id(),
@@ -129,11 +136,13 @@ fn watch(downloads: Downloads, id: String, mut child: Child) {
     let pid = child.id();
     let stdout = BufReader::new(child.stdout.take().expect("piped"));
     let mut failure = Some("The download stopped before it finished.".to_string());
+    const FAILED: &str = "Didn't finish. Check your connection and try again.";
     for line in stdout.lines().map_while(Result::ok) {
         let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
         if v.get("done").is_some() {
             failure = None;
         } else if let Some(e) = v.get("error").and_then(Value::as_str) {
+            eprintln!("download of {id} failed: {e}");
             failure = Some(e.to_string());
         } else if let (Some(downloaded), Some(total)) = (v["downloaded"].as_u64(), v["total"].as_u64()) {
             if let Some(entry) = lock(&downloads).get_mut(&id).filter(|e| e.pid == pid) {
@@ -149,6 +158,9 @@ fn watch(downloads: Downloads, id: String, mut child: Child) {
         None => {
             map.remove(&id);
         }
-        Some(error) => entry.state = DownloadState::Failed { error },
+        Some(detail) => {
+            eprintln!("download of {id} did not finish: {detail}");
+            entry.state = DownloadState::Failed { error: FAILED.into() };
+        }
     }
 }

@@ -62,7 +62,7 @@ fn failed_download_is_reported() {
     let h = hub(dir.path(), &[("AUDIOBOOKIFY_FAKE_DOWNLOAD", "error")]);
     h.start_download(hub::model("whisper").unwrap()).unwrap();
     wait_until(|| matches!(h.download_state("whisper"), Some(DownloadState::Failed { .. })));
-    assert_eq!(h.download_state("whisper"), Some(DownloadState::Failed { error: "fake download failed".into() }));
+    assert_eq!(h.download_state("whisper"), Some(DownloadState::Failed { error: "Didn't finish. Check your connection and try again.".into() }));
 }
 
 #[test]

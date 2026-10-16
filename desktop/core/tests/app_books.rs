@@ -345,7 +345,7 @@ fn engines_lists_both_with_labels() {
     let engines = list_engines(&ready_cache(dir.path()));
     assert_eq!(engines.default, "chatterbox-turbo");
     let ids: Vec<_> = engines.engines.iter().map(|e| (e.spec.id, e.spec.label, e.spec.needs_voice)).collect();
-    assert_eq!(ids, vec![("qwen3", "Quality (Qwen3)", true), ("chatterbox-turbo", "Speed (Turbo)", false)]);
+    assert_eq!(ids, vec![("qwen3", "Quality engine", true), ("chatterbox-turbo", "Speed engine", false)]);
 }
 
 #[test]

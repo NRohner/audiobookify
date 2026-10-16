@@ -57,7 +57,7 @@ The protocol carries no paths except explicit in/out files, and no DB IDs. Pytho
 | `db.py`, `models.py` | Rust `db` | `rusqlite` (bundled SQLite). Port `test_db.py`'s 64 tests. |
 | `ingest/epub.py`, `ingest/markdown.py` | Rust `ingest` | `zip` + `scraper` (html5ever) instead of ebooklib/BeautifulSoup. Whitespace handling is the parity risk. |
 | `normalize/text.py` | Rust `text` | Needs `fancy-regex`: the number regex and the sentence splitter use lookbehind/lookahead. `num2words` crate or a hand port of the English rules; decided by golden-test parity. |
-| `lexicon/substitution.py`, `phoneme/respelling.py` | Rust `text` | Small, pure. |
+| `lexicon/substitution.py` | Rust `text` | Small, pure. |
 | `synth/pipeline.py`, `synth/chunk_cache.py`, `worker.py` (job loop) | Rust `jobs` | Pause/cancel stay checked between chunks, same as today. |
 | `postprocess/audio.py` | Rust `audio` | `hound` for WAV, plain f32 loops for trim/level/concat, `ffmpeg` child process for MP3 (as today), `id3` crate for tags. |
 | `voice/validation.py`, `voice/analysis.py` (pure parts: trim point, WER, cadence, pace), `voice/storage.py` | Rust | Reading audio uses `symphonia` for non-WAV uploads. |
@@ -118,11 +118,11 @@ The page lists the models the app uses, and only those. Each row shows the role,
   - Voice transcription (Whisper): `mlx-community/whisper-large-v3-turbo-asr-fp16`
   - Plus any repos those fetch at load time, such as `mlx-community/S3TokenizerV2`. Build the full list by loading each engine against an empty `HF_HOME` and recording what gets downloaded.
 - **The HF cache is shared with other projects** on this machine (on 2026-10-15 it also held Gemma, Surya, F5-TTS and BERT models). The page must never list or delete repos outside the registry.
-- **Sizes and deletion use `huggingface_hub`'s own cache API** (`scan_cache_dir`, `delete_revisions`), not hand-rolled `du`/`rm`. Snapshots are symlinks into blob stores, so naive sizing and deletion get this wrong.
+- **Sizes and deletion use `huggingface_hub`'s own cache API** (`scan_cache_dir`; matched repos are removed by their HF-reported `repo_path`, because `delete_revisions` can map a shared commit hash to a foreign repo), not hand-rolled `du`/`rm`. Snapshots are symlinks into blob stores, so naive sizing and deletion get this wrong.
 - **Downloads run in a separate one-shot Python process** with `HF_HUB_OFFLINE` unset. The engine worker stays offline, so a download never blocks or affects synthesis. That process reports progress as JSON lines on stdout (the same convention as the engine worker), and the page shows it per model. It can be cancelled.
 - **Delete is refused while it would break something:**
-  - when the model is loaded in the engine worker
-  - when a queued or running job needs it
+  - while queued or running work needs the model (Voice transcription: whenever any work exists)
+  - an idle engine that has the model loaded is unloaded first, then deleted
   The confirm dialog shows the size that will be freed.
 
 ### First-run setup

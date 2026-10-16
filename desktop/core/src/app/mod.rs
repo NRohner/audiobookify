@@ -106,13 +106,13 @@ pub struct EngineSpec {
 pub const ENGINES: [EngineSpec; 2] = [
     EngineSpec {
         id: "qwen3",
-        label: "Quality (Qwen3)",
+        label: "Quality engine",
         description: "Most natural; needs a voice with a transcript. About 0.85 s per second of audio.",
         needs_voice: true,
     },
     EngineSpec {
         id: "chatterbox-turbo",
-        label: "Speed (Turbo)",
+        label: "Speed engine",
         description: "About twice as fast, slightly less natural.",
         needs_voice: false,
     },

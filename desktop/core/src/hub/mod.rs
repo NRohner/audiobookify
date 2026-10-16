@@ -95,9 +95,10 @@ pub fn model_for_engine(engine: &str) -> Option<&'static ModelSpec> {
     REGISTRY.iter().find(|m| m.engine == Some(engine))
 }
 
-/// huggingface_hub's rule: HF_HUB_CACHE, else HUGGINGFACE_HUB_CACHE (legacy), else HF_HOME/hub,
-/// else XDG_CACHE_HOME/huggingface/hub, else ~/.cache/huggingface/hub. Empty values count as
-/// unset and a leading `~` expands to HOME, as in HF's `expanduser`.
+/// Follows huggingface_hub's lookup order: HF_HUB_CACHE, else HUGGINGFACE_HUB_CACHE (legacy),
+/// else HF_HOME/hub, else XDG_CACHE_HOME/huggingface/hub, else ~/.cache/huggingface/hub.
+/// It is not an exact copy (empty values count as unset, `~` expands, `$VAR` does not).
+/// Rust is the single source of truth: it passes the result as HF_HUB_CACHE to every Python child.
 pub fn default_cache_dir() -> PathBuf {
     cache_dir_from(|k| std::env::var_os(k))
 }

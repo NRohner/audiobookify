@@ -24,12 +24,13 @@ setup:
 	@command -v ffmpeg >/dev/null 2>&1 || { echo "ffmpeg not found - install it (brew install ffmpeg / choco install ffmpeg) then re-run make setup"; exit 1; }
 	@if [ -d frontend ]; then cd frontend && npm install; fi
 
+# Must match the chatterbox-turbo entry in desktop/core/src/hub/mod.rs REGISTRY.
 TURBO_REPOS := [{"repo":"mlx-community/chatterbox-turbo-fp16","allow_patterns":["*.json","*.safetensors","*.py","*.model","*.tiktoken","*.txt","*.jinja","*.jsonl","*.yaml","*.npz","*.pth"],"required":[]},{"repo":"mlx-community/S3TokenizerV2","allow_patterns":["*.json","*.safetensors"],"required":[]}]
 
 # Development shortcut; app users download from Settings. Same files the app fetches.
 models:
 	@# The download exits on stdin EOF, so hand it a FIFO we hold open read-write (a `sleep |` pipe would keep make waiting).
-	@f=$$(mktemp -u) && mkfifo $$f && exec 3<>$$f && rm $$f && $(PY) -m audiobookify.model_store download '$(TURBO_REPOS)' <&3 | tail -1
+	@f=$$(mktemp -u) && mkfifo $$f && exec 3<>$$f && rm $$f && out=$$($(PY) -m audiobookify.model_store download '$(TURBO_REPOS)' <&3 | tail -1); echo "$$out"; case "$$out" in *'"done"'*) ;; *) exit 1;; esac
 
 build:
 	cd frontend && npm run build

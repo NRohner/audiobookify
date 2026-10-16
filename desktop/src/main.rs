@@ -42,6 +42,8 @@ fn python() -> PathBuf {
 fn start_runner(db: Database, paths: &AppPaths, models: HubCache) -> RunnerControl {
     let engine = PythonEngine::new(python(), repo_root())
         .env("HF_HUB_OFFLINE", "1")
+        // The exact root Rust gates on, so the worker never reads a different cache.
+        .env("HF_HUB_CACHE", &models.root)
         .env("PATH", child_path(std::env::var_os("PATH")));
     let mut runner = Runner::new(db, engine, paths.runner_paths(models));
     let control = runner.control();

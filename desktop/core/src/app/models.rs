@@ -84,7 +84,7 @@ pub fn delete_model(db: &Database, h: &Hub, runner: &RunnerControl, id: &str) ->
                                m.label.to_lowercase()));
         }
         None if work.any() => {
-            return err("Voice transcription is needed by queued work. Cancel it or let it finish, then delete.");
+            return err("Voice transcription can't be deleted while the studio is working. Let it finish, then delete.");
         }
         _ => {}
     }

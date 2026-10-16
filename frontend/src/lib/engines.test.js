@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { effectiveEngine, engineMismatchWarning, initialBookEngine, transcriptState } from "./engines.js";
 
 const ENGINES = [
-  { id: "qwen3", label: "Quality (Qwen3)", needs_voice: true },
-  { id: "chatterbox-turbo", label: "Speed (Turbo)", needs_voice: false },
+  { id: "qwen3", label: "Quality engine", needs_voice: true },
+  { id: "chatterbox-turbo", label: "Speed engine", needs_voice: false },
 ];
 
 test("effectiveEngine keeps the choice when it can run", () => {

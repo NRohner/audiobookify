@@ -80,7 +80,7 @@ fn transcription_delete_is_refused_while_anything_is_working() {
     cache_model(&dir.path().join("hub"), "chatterbox-turbo");
     clips::create_text_clip(&db, hub.cache(), "Hi.", None, Some("chatterbox-turbo"), None).unwrap();
     let e = models::delete_model(&db, &hub, &answering_runner(), "whisper").unwrap_err();
-    assert_eq!(e.0, "Voice transcription is needed by queued work. Cancel it or let it finish, then delete.");
+    assert_eq!(e.0, "Voice transcription can't be deleted while the studio is working. Let it finish, then delete.");
     assert!(hub.cache().is_present(audiobookify_core::hub::model("whisper").unwrap()));
 }
 
@@ -133,6 +133,25 @@ fn generating_with_a_missing_engine_is_refused() {
 }
 
 #[test]
+fn a_missing_quality_engine_leaves_the_stored_engine_alone() {
+    let dir = TempDir::new().unwrap();
+    let (paths, db) = app(dir.path());
+    let src = write_file(dir.path(), "book.md", TWO_CHAPTERS_MD);
+    let book = audiobookify_core::app::books::create_book(&db, &paths, &src, &path(dir.path(), "out")).unwrap();
+    let voice = voice(&db, dir.path(), "Nova", Some("hi"), Some("done"));
+    audiobookify_core::app::books::assign_voice(&db, book.id, Some(voice.id)).unwrap();
+    db.update_book_engine(book.id, "chatterbox-turbo").unwrap();
+    let turbo_only = dir.path().join("turbo-only");
+    cache_model(&turbo_only, "chatterbox-turbo");
+    let e = jobs::generate_book(&db, &HubCache::new(&turbo_only), book.id, Some("qwen3")).unwrap_err();
+    assert_eq!(e.0, "Quality engine isn't downloaded yet. Download it in Settings.");
+    assert_eq!(db.get_book(book.id).unwrap().engine, "chatterbox-turbo");
+    for c in &book.chapters {
+        assert!(db.list_jobs_for_chapter(c.id).unwrap().is_empty());
+    }
+}
+
+#[test]
 fn list_engines_reports_readiness() {
     let dir = TempDir::new().unwrap();
     cache_model(dir.path(), "chatterbox-turbo");
@@ -174,7 +193,7 @@ fn a_pending_transcription_blocks_deleting_whisper() {
     clean_tone_wav(&clip);
     audiobookify_core::app::voices::create_voice(&db, &paths, &clip, "Nova", None).unwrap();
     let e = models::delete_model(&db, &hub, &answering_runner(), "whisper").unwrap_err();
-    assert!(e.0.contains("needed by queued work"), "{e}");
+    assert!(e.0.contains("while the studio is working"), "{e}");
 }
 
 #[test]
