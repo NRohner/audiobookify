@@ -1,30 +1,133 @@
-import { useEffect, useState } from "react";
-import { AudioLines, ChevronRight, Loader2, Play, Plus, RotateCcw, Save, Target, Trash2 } from "lucide-react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { useEffect, useReducer, useRef, useState } from "react";
+import { AudioLines, ChevronRight, Download, FolderOpen, Loader2, Mic, Play, Plus, RotateCcw, Save, Square, Target, Trash2 } from "lucide-react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api.js";
 import { textClipInProgress } from "../lib/status.js";
 import FileAudio from "../components/FileAudio.jsx";
 import { transcriptState } from "../lib/engines.js";
 import { SWEET_SPOT, TEMPO_MAX, TEMPO_MIN, pacedWpm, sweetSpotTempo, tempoPosition } from "../lib/pace.js";
 import Button, { ErrorNote, PageHeader } from "../components/ui/Button.jsx";
-import PathPick from "../components/PathPick.jsx";
+import ClipEditor from "../components/ClipEditor.jsx";
+import { START, clipFlow, exportName, recordErrorText } from "../lib/clipFlow.js";
+import { formatClock } from "../lib/player.js";
 import Modal from "../components/ui/Modal.jsx";
 import ConfirmDialog from "../components/ui/ConfirmDialog.jsx";
 
+const AUDIO_FILTER = { name: "Audio", extensions: ["wav", "mp3", "flac", "ogg", "m4a", "aif", "aiff"] };
+
+function SourceTile({ icon: Icon, title, note, onClick, disabled, busy = false }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="flex items-center gap-3 rounded-tile border border-line bg-card p-4 text-left transition-colors
+        duration-150 hover:bg-oat disabled:cursor-not-allowed disabled:opacity-45"
+    >
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-text">
+        {busy ? (
+          <Loader2 className="size-[18px] animate-spin" strokeWidth={1.7} aria-hidden="true" />
+        ) : (
+          <Icon className="size-[18px]" strokeWidth={1.7} aria-hidden="true" />
+        )}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-ui font-semibold">{title}</span>
+        <span className="block text-meta text-ink-muted">{note}</span>
+      </span>
+    </button>
+  );
+}
+
+function Recording({ startedAt, stopping, onStop }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <div className="flex flex-col items-center gap-4 rounded-tile border border-line bg-oat px-4 py-6 text-center">
+      <p role="status" className="flex items-center gap-2 text-ui font-semibold">
+        <span aria-hidden="true" className="size-2.5 rounded-full bg-accent animate-pulse" />
+        Recording
+        <span className="font-normal tabular-nums text-ink-muted">{formatClock((now - startedAt) / 1000)}</span>
+      </p>
+      <p className="text-meta text-ink-muted">
+        Play the voice you want on this Mac, then stop. 10 to 30 seconds of clear speech is plenty.
+      </p>
+      <Button type="button" onClick={onStop} loading={stopping}>
+        {!stopping && <Square className="size-3.5 fill-current" aria-hidden="true" />}
+        Stop
+      </Button>
+    </div>
+  );
+}
+
 function CloneVoiceModal({ onClose, onCloned }) {
+  const [flow, dispatch] = useReducer(clipFlow, START);
   const [name, setName] = useState("");
   const [transcript, setTranscript] = useState("");
-  const [path, setPath] = useState(null);
+  const [keep, setKeep] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [exported, setExported] = useState(null);
   const [error, setError] = useState(null);
 
-  async function chooseFile() {
+  // Closing mid-take stops the recorder; a start still in flight is stopped when it lands.
+  const live = useRef(true);
+  const stage = useRef(flow.stage);
+  stage.current = flow.stage;
+  useEffect(() => {
+    live.current = true; // StrictMode remounts after a cleanup in dev
+    return () => {
+      live.current = false;
+      if (stage.current === "recording") api.stopRecording().catch(() => {});
+    };
+  }, []);
+
+  async function record() {
+    setError(null);
+    dispatch({ type: "record" });
     try {
-      const picked = await open({
-        multiple: false,
-        filters: [{ name: "Audio", extensions: ["wav", "mp3", "flac", "ogg", "m4a", "aif", "aiff"] }],
-      });
-      if (picked) setPath(picked);
+      await api.startRecording();
+      if (!live.current) return void api.stopRecording().catch(() => {});
+      dispatch({ type: "started", at: Date.now() });
+    } catch (e) {
+      dispatch({ type: "error", error: e });
+    }
+  }
+
+  async function stop() {
+    dispatch({ type: "stop" });
+    try {
+      dispatch({ type: "stopped", path: await api.stopRecording() });
+    } catch (e) {
+      dispatch({ type: "error", error: e });
+    }
+  }
+
+  async function chooseFile() {
+    setError(null);
+    try {
+      const picked = await open({ multiple: false, filters: [AUDIO_FILTER] });
+      if (picked) dispatch({ type: "picked", path: picked });
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  function startOver() {
+    setKeep(null);
+    setExported(null);
+    setError(null);
+    dispatch({ type: "reset" });
+  }
+
+  async function exportToFile() {
+    setError(null);
+    try {
+      const dest = await save({ defaultPath: exportName(name), filters: [{ name: "Audio", extensions: ["wav", "mp3"] }] });
+      if (dest) setExported(await api.exportMonoClip(flow.path, dest, keep));
     } catch (e) {
       setError(e.message);
     }
@@ -35,7 +138,10 @@ function CloneVoiceModal({ onClose, onCloned }) {
     setSubmitting(true);
     setError(null);
     try {
-      const voice = await api.createVoice(path, name, transcript.trim());
+      // ponytail: a file the editor couldn't open (no keep list) is cloned as-is, like before step 5.
+      const voice = keep
+        ? await api.createVoiceFromClip(flow.path, keep, name, transcript.trim())
+        : await api.createVoice(flow.path, name, transcript.trim());
       onCloned(voice);
     } catch (e) {
       setError(e.message);
@@ -43,56 +149,103 @@ function CloneVoiceModal({ onClose, onCloned }) {
     }
   }
 
+  const editing = flow.stage === "editing";
+  const problem = flow.stage === "denied" ? recordErrorText({ kind: "permission_denied" })
+    : flow.stage === "failed" ? recordErrorText(new Error(flow.message)) : null;
+
   return (
-    <Modal title="Clone a new voice" onClose={onClose}>
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <div>
-          <label htmlFor="voice-name" className="block text-meta font-semibold mb-1.5">
-            Name
-          </label>
-          <input
-            id="voice-name"
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-            className="rr-input"
-          />
-        </div>
+    <Modal title="Clone a new voice" onClose={onClose} wide>
+      {(flow.stage === "recording" || flow.stage === "stopping") && (
+        <Recording startedAt={flow.startedAt} stopping={flow.stage === "stopping"} onStop={stop} />
+      )}
 
-        <div>
-          <p className="text-meta font-semibold mb-1.5">
-            A recording of the voice
-            <span className="block font-normal text-ink-muted">10 to 30 seconds of one person reading, somewhere quiet.</span>
+      {!editing && flow.stage !== "recording" && flow.stage !== "stopping" && (
+        <div className="flex flex-col gap-4">
+          <p className="text-meta text-ink-muted">
+            You need 10 to 30 seconds of one person speaking clearly, with no music behind them.
           </p>
-          <PathPick label="Choose recording…" icon={AudioLines} path={path} onPick={chooseFile} />
+          {problem && (
+            <div role="alert" className="rounded-tile bg-accent-soft px-4 py-3 text-accent-text">
+              <p className="text-ui font-semibold">{problem.title}</p>
+              <p className="mt-1 text-meta">{problem.body}</p>
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SourceTile
+              icon={Mic}
+              busy={flow.stage === "starting"}
+              title={problem ? "Try recording again" : "Record"}
+              note="Capture a video or clip playing on this Mac"
+              onClick={record}
+              disabled={flow.stage === "starting"}
+            />
+            <SourceTile
+              icon={FolderOpen}
+              title="Edit an existing file"
+              note="Trim a recording you already have"
+              onClick={chooseFile}
+              disabled={flow.stage === "starting"}
+            />
+          </div>
+          <ErrorNote>{error}</ErrorNote>
         </div>
+      )}
 
-        <div>
-          <label htmlFor="transcript" className="block text-meta font-semibold mb-1.5">
-            What it says{" "}
-            <span className="text-ink-muted font-normal">(optional, we'll listen and fill this in)</span>
-          </label>
-          <textarea
-            id="transcript"
-            rows={3}
-            value={transcript}
-            onChange={(e) => setTranscript(e.target.value)}
-            className="rr-input"
-          />
-        </div>
+      {editing && (
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <ClipEditor src={convertFileSrc(flow.path)} onChange={setKeep} />
 
-        <ErrorNote>{error}</ErrorNote>
+          <div>
+            <label htmlFor="voice-name" className="block text-meta font-semibold mb-1.5">
+              Name
+            </label>
+            <input
+              id="voice-name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              className="rr-input"
+            />
+          </div>
 
-        <div className="flex justify-end gap-3">
-          <Button type="button" variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" loading={submitting} disabled={!path}>
-            Save voice
-          </Button>
-        </div>
-      </form>
+          <div>
+            <label htmlFor="transcript" className="block text-meta font-semibold mb-1.5">
+              What it says{" "}
+              <span className="text-ink-muted font-normal">(optional, we'll listen and fill this in)</span>
+            </label>
+            <textarea
+              id="transcript"
+              rows={3}
+              value={transcript}
+              onChange={(e) => setTranscript(e.target.value)}
+              className="rr-input"
+            />
+          </div>
+
+          <ErrorNote>{error}</ErrorNote>
+          {exported && (
+            <p role="status" className="truncate text-meta text-sage" title={exported}>
+              Saved a copy to {exported}
+            </p>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Button type="button" variant="quiet" onClick={startOver} className="-ml-2">
+              <RotateCcw className="size-4" aria-hidden="true" />
+              {flow.recorded ? "Record again" : "Choose another"}
+            </Button>
+            <span className="flex-1" />
+            <Button type="button" variant="secondary" onClick={exportToFile} disabled={!keep}>
+              <Download className="size-4" aria-hidden="true" />
+              Export to file…
+            </Button>
+            <Button type="submit" loading={submitting} disabled={flow.recorded && !keep}>
+              Save voice
+            </Button>
+          </div>
+        </form>
+      )}
     </Modal>
   );
 }

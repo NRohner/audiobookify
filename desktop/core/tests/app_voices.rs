@@ -79,6 +79,41 @@ fn create_voice_rolls_back_when_the_copy_fails() {
     assert!(voices::list_voices(&db).unwrap().is_empty());
 }
 
+#[test]
+fn a_voice_from_an_edited_clip_stores_the_kept_ranges_in_mono() {
+    let dir = TempDir::new().unwrap();
+    let (paths, db) = app(dir.path());
+    let take = dir.path().join("take.wav");
+    wav(&take, 16000, 2, 16000 * 20, |_| 0.3);
+    let staging = dir.path().join("staging");
+
+    // Trim to 2..14 s and cut 6..9 s out of the middle: 9 s kept.
+    let voice = voices::create_voice_from_clip(&db, &paths, &staging, &take, &[(2.0, 6.0), (9.0, 14.0)],
+                                               "Rec", Some("Hello."))
+        .unwrap();
+
+    assert!((voice.reference_seconds.unwrap() - 9.0).abs() < 0.01);
+    assert_eq!(voice.reference_transcript.as_deref(), Some("Hello."));
+    let stored = db.get_voice_profile_by_id(voice.id).unwrap().unwrap().reference_audio_path;
+    assert_eq!(hound::WavReader::open(&stored).unwrap().spec().channels, 1);
+    assert_eq!(fs::read_dir(&staging).unwrap().count(), 0, "the staged clip is cleaned up");
+}
+
+#[test]
+fn a_failed_clip_voice_leaves_no_voice_or_staged_file() {
+    let dir = TempDir::new().unwrap();
+    let (paths, db) = app(dir.path());
+    let take = dir.path().join("take.wav");
+    clean_tone_wav(&take);
+    let staging = dir.path().join("staging");
+
+    clone_nova(dir.path(), &paths, &db, None);
+    assert!(voices::create_voice_from_clip(&db, &paths, &staging, &take, &[(0.0, 10.0)], "Nova", None).is_err());
+
+    assert_eq!(voices::list_voices(&db).unwrap().len(), 1);
+    assert_eq!(fs::read_dir(&staging).unwrap().count(), 0);
+}
+
 // test_list_voices_returns_all_profiles, test_delete_voice_removes_profile,
 // test_delete_voice_returns_404_for_unknown_id, test_delete_voice_removes_the_permanent_voice_storage_folder
 #[test]

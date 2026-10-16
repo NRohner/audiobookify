@@ -159,6 +159,7 @@ fn main() {
             commands::transcribe_voice,
             commands::delete_voice,
             commands::voice_audio_path,
+            commands::create_voice_from_clip,
             commands::export_mono_clip,
             commands::list_pronunciations,
             commands::create_pronunciation,

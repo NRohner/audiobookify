@@ -45,6 +45,9 @@ export const api = {
   voiceAudioSrc: (id, tempo) => audioSrc("voice_audio_path", { voiceId: id, tempo }),
   // keep: [[startSec, endSec], ...] of the source, in order; dest ends in .wav or .mp3.
   exportMonoClip: (source, dest, keep) => call("export_mono_clip", { source, dest, keep }),
+  // The editor's save: clones a voice from the keep ranges of source, as mono.
+  createVoiceFromClip: (source, keep, name, transcript) =>
+    call("create_voice_from_clip", { source, keep, name, referenceTranscript: transcript || null }),
 
   listPronunciations: () => call("list_pronunciations"),
   createPronunciation: ({ term, override_value, notes }) =>

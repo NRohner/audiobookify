@@ -8,7 +8,7 @@ use super::{check_tempo, err, ApiError, ApiResult, AppPaths};
 use crate::db::Database;
 use crate::media;
 use crate::models::{NewVoiceProfile, VoiceProfile};
-use crate::voice_audio::{reference_clip, reference_pace, validate_reference_audio, Pace};
+use crate::voice_audio::{export_mono_clip, reference_clip, reference_pace, validate_reference_audio, Pace};
 use crate::voice_storage::{delete_voice_storage, store_reference_audio};
 
 #[derive(Debug, Serialize)]
@@ -84,6 +84,19 @@ pub fn create_voice(db: &Database, paths: &AppPaths, source: &Path, name: &str, 
         }
     }
     Ok(voice_dto(existing(db, profile.id)?, info.warnings))
+}
+
+/// Clones a voice from the `keep` ranges of `source` (the clip editor's save): exports them
+/// as a mono WAV under `staging`, clones from that, and removes the staged file either way.
+pub fn create_voice_from_clip(db: &Database, paths: &AppPaths, staging: &Path, source: &Path, keep: &[(f64, f64)],
+                              name: &str, reference_transcript: Option<&str>) -> ApiResult<VoiceDto> {
+    std::fs::create_dir_all(staging).map_err(|e| ApiError(format!("failed to stage the clip: {e}")))?;
+    let staged = staging.join(format!("clip-{}.wav", uuid::Uuid::new_v4()));
+    let result = export_mono_clip(source, &staged, keep)
+        .map_err(ApiError)
+        .and_then(|_| create_voice(db, paths, &staged, name, reference_transcript));
+    let _ = std::fs::remove_file(&staged);
+    result
 }
 
 pub fn set_voice_transcript(db: &Database, voice_id: i64, transcript: &str) -> ApiResult<VoiceDto> {

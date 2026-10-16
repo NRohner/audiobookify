@@ -178,6 +178,15 @@ pub fn voice_audio_path(app: AppHandle, state: State<'_, AppState>, voice_id: i6
     playable(&app, path)
 }
 
+/// Clones a voice from the editor's `keep` ranges of `source`, saved as mono.
+#[tauri::command(async)]
+pub fn create_voice_from_clip(state: State<'_, AppState>, source: PathBuf, keep: Vec<(f64, f64)>, name: String,
+                              reference_transcript: Option<String>) -> ApiResult<VoiceDto> {
+    let staging = std::env::temp_dir().join("audiobookify-clips");
+    voices::create_voice_from_clip(&state.db(), &state.paths(), &staging, &source, &keep, &name,
+                                   reference_transcript.as_deref())
+}
+
 /// The `keep` ranges (seconds) of `source` as a mono WAV or MP3 at `dest`; the editor's save.
 #[tauri::command(async)]
 pub fn export_mono_clip(source: PathBuf, dest: PathBuf, keep: Vec<(f64, f64)>) -> ApiResult<PathBuf> {
