@@ -232,3 +232,13 @@ pub fn export_chapter_mp3(audio: &[f32], sample_rate: u32, output_dir: &Path, or
                       artist: Some(narrator) };
     export_mp3(audio, sample_rate, &output_dir.join(chapter_filename(order_index, chapter_title)), &tags, fallback_dir)
 }
+
+/// Moves a finished chapter's MP3 to its new name (same folder) and fixes its title and
+/// track tags; album and artist stay. Port of postprocess/audio.py's relabel_chapter_mp3.
+pub fn relabel_chapter_mp3(path: &Path, order_index: i64, chapter_title: &str) -> Result<PathBuf, AudioError> {
+    let new_path = path.with_file_name(chapter_filename(order_index, chapter_title));
+    std::fs::rename(path, &new_path)?;
+    let tags = Tags { title: Some(chapter_title), track: Some((order_index + 1) as u32), ..Default::default() };
+    write_tags(&new_path, &tags)?;
+    Ok(new_path)
+}
