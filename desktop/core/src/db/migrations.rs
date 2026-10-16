@@ -26,6 +26,7 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("voice_profiles", "reference_trim_end", "REAL"),
     ("voice_profiles", "tempo", "REAL NOT NULL DEFAULT 1.0"),
     ("text_clips", "tempo", "REAL"),
+    ("text_clips", "duration", "REAL"),
 ];
 
 pub fn migrate_columns(conn: &Connection) -> rusqlite::Result<()> {

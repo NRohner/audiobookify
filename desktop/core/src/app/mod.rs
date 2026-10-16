@@ -7,6 +7,7 @@ pub mod clips;
 pub mod jobs;
 pub mod lexicon;
 pub mod models;
+pub mod stats;
 pub mod voices;
 
 use std::fmt;

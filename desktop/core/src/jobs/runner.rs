@@ -230,10 +230,12 @@ impl Runner {
         let combined = concatenate_chunks(audio, &ends, info.sample_rate);
         let title = format!("Text clip #{}", clip.id);
         let tags = Tags { title: Some(&title), artist: Some(&narrator), ..Default::default() };
+        let seconds = combined.len() as f64 / info.sample_rate as f64;
         let (path, used_fallback) = export_mp3(
             &combined, info.sample_rate, &self.paths.text_clip_dir.join(format!("text-clip-{}.mp3", clip.id)), &tags,
             Some(&self.paths.backup_dir.join("text-clips")))?;
         self.db.finish_text_clip(clip.id, JobStatus::Done, Some(&path.to_string_lossy()), None, used_fallback)?;
+        self.db.set_text_clip_duration(clip.id, seconds)?;
         Ok(())
     }
 
