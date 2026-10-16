@@ -6,6 +6,7 @@ pub mod books;
 pub mod clips;
 pub mod jobs;
 pub mod lexicon;
+pub mod models;
 pub mod voices;
 
 use std::fmt;
@@ -117,13 +118,22 @@ pub const ENGINES: [EngineSpec; 2] = [
 ];
 
 #[derive(Debug, Serialize)]
-pub struct Engines {
-    pub default: &'static str,
-    pub engines: &'static [EngineSpec],
+pub struct EngineDto {
+    #[serde(flatten)]
+    pub spec: &'static EngineSpec,
+    /// Its weights are downloaded.
+    pub ready: bool,
 }
 
-pub fn list_engines() -> Engines {
-    Engines { default: crate::models::DEFAULT_ENGINE, engines: &ENGINES }
+#[derive(Debug, Serialize)]
+pub struct Engines {
+    pub default: &'static str,
+    pub engines: Vec<EngineDto>,
+}
+
+pub fn list_engines(cache: &crate::hub::HubCache) -> Engines {
+    let engines = ENGINES.iter().map(|spec| EngineDto { spec, ready: cache.engine_ready(spec.id) }).collect();
+    Engines { default: crate::models::DEFAULT_ENGINE, engines }
 }
 
 /// The engine a request asks for (or the stored one), validated.

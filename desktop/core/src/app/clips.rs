@@ -44,7 +44,7 @@ pub fn list_text_clips(db: &Database) -> ApiResult<Vec<TextClipDto>> {
     Ok(db.list_text_clips()?.into_iter().map(dto).collect())
 }
 
-pub fn create_text_clip(db: &Database, text: &str, voice_profile_id: Option<i64>, engine: Option<&str>,
+pub fn create_text_clip(db: &Database, cache: &crate::hub::HubCache, text: &str, voice_profile_id: Option<i64>, engine: Option<&str>,
                         tempo: Option<f64>) -> ApiResult<TextClipDto> {
     let text = text.trim();
     if text.is_empty() {
@@ -56,6 +56,7 @@ pub fn create_text_clip(db: &Database, text: &str, voice_profile_id: Option<i64>
         }
     }
     let engine = chosen_engine(engine, DEFAULT_ENGINE, voice_profile_id)?;
+    super::models::require_engine(cache, &engine)?;
     let tempo = tempo.map(check_tempo).transpose()?;
     if tempo.is_some() && voice_profile_id.is_none() {
         return err("a tempo needs a voice");

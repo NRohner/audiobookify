@@ -11,6 +11,9 @@ use crate::models::{Book, Chapter, ChapterOutcome, ChapterStatus, RawChapter, So
 pub mod migrations;
 mod jobs;
 mod lexicon;
+mod stats;
+
+pub use stats::ActiveWork;
 mod voices;
 
 const SCHEMA: &str = include_str!("schema.sql");
