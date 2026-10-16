@@ -156,6 +156,15 @@ On launch, if no TTS engine's models are present, the app opens Settings → Mod
 - Phase 3: the Python engine worker must exit on stdin EOF. The JSON-lines protocol pipe then gives the same die-with-the-app guarantee, so don't stack the phase 0 `sh` wrapper on it. The wrapper takes over the child's stdin.
 - Phase 4: switch the release window from `WebviewUrl::External("http://127.0.0.1:8000")` to `WebviewUrl::App` (the bundled frontendDist). Remaining `fetch` calls go to `http://127.0.0.1:8000`, with CORS enabled on FastAPI. Never grant a `remote.urls` capability for 127.0.0.1:8000, because that would expose IPC to whatever serves the port. Set a real CSP at the same time. Phase 4 should also: log the children's output to a file under the app data dir, show a native dialog for setup errors, and avoid blocking the main thread before the window appears.
 
+## Notes from phase 3
+
+- Exit check (2026-10-15), scaled down from "a full book": the same 2,200-character passage (Jim Dale voice) was generated as a text clip by the Python worker and by the Rust runner, with each engine. Speed matched (Turbo 71 s vs 68 s, Qwen3 128 s vs 131 s), and the user's listening check passed. Chapter resume, pause, cancel and respawn are covered by the Rust runner tests against the real engine worker child.
+- The listening check caught Rust MP3s coming out stereo, each channel 3 dB down: ffmpeg reads hound's float32 WAV header as stereo. The encode now forces `-ac 1`, and a test checks the output is mono. Loudness then matched Python (-26.8 vs -26.9 LUFS).
+- The Tauri app runs generation in Rust (`audiobookify_core::jobs::Runner`); `make up` still runs the Python worker until phase 6. Don't run both against the same DB at once (two engines loaded).
+- Engine WAVs are float32 and written atomically; Python's chunk cache was 16-bit. A chapter paused under the Python worker regenerates once under Rust (cache keys differ).
+- Still to move in phase 4: `relabel_chapter_mp3` (chapter rename) and wav2vec2 phonemes (a `phonemes` request), both unused by the runner. Runner and engine errors only reach stderr, so route them to the phase 4 log file.
+- Fake-engine test knobs (`AUDIOBOOKIFY_FAKE_*`) live on `FakeEngine` and `engine_worker`; the Rust runner tests rely on them. `engine_worker` imports `EngineSlot` from `worker.py`, so move it before phase 6 deletes that module.
+
 ## Open questions
 
 1. **Distribution:** personal Macs only (unsigned `.app`, uses the Homebrew ffmpeg/espeak-ng and the repo venv), or a shareable signed `.dmg` (embedded Python via python-build-standalone + uv, bundled ffmpeg, models downloaded on first run, and the phonemizer GPL-3.0 question)? **Default: personal Macs only.** Phase 7 grows if the answer changes.

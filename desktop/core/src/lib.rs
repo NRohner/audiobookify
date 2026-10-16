@@ -1,5 +1,8 @@
+pub mod audio;
 pub mod db;
+pub mod engine;
 pub mod ingest;
+pub mod jobs;
 pub mod models;
 pub mod pystr;
 pub mod text;
