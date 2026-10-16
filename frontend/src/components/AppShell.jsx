@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
-import { FileText, Headphones, LibraryBig, Mic, Pause, Play, Quote } from "lucide-react";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { FileText, Headphones, LibraryBig, Mic, Pause, Play, Quote, Settings } from "lucide-react";
 import { api } from "../lib/api.js";
 import { bookState } from "../lib/shelf.js";
+import { needsSetup } from "../lib/settings.js";
 import ProgressBar from "./ui/ProgressBar.jsx";
 import ThemeToggle from "./ThemeToggle.jsx";
 import MiniPlayer from "./player/MiniPlayer.jsx";
@@ -14,6 +15,7 @@ const navItems = [
   { to: "/voices", label: "Voices", icon: Mic },
   { to: "/pronunciations", label: "Tricky words", icon: FileText },
   { to: "/text", label: "Try a line", icon: Quote },
+  { to: "/settings", label: "Settings", icon: Settings },
 ];
 
 // Footer card shown only while a book is in the studio. Also holds the global pause.
@@ -56,6 +58,16 @@ export default function AppShell() {
   const [studioBook, setStudioBook] = useState(null);
   const { chapter } = usePlayer();
   const onPlayer = useLocation().pathname === "/player";
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    // First run: no engine downloaded yet, so nothing can be rendered. Start on Settings.
+    // AppShell mounts once per launch, so this redirects at most once.
+    api
+      .listEngines()
+      .then((r) => needsSetup(r.engines) && navigate("/settings"))
+      .catch(() => {});
+  }, []);
 
   async function refresh() {
     const [status, books] = await Promise.all([api.getWorkerStatus(), api.listBooks()]);

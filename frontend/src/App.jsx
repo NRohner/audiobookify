@@ -7,6 +7,7 @@ import VoicesPage from "./pages/VoicesPage.jsx";
 import PronunciationsPage from "./pages/PronunciationsPage.jsx";
 import TextPage from "./pages/TextPage.jsx";
 import PlayerPage from "./pages/PlayerPage.jsx";
+import SettingsPage from "./pages/SettingsPage.jsx";
 import { PlayerProvider } from "./components/player/PlayerContext.jsx";
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="/pronunciations" element={<PronunciationsPage />} />
           <Route path="/text" element={<TextPage />} />
           <Route path="/player" element={<PlayerPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Routes>
     </PlayerProvider>
