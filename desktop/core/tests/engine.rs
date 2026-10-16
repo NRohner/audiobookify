@@ -89,3 +89,16 @@ fn a_child_that_died_while_idle_is_respawned_by_the_next_load() {
     assert_ne!(engine.child_pid(), Some(pid));
     engine.synthesize("Fine.", &Voice::default(), &dir.path().join("a.wav")).unwrap();
 }
+
+#[test]
+fn transcribe_after_the_child_died_while_idle_respawns_it() {
+    let mut engine = fake_engine(&[("AUDIOBOOKIFY_FAKE_STT", "1")]);
+    engine.load("fake").unwrap();
+    let pid = engine.child_pid().unwrap();
+    let status = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status().unwrap();
+    assert!(status.success());
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let t = engine.transcribe(std::path::Path::new("whatever.wav")).unwrap();
+    assert_eq!(t.text, "One two. Three");
+    assert_ne!(engine.child_pid(), Some(pid));
+}

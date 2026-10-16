@@ -4,6 +4,7 @@ One request per line ({"op": ..., ...}), exactly one response line each:
 {"ok": {...}} or {"error": "..."}. Exits on stdin EOF, so it dies with the app.
 No DB access and no pipeline logic; the Rust runner owns those.
 """
+import contextlib
 import json
 import os
 import sys
@@ -80,8 +81,13 @@ class Handler:
         # Atomic: libsndfile writes a zero data length and patches it on close, so a kill
         # mid-write would leave a WAV that reads as valid and empty.
         tmp = os.path.join(os.path.dirname(out_wav) or ".", f".{os.path.basename(out_wav)}.{os.getpid()}.tmp")
-        sf.write(tmp, audio, e.sample_rate(), format="WAV", subtype="FLOAT")
-        os.replace(tmp, out_wav)
+        try:
+            sf.write(tmp, audio, e.sample_rate(), format="WAV", subtype="FLOAT")
+            os.replace(tmp, out_wav)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+            raise
         return {"samples": len(audio), "sample_rate": e.sample_rate()}
 
     def transcribe(self, path: str) -> dict:

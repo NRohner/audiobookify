@@ -94,11 +94,7 @@ impl PythonEngine {
 
     /// Make `name` the loaded engine (a no-op if it already is) and return its info.
     pub fn load(&mut self, name: &str) -> Result<EngineInfo, EngineError> {
-        // A child that died while idle: drop it so this request respawns it.
-        if self.proc.as_mut().is_some_and(|p| p.child.try_wait().is_ok_and(|s| s.is_some())) {
-            self.proc = None;
-            self.loaded = None;
-        }
+        self.drop_if_dead(); // before the short-circuit, which trusts `loaded`
         if let Some(info) = self.loaded.as_ref().filter(|i| i.name == name) {
             return Ok(info.clone());
         }
@@ -124,7 +120,16 @@ impl PythonEngine {
         serde_json::from_value(ok).map_err(|e| self.fail(format!("unexpected response: {e}")))
     }
 
+    /// A child that died while idle: drop it (and its loaded engine) so the request respawns it.
+    fn drop_if_dead(&mut self) {
+        if self.proc.as_mut().is_some_and(|p| p.child.try_wait().is_ok_and(|s| s.is_some())) {
+            self.proc = None;
+            self.loaded = None;
+        }
+    }
+
     fn request(&mut self, req: Value) -> Result<Value, EngineError> {
+        self.drop_if_dead();
         let response = self.round_trip(&req).map_err(|e| self.fail(e))?;
         if let Some(ok) = response.get("ok") {
             return Ok(ok.clone());
