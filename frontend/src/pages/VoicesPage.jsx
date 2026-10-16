@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { AudioLines, ChevronRight, Loader2, Play, Plus, RotateCcw, Save, Target, Trash2 } from "lucide-react";
-import { api, textClipInProgress } from "../lib/api.js";
+import { api } from "../lib/api.js";
+import { textClipInProgress } from "../lib/status.js";
+import FileAudio from "../components/FileAudio.jsx";
 import { transcriptState } from "../lib/engines.js";
 import { SWEET_SPOT, TEMPO_MAX, TEMPO_MIN, pacedWpm, sweetSpotTempo, tempoPosition } from "../lib/pace.js";
 import Button, { ErrorNote, PageHeader } from "../components/ui/Button.jsx";
@@ -216,7 +218,12 @@ function PaceSection({ voice, onChanged, onError }) {
       {previewTempo != null && (
         <div className="flex flex-col gap-1">
           <p className="text-[12px] text-ink-muted">Reference at {previewTempo.toFixed(2)}x (not saved)</p>
-          <audio controls autoPlay src={`/api/voices/${voice.id}/audio?tempo=${previewTempo}`} className="h-9 w-full" />
+          <FileAudio
+            load={() => api.voiceAudioSrc(voice.id, previewTempo)}
+            cacheKey={`${voice.id}@${previewTempo}@${voice.reference_trim_end}`}
+            autoPlay
+            className="h-9 w-full"
+          />
         </div>
       )}
       {sample && (
@@ -226,7 +233,7 @@ function PaceSection({ voice, onChanged, onError }) {
             {textClipInProgress(sample) && `: generating ${Math.round((sample.progress || 0) * 100)}%`}
           </p>
           {sample.status === "done" && (
-            <audio controls src={`/api/text-clips/${sample.id}/audio`} className="h-9 w-full" />
+            <FileAudio load={() => api.textClipAudioSrc(sample.id)} cacheKey={sample.id} className="h-9 w-full" />
           )}
           {sample.status === "failed" && <p className="text-[12px] text-accent-text">{sample.error}</p>}
         </div>
@@ -296,7 +303,11 @@ function VoiceCard({ voice, onDelete, onChanged, onError }) {
         </button>
       </div>
 
-      <audio controls src={`/api/voices/${voice.id}/audio?tempo=${voice.tempo}`} className="h-9 w-full" />
+      <FileAudio
+        load={() => api.voiceAudioSrc(voice.id, voice.tempo)}
+        cacheKey={`${voice.id}@${voice.tempo}@${voice.reference_trim_end}`}
+        className="h-9 w-full"
+      />
 
       <details className="group">
         <summary className="inline-flex h-8 items-center gap-1 text-meta font-semibold text-ink-muted hover:text-ink list-none [&::-webkit-details-marker]:hidden">

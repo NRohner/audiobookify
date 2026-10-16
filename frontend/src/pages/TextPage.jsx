@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { ChevronRight, Download, Trash2 } from "lucide-react";
-import { api, textClipInProgress } from "../lib/api.js";
+import { save } from "@tauri-apps/plugin-dialog";
+import { api } from "../lib/api.js";
+import { textClipInProgress } from "../lib/status.js";
+import FileAudio from "../components/FileAudio.jsx";
 import Button, { ErrorNote, PageHeader } from "../components/ui/Button.jsx";
 import ProgressBar from "../components/ui/ProgressBar.jsx";
 import ConfirmDialog from "../components/ui/ConfirmDialog.jsx";
@@ -32,6 +35,19 @@ export default function TextPage() {
 
   async function refreshClips() {
     setClips(await api.listTextClips());
+  }
+
+  async function download(clip) {
+    const dest = await save({
+      defaultPath: `text-clip-${clip.id}.mp3`,
+      filters: [{ name: "MP3 audio", extensions: ["mp3"] }],
+    });
+    if (!dest) return;
+    try {
+      await api.saveTextClip(clip.id, dest);
+    } catch (e) {
+      setError(e.message);
+    }
   }
 
   useEffect(() => {
@@ -184,15 +200,15 @@ export default function TextPage() {
 
                 {clip.status === "done" && (
                   <div className="flex items-center gap-3">
-                    <audio controls src={`/api/text-clips/${clip.id}/audio`} className="h-10 max-w-xs" />
-                    <a
-                      href={`/api/text-clips/${clip.id}/audio`}
-                      download={`text-clip-${clip.id}.mp3`}
-                      className="inline-flex items-center gap-1.5 text-meta text-ink-muted hover:text-ink rounded"
+                    <FileAudio load={() => api.textClipAudioSrc(clip.id)} cacheKey={clip.id} className="h-10 max-w-xs" />
+                    <button
+                      type="button"
+                      onClick={() => download(clip)}
+                      className="inline-flex items-center gap-1.5 text-meta text-ink-muted hover:text-ink rounded cursor-pointer"
                     >
                       <Download className="size-4" strokeWidth={1.7} aria-hidden="true" />
                       Download
-                    </a>
+                    </button>
                   </div>
                 )}
               </div>

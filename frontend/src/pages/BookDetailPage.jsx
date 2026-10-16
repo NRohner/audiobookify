@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight, Laptop, Play, Square, Trash2 } from "lucide-react";
-import { api, chapterInProgress } from "../lib/api.js";
+import { api } from "../lib/api.js";
+import { chapterInProgress } from "../lib/status.js";
 import { formatEta } from "../lib/eta.js";
 import { bookState, primaryAction } from "../lib/shelf.js";
 import Button, { ErrorNote, IconButton } from "../components/ui/Button.jsx";
