@@ -1,9 +1,10 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { numericIds } from "./ids.js";
 
 // Commands reject with the Rust error's message as a plain string; callers show e.message.
 async function call(command, args) {
   try {
-    return await invoke(command, args);
+    return await invoke(command, numericIds(args));
   } catch (e) {
     throw new Error(typeof e === "string" ? e : e?.message ?? String(e));
   }
