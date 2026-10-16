@@ -17,6 +17,8 @@ The Rust job runner replaces the Python `audiobookify worker` sidecar in the Tau
 | Paths | Repo-relative as today (`audiobookify.db`, `.cache/synth`, `text_clips`, `output/`), because FastAPI still serves these files. The app data dir move is phase 4. |
 | Audio parity | Float tolerance (~1e-6) against Python goldens, not bit-exact. RMS/level math uses f64 as numpy does. |
 | `relabel_chapter_mp3` | Deferred to phase 4; only the chapter rename endpoint uses it. |
+| Chunk WAVs | float32 (`soundfile` subtype FLOAT), read losslessly by `hound`. |
+| Errors before synthesis | Fail the chapter as well as the job (one error path; the chapter row shows the message). |
 
 ## Components
 
@@ -30,7 +32,6 @@ Entry point `python -m audiobookify.engine_worker`. Reads one JSON request per l
 | `engine_info {}` | `{name, max_chunk_chars, min_chunk_chars, sample_rate, needs_transcript}` | For the loaded engine. |
 | `synthesize {text, voice, out_wav}` | `{samples, sample_rate}` | `voice = {reference_path, reference_text, trim_end, tempo, exaggeration, cfg, temperature}`; any field may be null (default voice). Writes mono float32 WAV to `out_wav`. |
 | `transcribe {path}` | `{text, words: [{word, start, end}]}` | `analysis.transcribe`; loads and frees Whisper per call, as today. |
-| `phonemes {path}` | `{phonemes}` | wav2vec2. Not used by the runner in phase 3; added so phase 4's pronunciation command has it. |
 | `shutdown {}` | `{}` | Then exits. |
 
 Voice handles: `synthesize` builds the engine params with the existing `params_from_profile` logic (reference clip, text, trim, tempo, sampling fields) and caches the handle in `EngineSlot.profile_cache`, keyed by `(reference_clip_path, reference_text)`, as `_ensure_profile_cached` does today. A `load` of a different engine clears it.
@@ -92,6 +93,6 @@ There is no fake Whisper. When the child runs with `AUDIOBOOKIFY_FAKE_STT=1` (se
 ## Out of scope
 
 - Commands, frontend changes, native dialogs, the app data dir (phase 4).
-- `relabel_chapter_mp3` and calls to `phonemes` (phase 4).
+- `relabel_chapter_mp3` and a `phonemes` (wav2vec2) request (phase 4). Nothing calls wav2vec2 today.
 - Rust key parity with Python's chunk cache.
 - Retiring the Python worker from `make up` (phase 6).
