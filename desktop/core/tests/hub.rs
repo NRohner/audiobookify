@@ -65,3 +65,31 @@ fn ready_cache_has_everything() {
     let cache = ready_cache(dir.path());
     assert!(REGISTRY.iter().all(|m| cache.is_present(m)));
 }
+
+fn lookup(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+    let map: std::collections::HashMap<String, String> =
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    move |k| map.get(k).map(Into::into)
+}
+
+#[test]
+fn cache_dir_follows_huggingface_hub_precedence() {
+    use std::path::PathBuf;
+    let all = [("HF_HUB_CACHE", "/a"), ("HUGGINGFACE_HUB_CACHE", "/b"), ("HF_HOME", "/c"),
+               ("XDG_CACHE_HOME", "/d"), ("HOME", "/h")];
+    for (skip, want) in [(0, "/a"), (1, "/b"), (2, "/c/hub"), (3, "/d/huggingface/hub"), (4, "/h/.cache/huggingface/hub")] {
+        assert_eq!(hub::cache_dir_from(lookup(&all[skip..])), PathBuf::from(want));
+    }
+}
+
+#[test]
+fn cache_dir_treats_empty_as_unset() {
+    let env = lookup(&[("HF_HUB_CACHE", ""), ("HF_HOME", "/c"), ("HOME", "/h")]);
+    assert_eq!(hub::cache_dir_from(env), std::path::PathBuf::from("/c/hub"));
+}
+
+#[test]
+fn cache_dir_expands_a_leading_tilde() {
+    let env = lookup(&[("HF_HOME", "~/x"), ("HOME", "/h")]);
+    assert_eq!(hub::cache_dir_from(env), std::path::PathBuf::from("/h/x/hub"));
+}

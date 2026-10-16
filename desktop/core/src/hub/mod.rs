@@ -5,7 +5,7 @@
 
 pub mod store;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub struct RepoSpec {
     pub repo: &'static str,
@@ -90,19 +90,28 @@ pub fn model_for_engine(engine: &str) -> Option<&'static ModelSpec> {
     REGISTRY.iter().find(|m| m.engine == Some(engine))
 }
 
-/// huggingface_hub's rule: HF_HUB_CACHE, else HF_HOME/hub, else XDG_CACHE_HOME/huggingface/hub,
-/// else ~/.cache/huggingface/hub.
+/// huggingface_hub's rule: HF_HUB_CACHE, else HUGGINGFACE_HUB_CACHE (legacy), else HF_HOME/hub,
+/// else XDG_CACHE_HOME/huggingface/hub, else ~/.cache/huggingface/hub. Empty values count as
+/// unset and a leading `~` expands to HOME, as in HF's `expanduser`.
 pub fn default_cache_dir() -> PathBuf {
-    let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
-    if let Some(p) = var("HF_HUB_CACHE") {
+    cache_dir_from(|k| std::env::var_os(k))
+}
+
+pub fn cache_dir_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> PathBuf {
+    let home = || var("HOME").filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_default();
+    let get = |k: &str| {
+        var(k).filter(|v| !v.is_empty()).map(PathBuf::from).map(|p| match p.strip_prefix("~") {
+            Ok(rest) => home().join(rest),
+            Err(_) => p,
+        })
+    };
+    if let Some(p) = get("HF_HUB_CACHE").or_else(|| get("HUGGINGFACE_HUB_CACHE")) {
         return p;
     }
-    let home = var("HF_HOME").unwrap_or_else(|| {
-        var("XDG_CACHE_HOME")
-            .unwrap_or_else(|| var("HOME").unwrap_or_default().join(".cache"))
-            .join("huggingface")
+    let hf_home = get("HF_HOME").unwrap_or_else(|| {
+        get("XDG_CACHE_HOME").unwrap_or_else(|| home().join(".cache")).join("huggingface")
     });
-    home.join("hub")
+    hf_home.join("hub")
 }
 
 #[derive(Debug, Clone)]
@@ -126,7 +135,7 @@ impl HubCache {
             let dir = self.repo_dir(r.repo);
             let Ok(commit) = std::fs::read_to_string(dir.join("refs/main")) else { return false };
             let snapshot = dir.join("snapshots").join(commit.trim());
-            r.required.iter().all(|f| Path::new(&snapshot.join(f)).exists())
+            r.required.iter().all(|f| snapshot.join(f).exists())
         })
     }
 
