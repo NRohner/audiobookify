@@ -24,8 +24,7 @@ pub enum DownloadState {
 struct Entry {
     state: DownloadState,
     pid: u32,
-    cancelled: bool,
-    /// Held so the child sees EOF, and exits, when the entry or the app goes away.
+    /// Held so the child sees EOF, and exits, when the entry is dropped (cancel) or the app exits.
     _stdin: Option<ChildStdin>,
 }
 
@@ -62,8 +61,7 @@ impl Hub {
         cmd.args(["-m", "audiobookify.model_store"]).args(args).current_dir(&self.cwd)
             .env_remove("HF_HUB_OFFLINE")
             .env("HF_HUB_CACHE", &self.cache.root)
-            .envs(self.env.iter().map(|(k, v)| (k, v)))
-            .stderr(Stdio::inherit());
+            .envs(self.env.iter().map(|(k, v)| (k, v)));
         cmd
     }
 
@@ -71,7 +69,11 @@ impl Hub {
         let out = self.command(args).stdin(Stdio::null()).output()
             .map_err(|e| format!("could not start {}: {e}", self.python.display()))?;
         let line = String::from_utf8_lossy(&out.stdout);
-        serde_json::from_str(line.trim()).map_err(|_| format!("model_store {} failed ({})", args[0], out.status))
+        serde_json::from_str(line.trim()).map_err(|e| {
+            let err = String::from_utf8_lossy(&out.stderr);
+            let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+            format!("model_store {} failed ({}): {e}: {last}", args[0], out.status)
+        })
     }
 
     pub fn sizes(&self) -> Result<HashMap<String, u64>, String> {
@@ -105,7 +107,6 @@ impl Hub {
         downloads.insert(m.id.to_string(), Entry {
             state: DownloadState::Running { downloaded: 0, total: m.download_bytes },
             pid: child.id(),
-            cancelled: false,
             _stdin: child.stdin.take(),
         });
         let (map, id) = (self.downloads.clone(), m.id.to_string());
@@ -114,14 +115,8 @@ impl Hub {
     }
 
     pub fn cancel_download(&self, id: &str) {
-        let mut downloads = lock(&self.downloads);
-        if let Some(entry) = downloads.get_mut(id) {
-            entry.cancelled = true;
-            if matches!(entry.state, DownloadState::Running { .. }) {
-                unsafe { libc::kill(entry.pid as i32, libc::SIGTERM) };
-            }
-        }
-        downloads.remove(id);
+        // Dropping the entry closes the child's stdin; model_store exits on that EOF.
+        lock(&self.downloads).remove(id);
     }
 
     pub fn download_state(&self, id: &str) -> Option<DownloadState> {
@@ -131,6 +126,7 @@ impl Hub {
 
 /// Reads one download's progress lines until the child exits, then records how it ended.
 fn watch(downloads: Downloads, id: String, mut child: Child) {
+    let pid = child.id();
     let stdout = BufReader::new(child.stdout.take().expect("piped"));
     let mut failure = Some("The download stopped before it finished.".to_string());
     for line in stdout.lines().map_while(Result::ok) {
@@ -140,7 +136,7 @@ fn watch(downloads: Downloads, id: String, mut child: Child) {
         } else if let Some(e) = v.get("error").and_then(Value::as_str) {
             failure = Some(e.to_string());
         } else if let (Some(downloaded), Some(total)) = (v["downloaded"].as_u64(), v["total"].as_u64()) {
-            if let Some(entry) = lock(&downloads).get_mut(&id).filter(|e| !e.cancelled) {
+            if let Some(entry) = lock(&downloads).get_mut(&id).filter(|e| e.pid == pid) {
                 entry.state = DownloadState::Running { downloaded, total };
             }
         }
@@ -148,7 +144,7 @@ fn watch(downloads: Downloads, id: String, mut child: Child) {
     let _ = child.wait();
     let mut map = lock(&downloads);
     // A cancelled entry was already removed; a later download of the same id may own it now.
-    let Some(entry) = map.get_mut(&id).filter(|e| e.pid == child.id()) else { return };
+    let Some(entry) = map.get_mut(&id).filter(|e| e.pid == pid) else { return };
     match failure {
         None => {
             map.remove(&id);

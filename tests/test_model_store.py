@@ -51,6 +51,14 @@ def test_delete_removes_only_the_named_repos(cache):
     assert (other / "snapshots" / "def456" / "model.safetensors").read_bytes() == b"x" * 500
 
 
+def test_delete_spares_a_foreign_repo_sharing_the_commit_hash(cache):
+    other = cache_repo(cache, "aaa/foreign", {"model.safetensors": 500})  # scanned first, same hash
+    cache_repo(cache, "org/a", {"model.safetensors": 1000})
+    assert model_store.delete(["org/a"]) == 1000
+    assert model_store.sizes(["org/a", "aaa/foreign"]) == {"org/a": 0, "aaa/foreign": 500}
+    assert (other / "snapshots" / "abc123" / "model.safetensors").read_bytes() == b"x" * 500
+
+
 def test_delete_of_a_missing_repo_frees_nothing(cache):
     assert model_store.delete(["org/missing"]) == 0
 

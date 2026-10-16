@@ -76,7 +76,7 @@ fn one_download_at_a_time_and_cancel_stops_it() {
 
     h.cancel_download("qwen3");
     assert_eq!(h.download_state("qwen3"), None);
-    std::thread::sleep(Duration::from_millis(800)); // the killed child would have finished by now
+    std::thread::sleep(Duration::from_secs(2)); // 4 files x 0.3s: an unstopped child would have finished by now
     assert!(!h.cache().is_present(hub::model("qwen3").unwrap()));
     assert!(!h.downloading());
 }

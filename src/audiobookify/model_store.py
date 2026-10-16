@@ -9,6 +9,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import shutil
 import sys
 import threading
 import time
@@ -42,16 +43,17 @@ def sizes(repos: list[str]) -> dict[str, int]:
 
 
 def delete(repos: list[str]) -> int:
+    # Remove the matched repo directories directly: HF's delete_revisions assigns a commit hash
+    # to the first scanned repo holding it, which could be a repo we were not asked to touch.
     info = _scan()
     if info is None:
         return 0
-    hashes = [rev.commit_hash for r in info.repos if r.repo_type == "model" and r.repo_id in repos
-              for rev in r.revisions]
-    if not hashes:
-        return 0
-    strategy = info.delete_revisions(*hashes)
-    strategy.execute()
-    return strategy.expected_freed_size
+    freed = 0
+    for repo in info.repos:
+        if repo.repo_type == "model" and repo.repo_id in repos:
+            freed += repo.size_on_disk
+            shutil.rmtree(repo.repo_path)
+    return freed
 
 
 def blob_bytes(repo_dir: Path) -> int:
