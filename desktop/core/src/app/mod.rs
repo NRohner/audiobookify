@@ -138,7 +138,6 @@ pub(crate) fn chosen_engine(requested: Option<&str>, current: &str, voice_profil
     Ok(id.to_string())
 }
 
-#[allow(dead_code)] // used by the voice endpoints (task 4)
 pub(crate) fn check_tempo(tempo: f64) -> ApiResult<f64> {
     let (lo, hi) = TEMPO_RANGE;
     if !(lo..=hi).contains(&tempo) {
