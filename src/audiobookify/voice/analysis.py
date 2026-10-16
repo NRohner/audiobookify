@@ -48,7 +48,8 @@ def reference_clip(reference_path: str, trim_end: Optional[float], tempo: float 
     """The clip the engines clone from: the original, or its first trim_end
     seconds, played at tempo (ffmpeg atempo keeps the pitch). Derived clips are
     caches next to the original (the original never changes for a voice); the
-    trim point and tempo on the voice are the source of truth."""
+    trim point and tempo on the voice are the source of truth. The cached file
+    names are shared with Rust's voice_audio::reference_clip: rename both or neither."""
     ref = Path(reference_path)
     clip = reference_path
     if trim_end is not None:

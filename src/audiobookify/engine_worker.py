@@ -62,7 +62,7 @@ def _make(name: str):
 
 
 def _params(voice: dict) -> dict:
-    """Engine params from the protocol's voice fields (worker.params_from_profile's shape)."""
+    """Engine params from the protocol's voice fields (the params dict the engines expect)."""
     ref = voice.get("reference_path")
     tempo = voice.get("tempo") or 1.0
     return {
