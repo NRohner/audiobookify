@@ -51,7 +51,7 @@ pub fn trim_silence(audio: &[f32], sample_rate: u32) -> Vec<f32> {
     let Some(first) = loud.next() else {
         return audio.to_vec();
     };
-    let last = loud.last().unwrap_or(first);
+    let last = loud.next_back().unwrap_or(first);
     let margin = (sample_rate as f64 * KEEP_MARGIN_SECONDS) as usize;
     let start = (first * frame).saturating_sub(margin);
     let end = ((last + 1) * frame + margin).min(audio.len());

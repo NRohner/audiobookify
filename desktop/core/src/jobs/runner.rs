@@ -216,9 +216,9 @@ impl Runner {
         }
 
         let total = chunks.len();
-        for i in audio.len()..total {
+        for (i, chunk) in chunks.iter().enumerate().skip(audio.len()) {
             let chunk_path = self.cache.chunk_path(chapter.id, i);
-            self.engine.synthesize(&chunks[i].text, &voice, &chunk_path)?;
+            self.engine.synthesize(&chunk.text, &voice, &chunk_path)?;
             audio.push(read_wav(&chunk_path)?.0);
             self.db.update_job_progress(job.id, (i + 1) as f64 / total as f64)?;
             if self.db.is_paused()? {
