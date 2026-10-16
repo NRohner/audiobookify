@@ -1,5 +1,5 @@
 //! Unit-level parity with the Python text functions. Each case in
-//! tests/fixtures/text/cases.json is an input and what Python returned for it.
+//! tests/fixtures/text/cases.json is an input and what Python returned for it (frozen; the Python code is gone).
 
 mod fixture;
 

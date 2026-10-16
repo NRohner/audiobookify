@@ -16,7 +16,7 @@ from .engines import ENGINES
 from .engines.fake import FakeEngine
 from .voice import analysis
 
-# What AUDIOBOOKIFY_FAKE_STT=1 returns: 18 s of words, so trim_point cuts at "two." (14.15 s).
+# What AUDIOBOOKIFY_FAKE_STT=1 returns: 18 s of words, so the Rust trim point (`jobs::voice::trim_point`) cuts at "two." (14.15 s).
 FAKE_TRANSCRIPT = {"text": "One two. Three", "words": [
     {"word": " One", "start": 0.0, "end": 10.0},
     {"word": " two.", "start": 10.1, "end": 14.0},
