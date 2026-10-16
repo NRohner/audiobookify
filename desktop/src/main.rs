@@ -1,7 +1,12 @@
 mod sidecars;
 
+use audiobookify_core::audio::child_path;
+use audiobookify_core::db::Database;
+use audiobookify_core::engine::PythonEngine;
+use audiobookify_core::jobs::{Paths, Runner};
 use sidecars::{audiobookify_commands, wait_port_free, Sidecars, API_ADDR};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
@@ -24,6 +29,32 @@ fn start_sidecars() -> Result<Sidecars, String> {
     Ok(sc)
 }
 
+/// Generation, on its own thread with its own DB connection. It owns the Python engine
+/// worker child, whose stdin closes when this process exits, however it exits; the
+/// worker then finishes its chunk and quits. A job cut off mid-chapter is requeued by
+/// `reset_stale_generating_jobs` on the next launch, as before.
+fn start_runner() {
+    let repo = repo_root().to_path_buf();
+    std::thread::Builder::new()
+        .name("job-runner".into())
+        .spawn(move || {
+            let db = match Database::open(repo.join("audiobookify.db"), repo.join("voices")) {
+                Ok(db) => db,
+                Err(e) => return eprintln!("Error: the job runner could not open the database: {e}"),
+            };
+            let engine = PythonEngine::new(repo.join(".venv/bin/python"), &repo)
+                .env("HF_HUB_OFFLINE", "1")
+                .env("PATH", child_path(std::env::var_os("PATH")));
+            let paths = Paths {
+                cache_root: repo.join(".cache/synth"),
+                text_clip_dir: repo.join("text_clips"),
+                backup_dir: repo.join("output"),
+            };
+            Runner::new(db, engine, paths).run_forever(&AtomicBool::new(false));
+        })
+        .expect("spawn the job runner thread");
+}
+
 /// Startup failures happen before Tauri runs: an error returned from Tauri's setup hook
 /// aborts inside the macOS app delegate, which shows up as a crash report, not a message.
 fn fail(msg: &str) -> ! {
@@ -42,6 +73,7 @@ fn fail(msg: &str) -> ! {
 
 fn main() {
     let sc = start_sidecars().unwrap_or_else(|e| fail(&e));
+    start_runner();
     let app = tauri::Builder::default()
         .manage(Mutex::new(Some(sc)))
         .setup(|app| {

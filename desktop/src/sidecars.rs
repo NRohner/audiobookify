@@ -1,4 +1,3 @@
-use std::ffi::OsString;
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -28,32 +27,16 @@ pub fn wait_port_free(addr: &str, timeout: Duration) -> bool {
     }
 }
 
-/// Homebrew dirs first, then the existing PATH (only when present and non-empty, so no trailing `:`).
-fn child_path(existing: Option<OsString>) -> OsString {
-    let mut p = OsString::from("/opt/homebrew/bin:/usr/local/bin");
-    if let Some(e) = existing.filter(|e| !e.is_empty()) {
-        p.push(":");
-        p.push(e);
-    }
-    p
-}
+use audiobookify_core::audio::child_path;
 
-/// The two processes `make up` starts: the FastAPI app and the generation worker.
+/// The FastAPI app. Generation runs in-process (`jobs::Runner`), not as a sidecar.
 pub fn audiobookify_commands(repo: &Path) -> Vec<Command> {
-    let bin = repo.join(".venv/bin");
-    let mut api = Command::new(bin.join("uvicorn"));
+    let mut api = Command::new(repo.join(".venv/bin/uvicorn"));
     api.args(["audiobookify.api.app:create_app", "--factory", "--host", "127.0.0.1", "--port", "8000"]);
-    let mut worker = Command::new(bin.join("audiobookify"));
-    worker.arg("worker");
-    let mut cmds = vec![api, worker];
-    for c in &mut cmds {
-        // The repo root as cwd: create_app() and the worker default to ./audiobookify.db, ./uploads, ./voices.
-        c.current_dir(repo).env("HF_HUB_OFFLINE", "1");
-        // ponytail: Homebrew paths are hardcoded for this personal-Macs-only build; a shareable build
-        // would bundle ffmpeg. A Finder-launched .app only has /usr/bin:/bin:/usr/sbin:/sbin.
-        c.env("PATH", child_path(std::env::var_os("PATH")));
-    }
-    cmds
+    // The repo root as cwd: create_app() defaults to ./audiobookify.db, ./uploads, ./voices.
+    api.current_dir(repo).env("HF_HUB_OFFLINE", "1");
+    api.env("PATH", child_path(std::env::var_os("PATH")));
+    vec![api]
 }
 
 // Runs "$@" and ties it to stdin: when the app dies the kernel closes the pipe, `read` sees EOF,
@@ -361,29 +344,11 @@ mod tests {
     }
 
     #[test]
-    fn child_path_handles_missing_empty_and_present() {
-        assert_eq!(child_path(None), OsString::from("/opt/homebrew/bin:/usr/local/bin"));
-        assert_eq!(child_path(Some(OsString::new())), OsString::from("/opt/homebrew/bin:/usr/local/bin"));
-        assert_eq!(
-            child_path(Some("/usr/bin:/bin".into())),
-            OsString::from("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
-        );
-    }
-
-    #[test]
-    fn audiobookify_commands_use_repo_venv() {
+    fn audiobookify_commands_start_only_the_api() {
         let repo = Path::new("/repo");
         let cmds = audiobookify_commands(repo);
-        let programs: Vec<_> = cmds.iter().map(|c| c.get_program().to_owned()).collect();
-        assert_eq!(programs, ["/repo/.venv/bin/uvicorn", "/repo/.venv/bin/audiobookify"]);
-        let api_args: Vec<_> = cmds[0].get_args().map(|a| a.to_str().unwrap()).collect();
-        assert_eq!(api_args, ["audiobookify.api.app:create_app", "--factory", "--host", "127.0.0.1", "--port", "8000"]);
-        assert_eq!(cmds[1].get_args().collect::<Vec<_>>(), ["worker"]);
-        for c in &cmds {
-            assert_eq!(c.get_current_dir(), Some(repo));
-            assert!(c.get_envs().any(|(k, v)| k == "HF_HUB_OFFLINE" && v == Some("1".as_ref())));
-            let path = c.get_envs().find(|(k, _)| *k == "PATH").and_then(|(_, v)| v).unwrap().to_str().unwrap();
-            assert!(path.starts_with("/opt/homebrew/bin:/usr/local/bin"), "PATH was {path}");
-        }
+        assert_eq!(cmds.len(), 1, "the job runner is Rust now; no Python worker sidecar");
+        assert_eq!(cmds[0].get_program(), "/repo/.venv/bin/uvicorn");
+        assert_eq!(cmds[0].get_current_dir(), Some(repo));
     }
 }

@@ -102,6 +102,7 @@ dependencies = [
 name = "audiobookify-desktop"
 version = "0.1.0"
 dependencies = [
+ "audiobookify-core",
  "tauri",
  "tauri-build",
 ]
