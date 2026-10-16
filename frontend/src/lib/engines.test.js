@@ -32,8 +32,8 @@ test("engineMismatchWarning is silent when every finished chapter used the chose
 
 test("engineMismatchWarning names the engines when chapters would not match", () => {
   const book = { mixed_engines: false, chapters: [{ status: "done", engine: "qwen3" }, { status: "pending" }] };
-  assert.match(engineMismatchWarning(book, "chatterbox-turbo", ENGINES), /Quality \(Qwen3\)/);
-  assert.match(engineMismatchWarning(book, "chatterbox-turbo", ENGINES), /Speed \(Turbo\)/);
+  assert.match(engineMismatchWarning(book, "chatterbox-turbo", ENGINES), /Quality engine/);
+  assert.match(engineMismatchWarning(book, "chatterbox-turbo", ENGINES), /Speed engine/);
 });
 
 test("engineMismatchWarning reports a book that already mixes engines, including legacy audio", () => {
