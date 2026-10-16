@@ -17,6 +17,7 @@ export default function DirectoryBrowser({ value, onChange, onValidityChange }) 
     }
     let live = true;
     setChecking(true);
+    onValidityChange?.(false);
     api
       .validateOutputDir(value)
       .then(
@@ -39,8 +40,13 @@ export default function DirectoryBrowser({ value, onChange, onValidityChange }) 
   }, [value]);
 
   async function choose() {
-    const picked = await open({ directory: true, multiple: false, defaultPath: value || undefined });
-    if (picked) onChange(picked);
+    try {
+      const picked = await open({ directory: true, multiple: false, defaultPath: value || undefined });
+      if (picked) onChange(picked);
+    } catch (e) {
+      setStatus({ writable: false, error: e.message });
+      onValidityChange?.(false);
+    }
   }
 
   return (

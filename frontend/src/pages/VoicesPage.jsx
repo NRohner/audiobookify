@@ -19,11 +19,15 @@ function CloneVoiceModal({ onClose, onCloned }) {
   const [error, setError] = useState(null);
 
   async function chooseFile() {
-    const picked = await open({
-      multiple: false,
-      filters: [{ name: "Audio", extensions: ["wav", "mp3", "flac", "ogg", "m4a", "aif", "aiff"] }],
-    });
-    if (picked) setPath(picked);
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "Audio", extensions: ["wav", "mp3", "flac", "ogg", "m4a", "aif", "aiff"] }],
+      });
+      if (picked) setPath(picked);
+    } catch (e) {
+      setError(e.message);
+    }
   }
 
   async function handleSubmit(event) {

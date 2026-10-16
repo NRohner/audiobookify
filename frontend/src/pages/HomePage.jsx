@@ -22,11 +22,15 @@ function ImportBookModal({ initialPath, onClose, onImported }) {
   const [error, setError] = useState(null);
 
   async function chooseFile() {
-    const picked = await open({
-      multiple: false,
-      filters: [{ name: "EPUB or Markdown", extensions: ["epub", "md"] }],
-    });
-    if (picked) setPath(picked);
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "EPUB or Markdown", extensions: ["epub", "md"] }],
+      });
+      if (picked) setPath(picked);
+    } catch (e) {
+      setError(e.message);
+    }
   }
 
   async function handleSubmit(event) {
@@ -369,6 +373,7 @@ export default function HomePage() {
 
       {importing && (
         <ImportBookModal
+          key={importing.path ?? "manual"}
           initialPath={importing.path}
           onClose={() => setImporting(null)}
           onImported={(book) => navigate(`/books/${book.id}`)}

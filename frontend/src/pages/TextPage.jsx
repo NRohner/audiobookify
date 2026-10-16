@@ -38,12 +38,12 @@ export default function TextPage() {
   }
 
   async function download(clip) {
-    const dest = await save({
-      defaultPath: `text-clip-${clip.id}.mp3`,
-      filters: [{ name: "MP3 audio", extensions: ["mp3"] }],
-    });
-    if (!dest) return;
     try {
+      const dest = await save({
+        defaultPath: `text-clip-${clip.id}.mp3`,
+        filters: [{ name: "MP3 audio", extensions: ["mp3"] }],
+      });
+      if (!dest) return;
       await api.saveTextClip(clip.id, dest);
     } catch (e) {
       setError(e.message);
