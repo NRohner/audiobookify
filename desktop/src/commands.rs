@@ -8,9 +8,13 @@ use audiobookify_core::app::books::{self, BookDto, BookText, ChapterBreak, DirCh
 use audiobookify_core::app::clips::{self, TextClipDto};
 use audiobookify_core::app::jobs::{self, Queued, QueuedOne, WorkerStatus};
 use audiobookify_core::app::lexicon::{self, LexiconDto};
+use audiobookify_core::app::models::{self, Deleted, ModelProgress, ModelRow};
+use audiobookify_core::app::stats::{self, Stats};
 use audiobookify_core::app::voices::{self, VoiceDto};
 use audiobookify_core::app::{self, ApiError, ApiResult, AppPaths, Engines};
 use audiobookify_core::db::Database;
+use audiobookify_core::hub::store::Hub;
+use audiobookify_core::jobs::RunnerControl;
 use tauri::{AppHandle, Manager, State};
 
 /// The commands' connection; the job runner has its own. WAL mode and the busy timeout let
@@ -20,6 +24,8 @@ use tauri::{AppHandle, Manager, State};
 pub struct AppState {
     pub db: Mutex<Database>,
     pub paths: AppPaths,
+    pub hub: Hub,
+    pub runner: RunnerControl,
 }
 
 impl AppState {
@@ -35,8 +41,8 @@ fn playable(app: &AppHandle, path: PathBuf) -> ApiResult<PathBuf> {
 }
 
 #[tauri::command]
-pub fn list_engines() -> Engines {
-    app::list_engines()
+pub fn list_engines(state: State<'_, AppState>) -> Engines {
+    app::list_engines(state.hub.cache())
 }
 
 #[tauri::command]
@@ -81,13 +87,13 @@ pub fn assign_voice(state: State<'_, AppState>, book_id: i64, voice_profile_id: 
 
 #[tauri::command(async)]
 pub fn generate_book(state: State<'_, AppState>, book_id: i64, engine: Option<String>) -> ApiResult<Queued> {
-    jobs::generate_book(&state.db(), book_id, engine.as_deref())
+    jobs::generate_book(&state.db(), state.hub.cache(), book_id, engine.as_deref())
 }
 
 #[tauri::command(async)]
 pub fn generate_chapter(state: State<'_, AppState>, book_id: i64, chapter_id: i64, engine: Option<String>)
                         -> ApiResult<QueuedOne> {
-    jobs::generate_chapter(&state.db(), book_id, chapter_id, engine.as_deref())
+    jobs::generate_chapter(&state.db(), state.hub.cache(), book_id, chapter_id, engine.as_deref())
 }
 
 #[tauri::command(async)]
@@ -145,7 +151,7 @@ pub fn set_voice_tempo(state: State<'_, AppState>, voice_id: i64, tempo: f64) ->
 
 #[tauri::command(async)]
 pub fn transcribe_voice(state: State<'_, AppState>, voice_id: i64) -> ApiResult<VoiceDto> {
-    voices::transcribe_voice(&state.db(), voice_id)
+    voices::transcribe_voice(&state.db(), state.hub.cache(), voice_id)
 }
 
 #[tauri::command(async)]
@@ -189,7 +195,7 @@ pub fn list_text_clips(state: State<'_, AppState>) -> ApiResult<Vec<TextClipDto>
 #[tauri::command(async)]
 pub fn create_text_clip(state: State<'_, AppState>, text: String, voice_profile_id: Option<i64>,
                         engine: Option<String>, tempo: Option<f64>) -> ApiResult<TextClipDto> {
-    clips::create_text_clip(&state.db(), &text, voice_profile_id, engine.as_deref(), tempo)
+    clips::create_text_clip(&state.db(), state.hub.cache(), &text, voice_profile_id, engine.as_deref(), tempo)
 }
 
 #[tauri::command(async)]
@@ -211,4 +217,36 @@ pub fn text_clip_audio_path(app: AppHandle, state: State<'_, AppState>, clip_id:
 #[tauri::command(async)]
 pub fn save_text_clip(state: State<'_, AppState>, clip_id: i64, dest: PathBuf) -> ApiResult<()> {
     clips::save_text_clip(&state.db(), clip_id, &dest)
+}
+
+#[tauri::command(async)]
+pub fn list_models(state: State<'_, AppState>) -> ApiResult<Vec<ModelRow>> {
+    models::list_models(&state.hub)
+}
+
+#[tauri::command]
+pub fn model_progress(state: State<'_, AppState>) -> Vec<ModelProgress> {
+    models::model_progress(&state.hub)
+}
+
+#[tauri::command]
+pub fn download_model(state: State<'_, AppState>, model: String) -> ApiResult<()> {
+    models::download_model(&state.hub, &model)
+}
+
+#[tauri::command]
+pub fn cancel_model_download(state: State<'_, AppState>, model: String) {
+    models::cancel_model_download(&state.hub, &model)
+}
+
+/// Doesn't hold the DB lock while it waits for the runner or runs Python.
+#[tauri::command(async)]
+pub fn delete_model(state: State<'_, AppState>, model: String) -> ApiResult<Deleted> {
+    let work_db = state.paths.open_db()?;
+    models::delete_model(&work_db, &state.hub, &state.runner, &model)
+}
+
+#[tauri::command(async)]
+pub fn get_stats(state: State<'_, AppState>) -> ApiResult<Stats> {
+    stats::stats(&state.db())
 }
