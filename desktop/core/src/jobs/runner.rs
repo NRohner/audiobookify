@@ -1,17 +1,20 @@
 //! The generation loop, ported from worker.py and synth/pipeline.py. Pause and
 //! cancel are checked between chunks, as before.
 
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use serde_json::json;
 
 use super::cache::{compute_cache_key, ChunkCache};
-use super::voice::voice_for;
-use crate::audio::{concatenate_chunks, export_chapter_mp3, read_wav, AudioError};
+use super::voice::{trim_point, voice_for, MAX_REFERENCE_SECONDS};
+use crate::audio::{concatenate_chunks, export_chapter_mp3, export_mp3, read_wav, AudioError, Tags};
 use crate::db::{Database, DbError};
 use crate::engine::{EngineError, EngineInfo, PythonEngine};
-use crate::models::{ChapterOutcome, ChapterStatus, Job, JobStatus, VoiceProfile};
+use crate::models::{ChapterOutcome, ChapterStatus, Job, JobStatus, TextClip, VoiceProfile};
 use crate::text::{apply_lexicon, chunk_text, EndsWith};
 
 pub struct Paths {
@@ -52,12 +55,109 @@ impl Runner {
         Self { db, engine, cache: ChunkCache::new(&paths.cache_root), paths }
     }
 
-    /// One unit of work, if any; false when paused or idle.
+    /// One unit of work, if any; false when paused or idle. Transcriptions go
+    /// first: they take seconds and the Voices page is waiting on them.
     pub fn run_once(&mut self) -> Result<bool, JobError> {
         if self.db.is_paused()? {
             return Ok(false);
         }
-        self.process_next_chapter_job()
+        if self.process_next_transcription()? {
+            return Ok(true);
+        }
+        if self.process_next_chapter_job()? {
+            return Ok(true);
+        }
+        self.process_next_text_clip()
+    }
+
+    /// The runner thread's body: work the queue until `stop` is set.
+    pub fn run_forever(&mut self, stop: &AtomicBool) {
+        // Jobs a dead runner left mid-generation go back in the queue.
+        if let Err(e) = self.db.reset_stale_generating_jobs().and_then(|_| self.db.reset_stale_generating_text_clips()) {
+            eprintln!("Error: could not reset stale jobs: {e}");
+        }
+        while !stop.load(Ordering::Relaxed) {
+            let did_work = self.run_once().unwrap_or_else(|e| {
+                eprintln!("Error: worker loop iteration failed: {e}");
+                false
+            });
+            if !did_work {
+                for _ in 0..20 { // 2 s idle poll, in steps so `stop` is seen promptly
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+    }
+
+    fn process_next_transcription(&mut self) -> Result<bool, JobError> {
+        let Some(profile) = self.db.next_pending_transcription()? else { return Ok(false) };
+        self.transcribe_voice(&profile)?;
+        Ok(true)
+    }
+
+    /// One Whisper pass: transcript, word timings, and the reference trim. A failure
+    /// is recorded on the voice, so it isn't retried forever.
+    fn transcribe_voice(&mut self, profile: &VoiceProfile) -> Result<(), JobError> {
+        match self.engine.transcribe(Path::new(&profile.reference_audio_path)) {
+            Ok(t) => {
+                let (trim_end, text) = match trim_point(&t.words, MAX_REFERENCE_SECONDS) {
+                    Some((end, text)) => (Some(end), text),
+                    None => (None, t.text),
+                };
+                let words = serde_json::to_value(&t.words).expect("words serialize");
+                self.db.save_voice_transcript(profile.id, &text, Some(&words), trim_end)?;
+            }
+            Err(e) => self.db.fail_voice_transcription(profile.id, &e.to_string())?,
+        }
+        Ok(())
+    }
+
+    fn process_next_text_clip(&mut self) -> Result<bool, JobError> {
+        let Some(clip) = self.db.pop_next_queued_text_clip()? else { return Ok(false) };
+        if let Err(e) = self.run_text_clip(&clip) {
+            self.db.finish_text_clip(clip.id, JobStatus::Failed, None, Some(&e.to_string()), false)?;
+        }
+        Ok(true)
+    }
+
+    fn run_text_clip(&mut self, clip: &TextClip) -> Result<(), JobError> {
+        let (info, profile) = self.engine_and_voice(&clip.engine, clip.voice_profile_id)?;
+        let voice = voice_for(profile.as_ref(), clip.tempo);
+        let narrator = profile.as_ref().map_or("default", |p| p.name.as_str()).to_string();
+        let entries = self.db.list_lexicon_entries(None)?;
+        let text = apply_lexicon(&clip.text, entries.iter().map(|e| (e.term.as_str(), e.override_value.as_str())));
+        let chunks = chunk_text(&text, info.max_chunk_chars, info.min_chunk_chars);
+
+        fs::create_dir_all(&self.paths.text_clip_dir)?;
+        let part = self.paths.text_clip_dir.join(format!(".text-clip-{}.part.wav", clip.id));
+        let audio = self.synthesize_all(&chunks, &voice, &part, clip.id);
+        let _ = fs::remove_file(&part);
+        let audio = audio?;
+
+        let ends: Vec<EndsWith> = chunks.iter().map(|c| c.ends_with).collect();
+        let combined = concatenate_chunks(audio, &ends, info.sample_rate);
+        let title = format!("Text clip #{}", clip.id);
+        let tags = Tags { title: Some(&title), artist: Some(&narrator), ..Default::default() };
+        let (path, used_fallback) = export_mp3(
+            &combined, info.sample_rate, &self.paths.text_clip_dir.join(format!("text-clip-{}.mp3", clip.id)), &tags,
+            Some(&self.paths.backup_dir.join("text-clips")))?;
+        self.db.finish_text_clip(clip.id, JobStatus::Done, Some(&path.to_string_lossy()), None, used_fallback)?;
+        Ok(())
+    }
+
+    /// Every chunk through one scratch WAV; text clips aren't cached.
+    fn synthesize_all(&mut self, chunks: &[crate::text::Chunk], voice: &crate::engine::Voice, part: &Path,
+                      clip_id: i64) -> Result<Vec<Vec<f32>>, JobError> {
+        let mut audio = Vec::with_capacity(chunks.len());
+        for (i, chunk) in chunks.iter().enumerate() {
+            self.engine.synthesize(&chunk.text, voice, part)?;
+            audio.push(read_wav(part)?.0);
+            self.db.update_text_clip_progress(clip_id, (i + 1) as f64 / chunks.len() as f64)?;
+        }
+        Ok(audio)
     }
 
     fn process_next_chapter_job(&mut self) -> Result<bool, JobError> {
@@ -136,14 +236,20 @@ impl Runner {
         Ok(None)
     }
 
-    /// The loaded engine and the job's voice profile.
+    /// The loaded engine and the job's voice profile, transcribed first if this
+    /// engine needs a transcript and the voice has none yet (voices made before
+    /// transcripts existed).
     fn engine_and_voice(&mut self, engine: &str, voice_profile_id: Option<i64>)
                         -> Result<(EngineInfo, Option<VoiceProfile>), JobError> {
         let info = self.engine.load(engine)?;
-        let profile = match voice_profile_id {
-            Some(id) => self.db.get_voice_profile_by_id(id)?,
-            None => None,
-        };
-        Ok((info, profile))
+        let Some(id) = voice_profile_id else { return Ok((info, None)) };
+        let Some(profile) = self.db.get_voice_profile_by_id(id)? else { return Ok((info, None)) };
+        if !info.needs_transcript || !profile.reference_transcript.as_deref().unwrap_or("").trim().is_empty() {
+            return Ok((info, Some(profile)));
+        }
+        self.transcribe_voice(&profile)?;
+        // A worker crash during transcription drops the loaded engine; load is a no-op otherwise.
+        let info = self.engine.load(engine)?;
+        Ok((info, self.db.get_voice_profile_by_id(id)?))
     }
 }
