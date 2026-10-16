@@ -1,6 +1,7 @@
 mod commands;
 mod logging;
 
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
@@ -90,11 +91,27 @@ fn offer_import(paths: &AppPaths) {
     }
 }
 
+/// Takes an exclusive lock on the data dir for the life of the process. Two copies
+/// sharing one DB would have the second's stale-job reset requeue the first's running job.
+fn hold_instance_lock(paths: &AppPaths) -> std::fs::File {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(paths.root.join("audiobookify.lock"))
+        .unwrap_or_else(|e| fail(&format!("Could not open the lock file in {}: {e}", paths.root.display())));
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        fail("Audiobookify is already running. Quit the other copy (or the `make dev` window), then try again.");
+    }
+    file
+}
+
 fn main() {
     let paths = AppPaths::new(data_dir());
     if let Err(e) = std::fs::create_dir_all(&paths.root) {
         fail(&format!("Could not create {}: {e}", paths.root.display()));
     }
+    let _lock = hold_instance_lock(&paths);
     if !tauri::is_dev() {
         logging::stderr_to(&paths.log());
     }
