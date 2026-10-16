@@ -186,7 +186,9 @@ On launch, if no TTS engine's models are present, the app opens Settings → Mod
 - The runner tracks which engine its worker has loaded (RunnerControl). A delete unloads first when the model's engine is the loaded one, or always for Voice transcription (deletable only when no work exists). Unload requests are ticket-based so overlapping callers can't misreport.
 - Generating with a missing engine is refused at queue time, and the runner also fails such a job plainly ("<label> isn't downloaded yet. Download it in Settings."); a voice needing a transcript with Voice transcription missing fails the same way.
 - Text clips gained a `duration` column; stats backfill missing chapter and clip durations from the files on first load.
-- One download at a time. Progress is snapshot_download's "Reconstructing" byte bar (bytes written to disk across files), captured through a silent `tqdm_class` and reported every 0.25 s when it changes.
+- One download at a time. Progress is the larger of snapshot_download's two byte bars, captured through a silent `tqdm_class` and reported every 0.25 s when it changes. "Reconstructing" (bytes written) only moves when hf_xet flushes, seconds apart; "Downloading bytes" (network) is smooth but ends ~10% short because Xet compresses.
+- huggingface_hub 2.2 keeps Xet-downloaded weights in a cache-wide shared store (`hub/blobs/<xx>/<sha256>`) that repo blobs symlink into. Deleting a repo folder frees nothing; delete runs HF's `delete_revisions` on a scan filtered to one registry repo at a time, which sweeps the shared payloads no other repo references.
+- Exit check passed on 2026-10-16 against a fresh `HF_HOME`: setup panel on launch, Speed engine downloaded, a chapter rendered, delete freed the reported space, and the real cache's repo list was unchanged. The check found both points above.
 - `make models` is a development shortcut that runs the same `model_store download` the app does (stdin held open on a FIFO, since the download exits on stdin EOF; a `sleep | ...` pipe works but `make` then waits out the sleep).
 
 ## Open questions
