@@ -12,6 +12,7 @@ use audiobookify_core::app::models::{self, Deleted, ModelProgress, ModelRow};
 use audiobookify_core::app::settings::{self, SettingsDto, VoicesDirChange};
 use audiobookify_core::app::stats::{self, Stats};
 use audiobookify_core::app::voices::{self, VoiceDto};
+use audiobookify_core::recorder::{recording_path, RecordError, Recorder};
 use audiobookify_core::app::{self, ApiError, ApiResult, AppPaths, Engines};
 use audiobookify_core::db::Database;
 use audiobookify_core::hub::store::Hub;
@@ -28,11 +29,16 @@ pub struct AppState {
     pub paths: RwLock<AppPaths>,
     pub hub: Hub,
     pub runner: RunnerControl,
+    pub recorder: Mutex<Recorder>,
 }
 
 impl AppState {
     fn db(&self) -> MutexGuard<'_, Database> {
         self.db.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn recorder(&self) -> MutexGuard<'_, Recorder> {
+        self.recorder.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn paths(&self) -> AppPaths {
@@ -274,4 +280,18 @@ pub fn set_voices_dir(state: State<'_, AppState>, path: Option<String>) -> ApiRe
     let mut db = state.db();
     let mut paths = state.paths.write().unwrap_or_else(|poisoned| poisoned.into_inner());
     settings::set_voices_dir(&mut db, &mut paths, path.as_deref())
+}
+
+/// Records the default output device to a temp WAV until `stop_recording`. Errors carry a
+/// `kind` (e.g. `permission_denied`) for the UI.
+#[tauri::command(async)]
+pub fn start_recording(state: State<'_, AppState>) -> Result<(), RecordError> {
+    state.recorder().start(recording_path(&std::env::temp_dir().join("audiobookify-recordings")))
+}
+
+/// The finished take, playable by the webview.
+#[tauri::command(async)]
+pub fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> Result<PathBuf, RecordError> {
+    let path = state.recorder().stop()?;
+    playable(&app, path).map_err(|e| RecordError::Failed(e.0))
 }
