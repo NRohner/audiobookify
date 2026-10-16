@@ -58,3 +58,11 @@ test("transcriptState explains when only part of the clip is used", () => {
   assert.equal(transcriptState(voice).note, "Uses the first 15.1 s of the 36.1 s clip. The transcript covers that part.");
   assert.equal(transcriptState({ ...voice, reference_trim_end: null }).note, null);
 });
+
+test("effectiveEngine skips an engine that isn't downloaded", () => {
+  const engines = [
+    { id: "qwen3", needs_voice: true, ready: true },
+    { id: "chatterbox-turbo", needs_voice: false, ready: false },
+  ];
+  assert.equal(effectiveEngine("chatterbox-turbo", engines, true), "qwen3");
+});
