@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Route, Routes } from "react-router-dom";
 import AppShell from "./components/AppShell.jsx";
 import HomePage from "./pages/HomePage.jsx";
@@ -9,6 +10,9 @@ import TextPage from "./pages/TextPage.jsx";
 import PlayerPage from "./pages/PlayerPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import { PlayerProvider } from "./components/player/PlayerContext.jsx";
+
+// Dev-only page for trying the clip editor until it's wired into Voices (#31 step 5).
+const ClipEditorDevPage = import.meta.env.DEV ? lazy(() => import("./pages/ClipEditorDevPage.jsx")) : null;
 
 export default function App() {
   return (
@@ -23,6 +27,7 @@ export default function App() {
           <Route path="/text" element={<TextPage />} />
           <Route path="/player" element={<PlayerPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          {ClipEditorDevPage && <Route path="/dev/clip-editor" element={<Suspense><ClipEditorDevPage /></Suspense>} />}
         </Route>
       </Routes>
     </PlayerProvider>
