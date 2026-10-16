@@ -102,3 +102,43 @@ def test_download_exits_when_stdin_closes(cache):
                          env={**os.environ, "AUDIOBOOKIFY_FAKE_DOWNLOAD": "1", "AUDIOBOOKIFY_FAKE_DOWNLOAD_DELAY": "30"})
     p.stdin.close()
     assert p.wait(timeout=10) != 0
+
+
+def test_real_download_counts_matching_files_and_shares_the_cache_root(cache, monkeypatch, capsys):
+    import time
+    from types import SimpleNamespace
+
+    import huggingface_hub
+
+    siblings = [SimpleNamespace(rfilename="config.json", size=10),
+                SimpleNamespace(rfilename="model.safetensors", size=1000),
+                SimpleNamespace(rfilename="readme.md", size=5)]
+    calls = {}
+
+    class FakeApi:
+        def model_info(self, repo, files_metadata=False):
+            return SimpleNamespace(siblings=siblings)
+
+    def fake_snapshot_download(repo_id, allow_patterns=None, cache_dir=None):
+        calls["cache_dir"] = cache_dir
+        time.sleep(0.7)  # long enough for the reporter to emit at least one progress line
+        root = cache / ("models--" + repo_id.replace("/", "--"))
+        for i, name in enumerate(["config.json", "model.safetensors"]):
+            blob = root / "blobs" / f"fake{i:04d}"
+            blob.parent.mkdir(parents=True, exist_ok=True)
+            blob.write_bytes(b"x" * (10 if name == "config.json" else 1000))
+        return str(root)
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeApi)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
+    monkeypatch.setattr(model_store, "_exit_on_stdin_eof", lambda: None)
+
+    items = [{"repo": "org/a", "allow_patterns": ["*.json", "*.safetensors"], "required": ["config.json"]}]
+    assert model_store.main(["download", json.dumps(items)]) == 0
+
+    assert calls["cache_dir"] == cache
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    progress = [line for line in lines if "downloaded" in line]
+    assert progress, "expected at least one progress line"
+    assert all(line["total"] == 1010 for line in progress)  # readme.md excluded
+    assert lines[-1] == {"done": True}

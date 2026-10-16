@@ -18,7 +18,8 @@ from pathlib import Path
 def _cache_root() -> Path:
     from huggingface_hub import constants
     # constants is read at import; re-read the env so tests (and HF_HOME changes) apply.
-    return Path(os.environ.get("HF_HUB_CACHE") or Path(os.environ.get("HF_HOME") or constants.HF_HOME) / "hub")
+    return Path(os.environ.get("HF_HUB_CACHE") or os.environ.get("HUGGINGFACE_HUB_CACHE")
+                or Path(os.environ.get("HF_HOME") or constants.HF_HOME) / "hub")
 
 
 def _repo_dir(repo: str) -> Path:
@@ -105,12 +106,14 @@ def _real_download(items: list[dict]) -> None:
         while not stop.wait(0.5):
             _reply({"downloaded": min(sum(blob_bytes(d) for d in dirs), total), "total": total})
 
-    threading.Thread(target=report, daemon=True).start()
+    reporter = threading.Thread(target=report, daemon=True)
+    reporter.start()
     try:
         for item in items:
-            snapshot_download(item["repo"], allow_patterns=item["allow_patterns"])
+            snapshot_download(item["repo"], allow_patterns=item["allow_patterns"], cache_dir=_cache_root())
     finally:
         stop.set()
+        reporter.join()
 
 
 def _exit_on_stdin_eof() -> None:
