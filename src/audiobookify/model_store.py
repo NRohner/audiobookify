@@ -94,11 +94,16 @@ def _fake_download(items: list[dict]) -> None:
         (root / "refs" / "main").write_text(commit)
 
 
-def _byte_bar_class(bars: list):
-    """A silent tqdm class for snapshot_download that collects its "Reconstructing" bars.
+BYTE_BARS = ("Downloading bytes", "Reconstructing")
 
-    That bar sums the bytes written to disk across the repo's files (snapshot_download feeds
-    it from every per-file download, Xet or HTTP). tqdm only counts while enabled, so the bars
+
+def _byte_bar_class(bars: list):
+    """A silent tqdm class for snapshot_download that collects its two byte bars.
+
+    "Reconstructing" counts bytes written to disk, but for Xet it only moves when hf_xet
+    flushes (seconds apart on a real download). "Downloading bytes" counts network bytes and
+    moves smoothly, but Xet compression leaves it ~10% short of the file sizes. The larger of
+    the two is smooth and still reaches the total. tqdm only counts while enabled, so the bars
     stay enabled and draw to os.devnull: our stdout is the JSON protocol.
     """
     from tqdm.auto import tqdm
@@ -109,7 +114,7 @@ def _byte_bar_class(bars: list):
         def __init__(self, *args, **kwargs):
             kwargs.update(disable=False, file=open(os.devnull, "w"))
             super().__init__(*args, **kwargs)
-            if str(kwargs.get("desc") or "").startswith("Reconstructing"):
+            if str(kwargs.get("desc") or "").startswith(BYTE_BARS):
                 bars.append(self)
 
         def close(self):
@@ -130,7 +135,7 @@ def _real_download(items: list[dict]) -> None:
                           if any(fnmatch.fnmatch(s.rfilename, p) for p in item["allow_patterns"])))
     total = sum(totals)
     done = 0  # bytes of the repos already finished
-    bars: list = []  # this repo's "Reconstructing" bar(s)
+    bars: list = []  # this repo's byte bars (see _byte_bar_class)
     lock = threading.Lock()  # done and bars change together between repos
     stop = threading.Event()
 
@@ -138,7 +143,7 @@ def _real_download(items: list[dict]) -> None:
         last = None
         while not stop.wait(0.25):
             with lock:
-                downloaded = min(done + sum(int(b.n) for b in bars), total)
+                downloaded = min(done + max((int(b.n) for b in bars), default=0), total)
             if downloaded != last:
                 _reply({"downloaded": downloaded, "total": total})
                 last = downloaded
