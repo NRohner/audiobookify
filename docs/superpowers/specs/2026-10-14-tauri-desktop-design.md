@@ -201,6 +201,7 @@ On launch, if no TTS engine's models are present, the app opens Settings → Mod
 - Python dependencies: `soundfile`, `numpy`, `mlx-audio==0.5.9`, `huggingface_hub>=2.2`, `tqdm>=4.66`, `transformers>=5.14`. Dev: `pytest`.
 - `.claude/launch.json` lost its `api-preview` entry (the FastAPI server is gone).
 - Tests: `.venv/bin/pytest` (engine worker, model store, engines), `cd desktop && cargo test -p audiobookify-core`, `cd frontend && npm test`.
+- Exit check passed on 2026-10-16 after a `make clean setup` rebuild of `.venv`: in `make dev` the user generated a chapter with each engine, generated a text clip, and added a voice without a transcript (Whisper ran).
 
 ## Open questions
 
