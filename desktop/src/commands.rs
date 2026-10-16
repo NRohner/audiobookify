@@ -2,13 +2,14 @@
 //! the audio files they return. The logic and its tests live in the core crate.
 
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, RwLock};
 
 use audiobookify_core::app::books::{self, BookDto, BookText, ChapterBreak, DirCheck};
 use audiobookify_core::app::clips::{self, TextClipDto};
 use audiobookify_core::app::jobs::{self, Queued, QueuedOne, WorkerStatus};
 use audiobookify_core::app::lexicon::{self, LexiconDto};
 use audiobookify_core::app::models::{self, Deleted, ModelProgress, ModelRow};
+use audiobookify_core::app::settings::{self, SettingsDto, VoicesDirChange};
 use audiobookify_core::app::stats::{self, Stats};
 use audiobookify_core::app::voices::{self, VoiceDto};
 use audiobookify_core::app::{self, ApiError, ApiResult, AppPaths, Engines};
@@ -23,7 +24,8 @@ use tauri::{AppHandle, Manager, State};
 // 2 s polls wait. A small pool if that ever shows.
 pub struct AppState {
     pub db: Mutex<Database>,
-    pub paths: AppPaths,
+    /// Behind a lock because the voices library can move while the app runs.
+    pub paths: RwLock<AppPaths>,
     pub hub: Hub,
     pub runner: RunnerControl,
 }
@@ -31,6 +33,10 @@ pub struct AppState {
 impl AppState {
     fn db(&self) -> MutexGuard<'_, Database> {
         self.db.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn paths(&self) -> AppPaths {
+        self.paths.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
     }
 }
 
@@ -62,12 +68,12 @@ pub fn get_book(state: State<'_, AppState>, book_id: i64) -> ApiResult<BookDto> 
 
 #[tauri::command(async)]
 pub fn create_book(state: State<'_, AppState>, path: PathBuf, output_dir: String) -> ApiResult<BookDto> {
-    books::create_book(&state.db(), &state.paths, &path, &output_dir)
+    books::create_book(&state.db(), &state.paths(), &path, &output_dir)
 }
 
 #[tauri::command(async)]
 pub fn delete_book(state: State<'_, AppState>, book_id: i64) -> ApiResult<()> {
-    books::delete_book(&state.db(), &state.paths, book_id)
+    books::delete_book(&state.db(), &state.paths(), book_id)
 }
 
 #[tauri::command(async)]
@@ -77,7 +83,7 @@ pub fn get_book_text(state: State<'_, AppState>, book_id: i64) -> ApiResult<Book
 
 #[tauri::command(async)]
 pub fn save_chapter_breaks(state: State<'_, AppState>, book_id: i64, chapters: Vec<ChapterBreak>) -> ApiResult<BookDto> {
-    books::save_chapter_breaks(&mut state.db(), &state.paths, book_id, &chapters)
+    books::save_chapter_breaks(&mut state.db(), &state.paths(), book_id, &chapters)
 }
 
 #[tauri::command(async)]
@@ -98,12 +104,12 @@ pub fn generate_chapter(state: State<'_, AppState>, book_id: i64, chapter_id: i6
 
 #[tauri::command(async)]
 pub fn cancel_chapter(state: State<'_, AppState>, book_id: i64, chapter_id: i64) -> ApiResult<()> {
-    jobs::cancel_chapter(&state.db(), &state.paths, book_id, chapter_id)
+    jobs::cancel_chapter(&state.db(), &state.paths(), book_id, chapter_id)
 }
 
 #[tauri::command(async)]
 pub fn cancel_book(state: State<'_, AppState>, book_id: i64) -> ApiResult<()> {
-    jobs::cancel_book(&state.db(), &state.paths, book_id)
+    jobs::cancel_book(&state.db(), &state.paths(), book_id)
 }
 
 #[tauri::command(async)]
@@ -136,7 +142,7 @@ pub fn list_voices(state: State<'_, AppState>) -> ApiResult<Vec<VoiceDto>> {
 #[tauri::command(async)]
 pub fn create_voice(state: State<'_, AppState>, path: PathBuf, name: String, reference_transcript: Option<String>)
                     -> ApiResult<VoiceDto> {
-    voices::create_voice(&state.db(), &state.paths, &path, &name, reference_transcript.as_deref())
+    voices::create_voice(&state.db(), &state.paths(), &path, &name, reference_transcript.as_deref())
 }
 
 #[tauri::command(async)]
@@ -156,7 +162,7 @@ pub fn transcribe_voice(state: State<'_, AppState>, voice_id: i64) -> ApiResult<
 
 #[tauri::command(async)]
 pub fn delete_voice(state: State<'_, AppState>, voice_id: i64) -> ApiResult<()> {
-    voices::delete_voice(&state.db(), &state.paths, voice_id)
+    voices::delete_voice(&state.db(), &state.paths(), voice_id)
 }
 
 #[tauri::command(async)]
@@ -242,11 +248,24 @@ pub fn cancel_model_download(state: State<'_, AppState>, model: String) {
 /// Doesn't hold the DB lock while it waits for the runner or runs Python.
 #[tauri::command(async)]
 pub fn delete_model(state: State<'_, AppState>, model: String) -> ApiResult<Deleted> {
-    let work_db = state.paths.open_db()?;
+    let work_db = state.paths().open_db()?;
     models::delete_model(&work_db, &state.hub, &state.runner, &model)
 }
 
 #[tauri::command(async)]
 pub fn get_stats(state: State<'_, AppState>) -> ApiResult<Stats> {
     stats::stats(&state.db())
+}
+
+#[tauri::command]
+pub fn get_settings(state: State<'_, AppState>) -> SettingsDto {
+    settings::get_settings(&state.paths())
+}
+
+/// Holds the DB lock while it copies the clips, so no voice is added halfway through.
+#[tauri::command(async)]
+pub fn set_voices_dir(state: State<'_, AppState>, path: Option<String>) -> ApiResult<VoicesDirChange> {
+    let mut db = state.db();
+    let mut paths = state.paths.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    settings::set_voices_dir(&mut db, &mut paths, path.as_deref())
 }

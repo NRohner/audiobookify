@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Download, HardDrive, Trash2, X } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { Download, Folder, HardDrive, RotateCcw, Trash2, X } from "lucide-react";
 import { api } from "../lib/api.js";
 import {
   downloadFraction, downloadText, formatBytes, formatDuration, framings, needsSetup, renderPace,
@@ -8,6 +9,72 @@ import { engineLabel } from "../lib/engines.js";
 import Button, { ErrorNote, PageHeader } from "../components/ui/Button.jsx";
 import ProgressBar from "../components/ui/ProgressBar.jsx";
 import ConfirmDialog from "../components/ui/ConfirmDialog.jsx";
+import PathPick from "../components/PathPick.jsx";
+
+// Where voice reference clips live. Changing it copies every voice's clip into the new folder.
+function VoicesLibrary() {
+  const [settings, setSettings] = useState(null);
+  const [note, setNote] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.getSettings().then(setSettings).catch((e) => setError(e.message));
+  }, []);
+
+  async function move(path) {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const change = await api.setVoicesDir(path);
+      setSettings(change.settings);
+      setNote({
+        text: "Your voices were copied here. The old folder was left as it was, so you can delete it yourself.",
+        warnings: change.warnings,
+      });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function choose() {
+    try {
+      const picked = await open({ directory: true, multiple: false, defaultPath: settings?.voices_dir });
+      if (picked && picked !== settings?.voices_dir) await move(picked);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  return (
+    <section className="mb-12">
+      <h2 className="rr-eyebrow mb-1">Voices library</h2>
+      <p className="text-meta text-ink-muted mb-3">The folder your cloned voices' reference clips are kept in.</p>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="flex-1 min-w-0">
+          <PathPick label={busy ? "Copying voices…" : "Choose folder…"} icon={Folder} path={settings?.voices_dir ?? null} onPick={choose} disabled={busy} />
+        </div>
+        {settings && !settings.is_default && (
+          <Button variant="secondary" onClick={() => move(null)} disabled={busy}>
+            <RotateCcw className="size-4" aria-hidden="true" /> Use default
+          </Button>
+        )}
+      </div>
+      <ErrorNote>{error}</ErrorNote>
+      {note && (
+        <div className="mt-2 text-meta text-ink-muted">
+          <p>{note.text}</p>
+          {note.warnings.map((w) => (
+            <p key={w} className="text-accent-text mt-1">{w}</p>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
 
 const RECOMMENDED = "chatterbox-turbo"; // needs no narrator voice, so it works straight away
 
@@ -188,6 +255,8 @@ export default function SettingsPage() {
         <h2 className="rr-eyebrow mb-4">Listening</h2>
         {stats ? <ListeningCard stats={stats} engines={engines} /> : <p className="text-meta text-ink-muted">Counting…</p>}
       </section>
+
+      <VoicesLibrary />
 
       <section>
         <h2 className="rr-eyebrow mb-1">Downloads</h2>

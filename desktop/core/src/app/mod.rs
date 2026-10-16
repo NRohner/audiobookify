@@ -7,6 +7,7 @@ pub mod clips;
 pub mod jobs;
 pub mod lexicon;
 pub mod models;
+pub mod settings;
 pub mod stats;
 pub mod voices;
 
@@ -23,15 +24,21 @@ use crate::voice_audio::TEMPO_RANGE;
 #[derive(Debug, Clone)]
 pub struct AppPaths {
     pub root: PathBuf,
+    /// The user's voices library, from settings.json; `None` is `<root>/voices`.
+    voices_dir: Option<PathBuf>,
 }
 
 impl AppPaths {
+    /// Reads the voices library setting from `<root>/settings.json`.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        let root = root.into();
+        let voices_dir = settings::load(&root).voices_dir;
+        Self { root, voices_dir }
     }
     pub fn db(&self) -> PathBuf { self.root.join("audiobookify.db") }
     pub fn uploads(&self) -> PathBuf { self.root.join("uploads") }
-    pub fn voices(&self) -> PathBuf { self.root.join("voices") }
+    pub fn default_voices(&self) -> PathBuf { self.root.join("voices") }
+    pub fn voices(&self) -> PathBuf { self.voices_dir.clone().unwrap_or_else(|| self.default_voices()) }
     pub fn cache(&self) -> PathBuf { self.root.join("cache/synth") }
     pub fn text_clips(&self) -> PathBuf { self.root.join("text_clips") }
     pub fn output(&self) -> PathBuf { self.root.join("output") }

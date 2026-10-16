@@ -1,10 +1,10 @@
 import Button from "./ui/Button.jsx";
 
 // A "Choose…" button that opens a native dialog, and the path it picked.
-export default function PathPick({ label, path, onPick, icon: Icon }) {
+export default function PathPick({ label, path, onPick, icon: Icon, disabled = false }) {
   return (
     <div className="flex items-center gap-3 min-w-0">
-      <Button type="button" variant="secondary" onClick={onPick}>
+      <Button type="button" variant="secondary" onClick={onPick} disabled={disabled}>
         {Icon && <Icon className="size-4" aria-hidden="true" />}
         {label}
       </Button>
