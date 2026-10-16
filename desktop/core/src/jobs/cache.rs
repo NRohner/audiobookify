@@ -41,8 +41,9 @@ impl ChunkCache {
         if manifest.as_ref().and_then(|m| m["cache_key"].as_str()) != Some(key) {
             return Vec::new();
         }
-        // An unreadable chunk was cut off mid-write; it gets synthesized again.
-        (0..).map_while(|i| read_wav(&self.chunk_path(chapter_id, i)).ok().map(|(audio, _)| audio)).collect()
+        // An unreadable or empty chunk was cut off mid-write (a WAV header alone reads as
+        // Ok with 0 samples); it gets synthesized again.
+        (0..).map_while(|i| read_wav(&self.chunk_path(chapter_id, i)).ok().map(|(audio, _)| audio).filter(|a| !a.is_empty())).collect()
     }
 
     pub fn write_manifest(&self, chapter_id: i64, key: &str) -> io::Result<()> {

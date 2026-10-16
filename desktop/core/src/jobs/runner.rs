@@ -3,6 +3,7 @@
 
 use std::fs;
 use std::io;
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -77,10 +78,17 @@ impl Runner {
             eprintln!("Error: could not reset stale jobs: {e}");
         }
         while !stop.load(Ordering::Relaxed) {
-            let did_work = self.run_once().unwrap_or_else(|e| {
-                eprintln!("Error: worker loop iteration failed: {e}");
-                false
-            });
+            let did_work = match std::panic::catch_unwind(AssertUnwindSafe(|| self.run_once())) {
+                Ok(Ok(did_work)) => did_work,
+                Ok(Err(e)) => {
+                    eprintln!("Error: worker loop iteration failed: {e}");
+                    false
+                }
+                Err(_) => {
+                    eprintln!("Error: worker loop iteration panicked");
+                    false
+                }
+            };
             if !did_work {
                 for _ in 0..20 { // 2 s idle poll, in steps so `stop` is seen promptly
                     if stop.load(Ordering::Relaxed) {
@@ -108,7 +116,10 @@ impl Runner {
                     None => (None, t.text),
                 };
                 let words = serde_json::to_value(&t.words).expect("words serialize");
-                self.db.save_voice_transcript(profile.id, &text, Some(&words), trim_end)?;
+                if let Err(e) = self.db.save_voice_transcript(profile.id, &text, Some(&words), trim_end) {
+                    let _ = self.db.fail_voice_transcription(profile.id, &e.to_string());
+                    return Err(e.into());
+                }
             }
             Err(e) => self.db.fail_voice_transcription(profile.id, &e.to_string())?,
         }

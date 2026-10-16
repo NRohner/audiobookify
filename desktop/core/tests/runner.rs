@@ -118,12 +118,13 @@ fn a_synthesis_error_fails_the_job_and_the_chapter() {
 fn an_unknown_engine_fails_the_job() {
     let dir = TempDir::new().unwrap();
     let mut r = runner(dir.path(), &[]);
-    let (book, _, jobs) = book_with_jobs(&r.db, dir.path(), &["Body one is long enough to speak."]);
+    let (book, chapters, jobs) = book_with_jobs(&r.db, dir.path(), &["Body one is long enough to speak."]);
     r.db.update_book_engine(book.id, "no-such-engine").unwrap();
     assert!(r.run_once().unwrap());
     let job = r.db.get_job(jobs[0].id).unwrap();
     assert_eq!(job.status, JobStatus::Failed);
     assert!(job.error.unwrap().contains("no-such-engine"));
+    assert_eq!(r.db.get_chapter(chapters[0].id).unwrap().status, ChapterStatus::Failed);
 }
 
 #[test]

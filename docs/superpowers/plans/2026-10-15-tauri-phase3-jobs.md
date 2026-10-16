@@ -28,6 +28,9 @@
 - **An error before synthesis also fails the chapter**, not just the job (Python left the chapter `pending`). The runner has one error path, and the chapter row shows the message.
 - **Engine WAVs are float32** (`soundfile` subtype `FLOAT`), read losslessly by `hound`. Python's cache wrote 16-bit PCM.
 - **Fake-engine test knobs are env vars on `FakeEngine`** (`AUDIOBOOKIFY_FAKE_LOG`, `_FAIL_ON`, `_CRASH_ON`, `_DELAY`, `_NEEDS_TRANSCRIPT`) plus `AUDIOBOOKIFY_FAKE_STT` in the worker. Rust tests drive the real child, so they can't subclass the engine the way the Python tests do.
+- **On quit, the runner thread isn't stopped or joined.** Process exit closes the child's stdin, so the worker finishes its chunk and exits, which avoids `Drop`'s 5 s kill.
+- **There is no `PythonEngine::shutdown()`;** `Drop` covers it.
+- **Engine WAVs are written atomically** (temp file plus `os.replace`), so a killed worker never leaves a header-only WAV that looks cached.
 
 ## File Structure
 

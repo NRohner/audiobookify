@@ -43,7 +43,7 @@ pub fn audiobookify_commands(repo: &Path) -> Vec<Command> {
 // and the child gets SIGTERM, then SIGKILL after ~5 s. (Async lists get /dev/null as stdin, hence fd 3.)
 // The child gets /dev/null as stdin (not a closed fd 0, which the next open() would take over) and no fd 3.
 // A non-interactive sh starts async children with SIGINT/SIGQUIT ignored (inherited across exec), so
-// Ctrl+C in the terminal no longer reaches the worker directly; cleanup still happens through the pipe.
+// Ctrl+C in the terminal no longer reaches the child directly; cleanup still happens through the pipe.
 const WRAPPER: &str = r#"exec 3<&0
 "$@" </dev/null 3<&- & c=$!
 { read _ <&3; kill -TERM $c 2>/dev/null; i=0; while kill -0 $c 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; kill -KILL $c 2>/dev/null; } &
@@ -103,8 +103,7 @@ impl Sidecars {
 impl Drop for Sidecars {
     fn drop(&mut self) {
         // ponytail: closing stdin makes each wrapper SIGTERM its child, then SIGKILL after ~5 s.
-        // Do not kill the wrapper itself: that would orphan the real child. The worker resets
-        // stale jobs on startup and the chunk cache resumes, so a forced kill is safe.
+        // Do not kill the wrapper itself: that would orphan the real child.
         // Close every stdin first so the children shut down in parallel, then reap them.
         for child in &mut self.0 {
             drop(child.stdin.take());
@@ -350,5 +349,10 @@ mod tests {
         assert_eq!(cmds.len(), 1, "the job runner is Rust now; no Python worker sidecar");
         assert_eq!(cmds[0].get_program(), "/repo/.venv/bin/uvicorn");
         assert_eq!(cmds[0].get_current_dir(), Some(repo));
+        let args: Vec<_> = cmds[0].get_args().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(args, ["audiobookify.api.app:create_app", "--factory", "--host", "127.0.0.1", "--port", "8000"]);
+        let env = |k: &str| cmds[0].get_envs().find(|(n, _)| *n == k).and_then(|(_, v)| v).map(|v| v.to_str().unwrap().to_string());
+        assert_eq!(env("HF_HUB_OFFLINE").as_deref(), Some("1"));
+        assert!(env("PATH").unwrap().starts_with("/opt/homebrew/bin:/usr/local/bin"));
     }
 }

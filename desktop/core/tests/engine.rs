@@ -73,3 +73,19 @@ fn dropping_the_engine_ends_the_child() {
         .stderr(std::process::Stdio::null()).status().unwrap().success();
     assert!(!alive, "engine worker {pid} outlived its PythonEngine");
 }
+
+#[test]
+fn a_child_that_died_while_idle_is_respawned_by_the_next_load() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = fake_engine(&[]);
+    engine.load("fake").unwrap();
+    let pid = engine.child_pid().unwrap();
+    let status = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status().unwrap();
+    assert!(status.success());
+    // A killed child stays a zombie until reaped (`kill -0` still succeeds), and load's
+    // try_wait does the reaping; a short sleep lets the kernel finish the kill first.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    engine.load("fake").unwrap();
+    assert_ne!(engine.child_pid(), Some(pid));
+    engine.synthesize("Fine.", &Voice::default(), &dir.path().join("a.wav")).unwrap();
+}

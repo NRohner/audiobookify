@@ -60,3 +60,15 @@ fn clear_removes_the_chapter_dir_and_is_a_noop_without_one() {
     assert!(!cache.chapter_dir(3).exists());
     cache.clear(999);
 }
+
+#[test]
+fn a_header_only_chunk_from_a_killed_write_ends_the_load() {
+    let dir = TempDir::new().unwrap();
+    let cache = ChunkCache::new(dir.path());
+    let k = key(&["a", "b", "c"], "v");
+    cache.write_manifest(1, &k).unwrap();
+    write_wav(&cache.chunk_path(1, 0), &[0.1, 0.2], 24000).unwrap();
+    write_wav(&cache.chunk_path(1, 1), &[], 24000).unwrap(); // a valid header, data length 0
+    write_wav(&cache.chunk_path(1, 2), &[0.5], 24000).unwrap();
+    assert_eq!(cache.load(1, &k), vec![vec![0.1, 0.2]]);
+}

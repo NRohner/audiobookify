@@ -31,6 +31,8 @@ Entry point `python -m audiobookify.engine_worker`. Reads one JSON request per l
 | `load {engine}` | `{}` | `EngineSlot.get(engine)`; `"fake"` maps to `FakeEngine`. |
 | `engine_info {}` | `{name, max_chunk_chars, min_chunk_chars, sample_rate, needs_transcript}` | For the loaded engine. |
 | `synthesize {text, voice, out_wav}` | `{samples, sample_rate}` | `voice = {reference_path, reference_text, trim_end, tempo, exaggeration, cfg, temperature}`; any field may be null (default voice). Writes mono float32 WAV to `out_wav`. |
+
+`synthesize` writes `out_wav` atomically (temp file in the same dir, then `os.replace`), so Rust can trust any WAV that exists.
 | `transcribe {path}` | `{text, words: [{word, start, end}]}` | `analysis.transcribe`; loads and frees Whisper per call, as today. |
 | `shutdown {}` | `{}` | Then exits. |
 

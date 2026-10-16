@@ -29,6 +29,8 @@ def _make(name: str):
         engine = FakeEngine()
         engine.name = name  # ponytail: "fake-b" lets tests switch engines without a second fake class
         return engine
+    if name not in ENGINES:
+        raise ValueError(f"unknown engine {name!r}")
     return ENGINES[name].cls()
 
 
@@ -75,7 +77,11 @@ class Handler:
             cache["key"] = key
             cache["handle"] = e.clone_profile(params["reference_audio"], params["reference_text"], params)
         audio = np.asarray(e.synthesize(text, cache["handle"], params), dtype=np.float32).reshape(-1)
-        sf.write(out_wav, audio, e.sample_rate(), subtype="FLOAT")
+        # Atomic: libsndfile writes a zero data length and patches it on close, so a kill
+        # mid-write would leave a WAV that reads as valid and empty.
+        tmp = os.path.join(os.path.dirname(out_wav) or ".", f".{os.path.basename(out_wav)}.{os.getpid()}.tmp")
+        sf.write(tmp, audio, e.sample_rate(), format="WAV", subtype="FLOAT")
+        os.replace(tmp, out_wav)
         return {"samples": len(audio), "sample_rate": e.sample_rate()}
 
     def transcribe(self, path: str) -> dict:

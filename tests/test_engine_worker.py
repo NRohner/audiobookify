@@ -100,3 +100,12 @@ def test_fake_engine_knobs(tmp_path, monkeypatch):
     assert [json.loads(line) for line in log.read_text().splitlines()] == ["Fine.", "Then BOOM."]
     assert engine.needs_transcript is True
     assert FakeEngine.needs_transcript is False  # the class default is untouched
+
+
+def test_synthesize_leaves_only_the_finished_wav_in_the_out_dir(tmp_path):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    _, out = _run([{"op": "load", "engine": "fake"},
+                   {"op": "synthesize", "text": "Hello there.", "voice": {}, "out_wav": str(out_dir / "a.wav")}])
+    assert "ok" in out[1], out
+    assert [p.name for p in out_dir.iterdir()] == ["a.wav"]
