@@ -104,11 +104,12 @@ Import a short reference clip (10-30s recommended, clean single-speaker audio) a
 
 The GUI wraps the same core library behind a desktop window (Tauri): a Rust backend,
 a runner thread that owns the loaded TTS engine, and a React frontend, still fully local.
-See "Desktop app" above for running it. (It began as a browser app on FastAPI; that
-server and its `make dev` flow are gone.)
+See "Desktop app" above for running it. (It began as a browser app on FastAPI. The
+app no longer uses that server; its code stays in the repo until it is deleted.)
 
-In the app, upload an EPUB or Markdown file, pick an output folder with the native
-dialog, click Import, then click "Generate all". If a folder somehow goes bad *after*
+In the Library, click "Add a book" (or drop an EPUB or Markdown file on the window),
+choose the file and an output folder with the native dialogs, click "Add to shelf",
+then click "Generate all". If a folder somehow goes bad *after*
 import (permissions changed, drive unmounted), that chapter's audio is saved under the
 app data folder's `output/` instead, and the chapter list flags it.
 The chapter list polls every couple of seconds and shows each chapter's status (`pending` / `generating` / `done` /
@@ -118,10 +119,8 @@ The CLI still shares the same SQLite database format, so `generate`/`voice`/`lex
 work as before; you can run `audiobookify worker --db audiobookify.db` against a database
 of your own.
 
-This first GUI pass is deliberately bare: one page, upload → generate → watch chapters
-finish. Chapter review/editing, voice profile management, the pronunciation lexicon, and
-a real generation dashboard are still CLI-only (`voice`, `lexicon` subcommands) until
-later GUI sub-projects land.
+The app also covers chapter-break editing, voice cloning (with tempo previews), the
+pronunciation list, text clips and a player.
 
 ## Development
 
