@@ -15,7 +15,6 @@ import soundfile as sf
 from .engines import ENGINES
 from .engines.fake import FakeEngine
 from .voice import analysis
-from .worker import EngineSlot
 
 # What AUDIOBOOKIFY_FAKE_STT=1 returns: 18 s of words, so trim_point cuts at "two." (14.15 s).
 FAKE_TRANSCRIPT = {"text": "One two. Three", "words": [
@@ -23,6 +22,33 @@ FAKE_TRANSCRIPT = {"text": "One two. Three", "words": [
     {"word": " two.", "start": 10.1, "end": 14.0},
     {"word": " Three", "start": 14.2, "end": 18.0},
 ]}
+
+
+class EngineSlot:
+    """At most one loaded TTS engine: Qwen3 (~12 GB) and Turbo (~5 GB) together
+    don't fit comfortably in 18 GB, and MLX reloads take only seconds."""
+
+    def __init__(self, make=lambda name: ENGINES[name].cls()):
+        self._make = make
+        self.name = None
+        self.engine = None
+        self.profile_cache: dict = {}  # voice handles belong to the engine that made them
+
+    def get(self, name: str):
+        if name != self.name:
+            self.teardown()
+            print(f"Loading TTS engine '{name}'", file=sys.stderr)
+            engine = self._make(name)
+            engine.load()
+            self.name, self.engine = name, engine
+        return self.engine
+
+    def teardown(self) -> None:
+        engine = self.engine
+        # Drop voice handles first: Turbo's hold GPU arrays the engine's teardown should free.
+        self.name, self.engine, self.profile_cache = None, None, {}
+        if engine is not None:
+            engine.teardown()
 
 
 def _make(name: str):

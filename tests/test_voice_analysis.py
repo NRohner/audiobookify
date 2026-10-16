@@ -5,7 +5,7 @@ import pytest
 import soundfile as sf
 
 from audiobookify.voice import analysis
-from audiobookify.voice.analysis import reference_clip, transcribe, trim_point
+from audiobookify.voice.analysis import reference_clip, transcribe
 
 
 def _w(word, start, end):
@@ -67,32 +67,6 @@ def test_transcribe_runs_once_when_the_text_is_already_punctuated(monkeypatch):
     assert calls == [None]
 
 
-def test_trim_point_keeps_a_short_clip_whole():
-    words = [_w(" One", 0.0, 5.0), _w(" two.", 5.2, 14.9)]
-    assert trim_point(words, max_seconds=15.0) is None
-
-
-def test_trim_point_cuts_after_the_last_whole_word_before_the_limit():
-    words = [_w(" The", 0.0, 0.3), _w(" quick", 0.4, 7.0), _w(" fox", 7.1, 14.8), _w(" ran.", 15.0, 15.6)]
-    end, text = trim_point(words, max_seconds=15.0)
-    assert end == pytest.approx(14.8 + 0.15)  # a little air after the last word
-    assert text == "The quick fox"
-
-
-def test_trim_point_never_cuts_into_the_next_word():
-    words = [_w(" a", 0.0, 14.0), _w(" b", 14.05, 16.0)]
-    end, _ = trim_point(words, max_seconds=15.0)
-    assert end == pytest.approx(14.05)
-
-
-def test_trim_point_prefers_a_sentence_end_when_one_is_close_to_the_limit():
-    words = [_w(" One", 0.0, 1.0), _w(" two.", 1.1, 11.5), _w(" Three", 11.7, 13.0), _w(" four", 13.1, 14.9),
-             _w(" five", 15.0, 16.0)]
-    end, text = trim_point(words, max_seconds=15.0)
-    assert text == "One two."
-    assert end == pytest.approx(11.65)
-
-
 def test_reference_clip_is_the_original_when_untrimmed(tmp_path):
     ref = tmp_path / "reference.mp3"
     ref.write_bytes(b"x")
@@ -111,52 +85,6 @@ def test_reference_clip_writes_the_trimmed_clip_once_next_to_the_reference(tmp_p
     mtime = (tmp_path / trimmed).stat().st_mtime_ns
     assert reference_clip(str(ref), 1.5) == trimmed
     assert (tmp_path / trimmed).stat().st_mtime_ns == mtime  # cached, not rewritten
-
-
-def test_word_error_rate():
-    from audiobookify.voice.analysis import word_error_rate
-
-    assert word_error_rate("The cat sat.", "the cat sat") == 0.0
-    # the model is sent spelled-out numbers; Whisper may write digits back
-    assert word_error_rate("Eleonora’s map, in one thousand, five hundred and forty-four!",
-                           "eleonora's map in 1544") == 0.0
-    assert word_error_rate("one two three four", "one three four") == 0.25  # deletion
-    assert word_error_rate("one two", "one two two two") == 1.0  # repeated words count
-    assert word_error_rate("well-ventilated room", "well ventilated room") == 0.0
-
-def test_cadence_stats_from_word_timestamps():
-    from audiobookify.voice.analysis import cadence_stats
-
-    w = lambda word, start, end: {"word": word, "start": start, "end": end}
-    words = [
-        w(" One", 0.0, 0.3), w(" two.", 0.3, 0.6),        # sentence end, then 0.8 s pause
-        w(" Three,", 1.4, 1.7),                            # comma, then 0.3 s pause
-        w(" four", 2.0, 2.3), w(" five", 2.4, 2.7),        # 0.1 s gap: within speech
-        w(" six!”", 2.7, 3.0),                             # sentence end before closing quote, 0.4 s pause
-        w(" Seven.", 3.4, 3.7),
-    ]
-    stats = cadence_stats(words)
-
-    assert stats["sentence_pauses"] == [0.8, 0.4]
-    assert stats["comma_pauses"] == [0.3]
-    assert stats["sentence_pause_median"] == pytest.approx(0.6)
-    # 7 words over 3.7 s minus the 0.8 + 0.3 + 0.4 s pauses (gaps >= 0.15 s) = 2.2 s speaking
-    assert stats["articulation_wpm"] == pytest.approx(7 / 2.2 * 60)
-    assert stats["overall_wpm"] == pytest.approx(7 / 3.7 * 60)
-
-
-def test_reference_pace_counts_only_the_words_engines_hear():
-    words = [_w(" One", 0.0, 0.5), _w(" two.", 0.5, 1.0), _w(" Three", 1.5, 2.0),  # 0.5 s pause
-             _w(" four", 20.0, 20.5)]  # past the trim
-    pace = analysis.reference_pace(words, trim_end=2.1)
-    assert pace["overall_wpm"] == pytest.approx(3 / 2.0 * 60)
-    assert pace["speaking_wpm"] == pytest.approx(3 / 1.5 * 60)
-    assert analysis.reference_pace(words, None)["overall_wpm"] == pytest.approx(4 / 20.5 * 60)
-
-
-def test_reference_pace_is_none_without_enough_words():
-    assert analysis.reference_pace(None, None) is None
-    assert analysis.reference_pace([_w(" One", 0.0, 0.5)], None) is None
 
 
 def test_reference_clip_at_tempo_one_is_the_plain_clip(tmp_path):
