@@ -5,3 +5,6 @@ mod voice;
 
 pub use cache::{compute_cache_key, ChunkCache};
 pub use voice::{trim_point, voice_for, MAX_REFERENCE_SECONDS};
+mod runner;
+
+pub use runner::{JobError, Paths, Runner};
