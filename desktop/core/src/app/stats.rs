@@ -45,16 +45,31 @@ pub struct Stats {
 /// from the file once and keep it. A file that's gone stays NULL and is skipped.
 fn backfill(db: &Database) -> ApiResult<()> {
     for (id, file) in db.chapters_missing_duration()? {
-        if let Ok(seconds) = media::duration(Path::new(&file)) {
+        if let Some(seconds) = read_duration(&file) {
             db.set_chapter_duration(id, seconds)?;
         }
     }
     for (id, file) in db.text_clips_missing_duration()? {
-        if let Ok(seconds) = media::duration(Path::new(&file)) {
+        if let Some(seconds) = read_duration(&file) {
             db.set_text_clip_duration(id, seconds)?;
         }
     }
     Ok(())
+}
+
+/// A missing file is silent; a file that exists but can't be read is logged.
+fn read_duration(file: &str) -> Option<f64> {
+    let path = Path::new(file);
+    if !path.exists() {
+        return None;
+    }
+    match media::duration(path) {
+        Ok(seconds) => Some(seconds),
+        Err(e) => {
+            eprintln!("Could not read the duration of {file}: {e}");
+            None
+        }
+    }
 }
 
 pub fn stats(db: &Database) -> ApiResult<Stats> {

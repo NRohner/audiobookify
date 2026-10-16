@@ -76,13 +76,13 @@ impl Database {
     // ponytail: a paused-and-resumed job's started_at is its last start, so its time is undercounted.
     pub fn engine_stats(&self) -> Result<Vec<(String, f64, f64)>> {
         self.query_all(
-            "SELECT engine, SUM(audio), SUM(spent) FROM ( \
+            "SELECT engine, SUM(audio), COALESCE(SUM(spent), 0) FROM ( \
                SELECT c.engine AS engine, c.duration AS audio, j.finished_at - j.started_at AS spent \
                FROM chapters c JOIN jobs j ON j.id = (SELECT MAX(id) FROM jobs WHERE chapter_id = c.id AND status = 'done') \
-               WHERE c.status = 'done' AND c.engine IS NOT NULL AND c.duration IS NOT NULL AND j.started_at IS NOT NULL \
+               WHERE c.status = 'done' AND c.engine IS NOT NULL AND c.duration IS NOT NULL AND j.started_at IS NOT NULL AND j.finished_at IS NOT NULL \
                UNION ALL \
                SELECT engine, duration, finished_at - started_at FROM text_clips \
-               WHERE status = 'done' AND duration IS NOT NULL AND started_at IS NOT NULL \
+               WHERE status = 'done' AND duration IS NOT NULL AND started_at IS NOT NULL AND finished_at IS NOT NULL \
              ) GROUP BY engine ORDER BY engine",
             [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
     }
@@ -105,7 +105,7 @@ impl Database {
 
     pub fn busiest_day(&self) -> Result<Option<(String, i64)>> {
         self.query_opt(
-            "SELECT date(finished_at, 'unixepoch', 'localtime') AS d, COUNT(*) AS n FROM jobs \
+            "SELECT date(finished_at, 'unixepoch', 'localtime') AS d, COUNT(DISTINCT chapter_id) AS n FROM jobs \
              WHERE status = 'done' AND finished_at IS NOT NULL GROUP BY d ORDER BY n DESC, d DESC LIMIT 1",
             [], |r| Ok((r.get(0)?, r.get(1)?)))
     }
