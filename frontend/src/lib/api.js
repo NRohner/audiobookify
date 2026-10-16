@@ -65,4 +65,7 @@ export const api = {
   cancelModelDownload: (model) => call("cancel_model_download", { model }),
   deleteModel: (model) => call("delete_model", { model }),
   getStats: () => call("get_stats"),
+  getSettings: () => call("get_settings"),
+  // null moves the library back to the default folder.
+  setVoicesDir: (path) => call("set_voices_dir", { path }),
 };

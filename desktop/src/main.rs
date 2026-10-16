@@ -5,7 +5,7 @@ use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
 use audiobookify_core::app::AppPaths;
 use audiobookify_core::audio::child_path;
@@ -128,7 +128,7 @@ fn main() {
     let models = HubCache::new(hub::default_cache_dir());
     let runner = start_runner(open(), &paths, models.clone());
     let hub = Hub::new(models, python(), repo_root()).env("PATH", child_path(std::env::var_os("PATH")));
-    let state = AppState { db: Mutex::new(open()), paths: paths.clone(), hub, runner };
+    let state = AppState { db: Mutex::new(open()), paths: RwLock::new(paths.clone()), hub, runner };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -175,6 +175,8 @@ fn main() {
             commands::cancel_model_download,
             commands::delete_model,
             commands::get_stats,
+            commands::get_settings,
+            commands::set_voices_dir,
         ])
         .setup(|app| {
             // Dev: Tauri points App at the Vite dev server (devUrl). Release: the bundled frontend/dist.
