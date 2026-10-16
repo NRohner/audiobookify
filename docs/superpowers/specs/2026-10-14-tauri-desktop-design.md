@@ -170,7 +170,8 @@ On launch, if no TTS engine's models are present, the app opens Settings → Mod
 - The browser app stopped working here: the frontend calls `invoke`. `make dev`/`make up` are Tauri targets. FastAPI and the CLI stay, untested by the UI, until phase 6.
 - App data lives in `~/Library/Application Support/com.audiobookify.app` (see "Data location"). Release builds send stderr (runner errors, engine worker logging) to `logs/audiobookify.log` there, rotated at 5 MB on launch.
 - Dropped: wav2vec2 `phonemes` (only the CLI's `lexicon add --from-audio` used it; the GUI uses typed respellings) and `browse-dir` (the native folder picker replaced it, with no typed path).
-- The voice PATCH became `set_voice_transcript` and `set_voice_tempo`. Audio reaches `<audio>` through `*_audio_path` commands that add the one file to the asset scope; text-clip Download is a save dialog plus `save_text_clip`.
+- The voice PATCH became `set_voice_transcript` and `set_voice_tempo`. Audio reaches `<audio>` through `*_audio_path` commands that add the one file to the asset scope; text-clip Download is a save dialog plus `save_text_clip`. The dialog plugin also adds every picked path to the asset scope (a picked output folder recursively), so the scope is not file-by-file only.
+- One copy runs at a time: `main()` holds an exclusive `flock` on `audiobookify.lock` in the data dir.
 - Audio files the user picks are read with symphonia (`core::media`). Reference trims are written as 16-bit WAV, matching soundfile, so Rust and the Python engine worker produce the same cached file.
 - `create_book` and `create_voice` both copy the picked file into the app data dir.
 - `relabel_chapter_mp3` failure handling changed: if retagging fails after the rename, the chapter keeps the renamed file. Python lost track of it.
