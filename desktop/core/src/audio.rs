@@ -1,9 +1,13 @@
 //! Audio post-processing, ported from src/audiobookify/postprocess/audio.py.
 
+use std::ffi::OsString;
+use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use crate::text::EndsWith;
+use crate::voice_storage::sanitize_filename;
 
 /// Silence inserted after a chunk, by why the chunk ended (see text::Chunk).
 pub fn pause_seconds(ends_with: EndsWith) -> f64 {
@@ -136,4 +140,94 @@ pub fn read_wav(path: &Path) -> io::Result<(Vec<f32>, u32)> {
         (format, bits) => return Err(io::Error::other(format!("{}: unsupported WAV {format:?} {bits}-bit", path.display()))),
     };
     Ok((samples.map_err(io::Error::other)?, spec.sample_rate))
+}
+
+/// Homebrew dirs first, then the existing PATH (only when present and non-empty, so no trailing `:`).
+/// ponytail: hardcoded for this personal-Macs-only build; a Finder-launched .app only has
+/// /usr/bin:/bin:/usr/sbin:/sbin. A shareable build would bundle ffmpeg.
+pub fn child_path(existing: Option<OsString>) -> OsString {
+    let mut p = OsString::from("/opt/homebrew/bin:/usr/local/bin");
+    if let Some(e) = existing.filter(|e| !e.is_empty()) {
+        p.push(":");
+        p.push(e);
+    }
+    p
+}
+
+pub fn chapter_filename(order_index: i64, title: &str) -> String {
+    format!("{:02} - {}.mp3", order_index + 1, sanitize_filename(title))
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Tags<'a> {
+    pub title: Option<&'a str>,
+    pub album: Option<&'a str>,
+    pub track: Option<u32>,
+    pub artist: Option<&'a str>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AudioError {
+    /// Writing failed (e.g. an unwritable output dir); the only error that tries the fallback dir.
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error("ffmpeg failed: {0}")]
+    Ffmpeg(String),
+    #[error("could not write MP3 tags: {0}")]
+    Tag(String),
+}
+
+fn encode_mp3(audio: &[f32], sample_rate: u32, mp3_path: &Path, tags: &Tags) -> Result<(), AudioError> {
+    if let Some(dir) = mp3_path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let wav = mp3_path.with_extension("tmp.wav");
+    write_wav(&wav, audio, sample_rate)?;
+    let out = Command::new("ffmpeg")
+        .env("PATH", child_path(std::env::var_os("PATH")))
+        .args(["-y", "-loglevel", "error", "-i"]).arg(&wav)
+        .args(["-codec:a", "libmp3lame", "-qscale:a", "2"]).arg(mp3_path)
+        .stdin(Stdio::null()) // never a closed fd 0: ffmpeg would open its output there
+        .output();
+    let _ = fs::remove_file(&wav);
+    let out = out.map_err(|e| AudioError::Ffmpeg(format!("could not run ffmpeg: {e}")))?;
+    if !out.status.success() {
+        return Err(AudioError::Ffmpeg(String::from_utf8_lossy(&out.stderr).trim().to_string()));
+    }
+    write_tags(mp3_path, tags)
+}
+
+fn write_tags(path: &Path, tags: &Tags) -> Result<(), AudioError> {
+    use id3::{Tag, TagLike, Version};
+    let mut tag = Tag::read_from_path(path).unwrap_or_else(|_| Tag::new());
+    if let Some(t) = tags.title { tag.set_title(t); }
+    if let Some(a) = tags.album { tag.set_album(a); }
+    if let Some(n) = tags.track { tag.set_track(n); }
+    if let Some(a) = tags.artist { tag.set_artist(a); }
+    tag.write_to_path(path, Version::Id3v24).map_err(|e| AudioError::Tag(e.to_string()))
+}
+
+/// Encode to `output_path`; on a write error retry once as `<fallback_dir>/<same name>`.
+/// Returns the path written and whether the fallback was used.
+pub fn export_mp3(audio: &[f32], sample_rate: u32, output_path: &Path, tags: &Tags,
+                  fallback_dir: Option<&Path>) -> Result<(PathBuf, bool), AudioError> {
+    match encode_mp3(audio, sample_rate, output_path, tags) {
+        Ok(()) => Ok((output_path.to_path_buf(), false)),
+        Err(AudioError::Io(e)) => {
+            let Some(dir) = fallback_dir else { return Err(AudioError::Io(e)) };
+            let path = dir.join(output_path.file_name().expect("output path has a file name"));
+            encode_mp3(audio, sample_rate, &path, tags)?;
+            Ok((path, true))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn export_chapter_mp3(audio: &[f32], sample_rate: u32, output_dir: &Path, order_index: i64, chapter_title: &str,
+                          book_title: &str, narrator: &str, fallback_dir: Option<&Path>)
+                          -> Result<(PathBuf, bool), AudioError> {
+    let tags = Tags { title: Some(chapter_title), album: Some(book_title), track: Some((order_index + 1) as u32),
+                      artist: Some(narrator) };
+    export_mp3(audio, sample_rate, &output_dir.join(chapter_filename(order_index, chapter_title)), &tags, fallback_dir)
 }

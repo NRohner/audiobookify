@@ -150,3 +150,85 @@ fn read_wav_reads_16_bit_pcm_as_floats() {
     w.finalize().unwrap();
     assert_eq!(read_wav(&path).unwrap(), (vec![0.0, 0.5, -1.0], 16000));
 }
+
+use std::ffi::OsString;
+use std::os::unix::fs::PermissionsExt;
+
+fn tone(sample_rate: u32) -> Vec<f32> {
+    (0..sample_rate).map(|i| (i as f32 / sample_rate as f32 * 440.0 * std::f32::consts::TAU).sin()).collect()
+}
+
+/// A dir the test can't write into; restored on drop so TempDir cleanup works.
+struct Locked(std::path::PathBuf);
+impl Locked {
+    fn new(dir: &Path) -> Self {
+        let p = dir.join("locked");
+        std::fs::create_dir(&p).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o500)).unwrap();
+        Locked(p)
+    }
+}
+impl Drop for Locked {
+    fn drop(&mut self) {
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+    }
+}
+
+#[test]
+fn child_path_puts_homebrew_first_and_handles_missing_and_empty() {
+    assert_eq!(child_path(None), OsString::from("/opt/homebrew/bin:/usr/local/bin"));
+    assert_eq!(child_path(Some(OsString::new())), OsString::from("/opt/homebrew/bin:/usr/local/bin"));
+    assert_eq!(child_path(Some("/usr/bin:/bin".into())), OsString::from("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"));
+}
+
+#[test]
+fn chapter_filename_zero_pads_and_strips_illegal_characters() {
+    assert_eq!(chapter_filename(0, "Chapter One"), "01 - Chapter One.mp3");
+    assert_eq!(chapter_filename(9, r#"Chapter Ten: "The End"?"#), "10 - Chapter Ten The End.mp3");
+}
+
+#[test]
+fn export_chapter_mp3_writes_a_tagged_file() {
+    let dir = TempDir::new().unwrap();
+    let (path, used_fallback) = export_chapter_mp3(&tone(22050), 22050, dir.path(), 0, "Chapter One", "My Book",
+                                                    "Chatterbox Default", None).unwrap();
+    assert!(!used_fallback);
+    assert_eq!(path, dir.path().join("01 - Chapter One.mp3"));
+    let tag = id3::Tag::read_from_path(&path).unwrap();
+    use id3::TagLike;
+    assert_eq!((tag.title(), tag.album(), tag.track(), tag.artist()),
+               (Some("Chapter One"), Some("My Book"), Some(1), Some("Chatterbox Default")));
+    assert!(!dir.path().join("01 - Chapter One.tmp.wav").exists(), "temp WAV left behind");
+}
+
+#[test]
+fn export_chapter_mp3_falls_back_when_the_output_dir_is_unwritable() {
+    let dir = TempDir::new().unwrap();
+    let locked = Locked::new(dir.path());
+    let fallback = dir.path().join("fallback");
+    let (path, used_fallback) = export_chapter_mp3(&tone(22050), 22050, &locked.0, 0, "Chapter One", "My Book",
+                                                    "Narrator", Some(&fallback)).unwrap();
+    assert!(used_fallback);
+    assert_eq!(path, fallback.join("01 - Chapter One.mp3"));
+    assert!(path.is_file());
+}
+
+#[test]
+fn export_chapter_mp3_errors_when_unwritable_and_no_fallback_given() {
+    let dir = TempDir::new().unwrap();
+    let locked = Locked::new(dir.path());
+    let err = export_chapter_mp3(&tone(22050), 22050, &locked.0, 0, "Chapter One", "My Book", "N", None).unwrap_err();
+    assert!(matches!(err, AudioError::Io(_)), "{err:?}");
+}
+
+#[test]
+fn export_mp3_falls_back_to_the_same_file_name() {
+    let dir = TempDir::new().unwrap();
+    let locked = Locked::new(dir.path());
+    let fallback = dir.path().join("fallback");
+    let tags = Tags { title: Some("Text clip #1"), ..Default::default() };
+    let (path, used_fallback) = export_mp3(&tone(22050), 22050, &locked.0.join("clip.mp3"), &tags, Some(&fallback)).unwrap();
+    assert!(used_fallback);
+    assert_eq!(path, fallback.join("clip.mp3"));
+    assert!(path.is_file());
+}
