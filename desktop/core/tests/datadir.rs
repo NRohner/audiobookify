@@ -56,3 +56,53 @@ fn a_failed_import_leaves_no_db_behind() {
     assert!(import_repo_data(&repo, &paths).is_err());
     assert!(!paths.db().exists());
 }
+
+#[test]
+fn refuses_to_overwrite_an_existing_library() {
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    Database::open(repo.join("audiobookify.db"), repo.join("voices")).unwrap();
+    let paths = AppPaths::new(dir.path().join("data"));
+    fs::create_dir_all(&paths.root).unwrap();
+    fs::write(paths.db(), "my library").unwrap();
+
+    assert!(import_repo_data(&repo, &paths).is_err());
+    assert_eq!(fs::read(paths.db()).unwrap(), b"my library");
+}
+
+#[test]
+fn a_failure_after_the_temp_db_exists_removes_it() {
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(repo.join("uploads")).unwrap();
+    Database::open(repo.join("audiobookify.db"), repo.join("voices")).unwrap();
+    let paths = AppPaths::new(dir.path().join("data"));
+    fs::create_dir_all(&paths.root).unwrap();
+    // A file where the uploads dir should go, so copying into it fails.
+    fs::write(paths.root.join("uploads"), "in the way").unwrap();
+
+    assert!(import_repo_data(&repo, &paths).is_err());
+    assert!(!paths.root.join("audiobookify.db.importing").exists());
+    assert!(!paths.db().exists());
+}
+
+#[test]
+fn rewrites_rows_stored_under_a_symlinked_spelling_of_the_repo() {
+    let dir = TempDir::new().unwrap();
+    let real = dir.path().join("real");
+    fs::create_dir_all(real.join("uploads/abc")).unwrap();
+    fs::write(real.join("uploads/abc/book.md"), "# One\n").unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    {
+        let db = Database::open(real.join("audiobookify.db"), real.join("voices")).unwrap();
+        db.create_book("B", None, &path(&link, "uploads/abc/book.md"), SourceFormat::Markdown, "/out").unwrap();
+    }
+    let paths = AppPaths::new(dir.path().join("data"));
+
+    import_repo_data(&link, &paths).unwrap();
+
+    let book = paths.open_db().unwrap().list_books().unwrap().remove(0);
+    assert_eq!(book.source_path, path(&paths.uploads(), "abc/book.md"));
+}
