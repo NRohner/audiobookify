@@ -202,6 +202,18 @@ fn export_chapter_mp3_writes_a_tagged_file() {
 }
 
 #[test]
+fn exported_mp3s_are_mono() {
+    // ffmpeg read the float temp WAV as stereo, so each channel came out 3 dB down.
+    let dir = TempDir::new().unwrap();
+    let (path, _) = export_mp3(&tone(24000), 24000, &dir.path().join("a.mp3"), &Tags::default(), None).unwrap();
+    let out = std::process::Command::new("ffprobe")
+        .env("PATH", child_path(std::env::var_os("PATH")))
+        .args(["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=channels", "-of", "csv=p=0"])
+        .arg(&path).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "1");
+}
+
+#[test]
 fn export_chapter_mp3_falls_back_when_the_output_dir_is_unwritable() {
     let dir = TempDir::new().unwrap();
     let locked = Locked::new(dir.path());

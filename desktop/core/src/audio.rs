@@ -186,7 +186,8 @@ fn encode_mp3(audio: &[f32], sample_rate: u32, mp3_path: &Path, tags: &Tags) -> 
     let out = Command::new("ffmpeg")
         .env("PATH", child_path(std::env::var_os("PATH")))
         .args(["-y", "-loglevel", "error", "-i"]).arg(&wav)
-        .args(["-codec:a", "libmp3lame", "-qscale:a", "2"]).arg(mp3_path)
+        // Mono out: ffmpeg reads hound's float WAV header as stereo, which put each channel 3 dB down.
+        .args(["-ac", "1", "-codec:a", "libmp3lame", "-qscale:a", "2"]).arg(mp3_path)
         .stdin(Stdio::null()) // never a closed fd 0: ffmpeg would open its output there
         .output();
     let _ = fs::remove_file(&wav);
