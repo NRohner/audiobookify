@@ -6,7 +6,7 @@ Fully local EPUB/Markdown → audiobook (MP3 per chapter) converter. Requires Ap
 
 1. Install [ffmpeg](https://ffmpeg.org/) (`brew install ffmpeg` on macOS, or see your platform's docs).
 2. `make setup` — creates a Python 3.12 venv and installs the Python package + dev dependencies.
-3. `make models` — downloads and caches the Chatterbox Turbo TTS (MLX) weights (about 6 GB, one-time; cached under your Hugging Face hub cache directory). Re-run any time to verify the cache.
+3. `make models` — a development shortcut that downloads and caches the Chatterbox Turbo TTS (MLX) weights through the same code the app uses (one-time; cached under your Hugging Face hub cache directory). Re-run any time to verify the cache. App users download engines from Settings instead.
 
 ## Desktop app
 
@@ -103,6 +103,8 @@ The chapter list polls every couple of seconds and shows each chapter's status (
 The CLI still shares the same SQLite database format, so `generate`/`voice`/`lexicon`
 work as before; you can run `audiobookify worker --db audiobookify.db` against a database
 of your own.
+
+Settings shows your listening stats and lets you download or delete the engines (Quality engine, Speed engine, Voice transcription). The first launch opens it when nothing is downloaded. `make models` is a development shortcut for the same download.
 
 The app also covers chapter-break editing, voice cloning (with tempo previews), the
 pronunciation list, text clips and a player.

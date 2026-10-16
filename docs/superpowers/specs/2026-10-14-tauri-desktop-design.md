@@ -11,7 +11,7 @@ Turn the localhost web app into a native macOS desktop app built on Tauri 2. Eve
 | Topic | Decision |
 |---|---|
 | Rust scope | DB, ingest, text pipeline, lexicon, chunking, job queue, synthesis orchestration, audio post-processing, and all API logic (as Tauri commands). |
-| Python scope | One child process, the **engine worker**: loads one engine and answers synthesize / transcribe / extract-phonemes requests. No DB access and no pipeline logic. |
+| Python scope | One child process, the **engine worker**: loads one engine and answers synthesize / transcribe requests. No DB access and no pipeline logic. |
 | Rust↔Python IPC | JSON lines over the child's stdin/stdout. One request in flight at a time. Audio goes through WAV files in a temp dir, not through the pipe. |
 | Data | Same SQLite schema. Rust (`rusqlite`) opens existing databases, so no data migration is needed. Rust takes over the schema migrations in `db.py`. |
 | Frontend | The React app is reused as is. `lib/api.js` switches from `fetch` to `invoke`. |
@@ -148,7 +148,7 @@ On launch, if no TTS engine's models are present, the app opens Settings → Mod
 - **num2words parity:** Rust crates may phrase numbers differently ("one hundred and five" vs "one hundred five"). Golden tests catch it, and the fallback is hand-porting the English rules we actually hit.
 - **EPUB HTML whitespace:** html5ever and BeautifulSoup differ on whitespace and nesting edge cases. The `\n\n` paragraph rule from the chunking overhaul has to survive the port.
 - **Locating Python from a `.app` bundle:** dev uses the repo `.venv`. A packaged app needs an embedded Python or a first-run setup (see open question 1).
-- **ffmpeg / espeak-ng:** still external binaries (Homebrew) unless they get bundled.
+- **ffmpeg:** still an external binary (Homebrew) unless they get bundled.
 
 ## Notes from phase 0
 
@@ -179,8 +179,17 @@ On launch, if no TTS engine's models are present, the app opens Settings → Mod
 ## Notes from phase 5
 
 - wav2vec2 is gone (user decision, 2026-10-16): the weights were deleted from the HF cache, and `phoneme/`, the CLI's `lexicon add-from-audio`, `torch`, `torchaudio`, `phonemizer` and the espeak-ng requirement were removed. The `lexicon_entries.phonemes` column stays for existing rows.
+- Presence is read by Rust from the HF cache layout (`refs/main` -> snapshot -> each `required` file), so generate can be gated without starting Python. Sizes, delete and downloads run `python -m audiobookify.model_store` one-shots on `huggingface_hub`'s cache API.
+- Turbo's registry entry includes `mlx-community/S3TokenizerV2`: mlx-audio fetches it at load, and offline a miss is only a logged warning.
+- Deleting is refused while queued or running work needs the model (Whisper: while anything runs). When the studio is idle, the runner drops its engine worker first, so the weights leave memory too.
+- `model_store delete` removes each matched repo dir (rmtree of HF's repo_path) rather than HF's `delete_revisions`, which maps a commit hash to the first repo that has it and could delete a non-registry repo sharing a hash.
+- The runner tracks which engine its worker has loaded (RunnerControl). A delete unloads first when the model's engine is the loaded one, or always for Voice transcription (deletable only when no work exists). Unload requests are ticket-based so overlapping callers can't misreport.
+- Generating with a missing engine is refused at queue time, and the runner also fails such a job plainly ("<label> isn't downloaded yet. Download it in Settings."); a voice needing a transcript with Voice transcription missing fails the same way.
+- Text clips gained a `duration` column; stats backfill missing chapter and clip durations from the files on first load.
+- One download at a time. Progress is the repo's blob store size on disk, polled every 0.5 s.
+- `make models` is a development shortcut that runs the same `model_store download` the app does (stdin held open on a FIFO, since the download exits on stdin EOF; a `sleep | ...` pipe works but `make` then waits out the sleep).
 
 ## Open questions
 
-1. **Distribution:** personal Macs only (unsigned `.app`, uses the Homebrew ffmpeg/espeak-ng and the repo venv), or a shareable signed `.dmg` (embedded Python via python-build-standalone + uv, bundled ffmpeg, models downloaded on first run, and the phonemizer GPL-3.0 question)? **Default: personal Macs only.** Phase 7 grows if the answer changes.
+1. **Distribution:** personal Macs only (unsigned `.app`, uses the Homebrew ffmpeg and the repo venv), or a shareable signed `.dmg` (embedded Python via python-build-standalone + uv, bundled ffmpeg, models downloaded on first run)? **Default: personal Macs only.** Phase 7 grows if the answer changes.
 2. **CLI:** is the command-line interface still used? **Default: drop it.** A thin Rust CLI over the same core crate can be added later if wanted.
