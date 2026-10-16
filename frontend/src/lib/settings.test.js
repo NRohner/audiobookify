@@ -45,3 +45,32 @@ test("needsSetup when no engine is ready", () => {
   assert.equal(needsSetup([{ id: "qwen3", ready: false }, { id: "chatterbox-turbo", ready: true }]), false);
   assert.equal(needsSetup([]), false); // not loaded yet
 });
+
+test("formatBytes rounds up to GB rather than showing 1000 MB", () => {
+  assert.equal(formatBytes(999_600_000), "1 GB");
+  assert.equal(formatBytes(999_400_000), "999 MB");
+});
+
+test("formatDuration rounds before choosing the unit", () => {
+  assert.equal(formatDuration(3576), "1 hour");
+  assert.equal(formatDuration(59), "under a minute");
+  assert.equal(formatDuration(90), "2 minutes");
+});
+
+test("framings use singular nouns at exactly one", () => {
+  assert.deepEqual(framings({ audio_seconds: 86_400, words: 0 }), ["That's 1 day of nonstop listening."]);
+  assert.deepEqual(framings({ audio_seconds: 0, words: 90_000 }), ["About 1 average novel, at 90,000 words each."]);
+});
+
+test("renderPace never reads 'about under a minute'", () => {
+  assert.equal(renderPace({ audio_seconds: 3600, generating_seconds: 30 }), "under a minute for every hour of audio");
+});
+
+test("downloadText counts downloaded bytes in the total's unit", () => {
+  assert.equal(downloadText({ downloaded: 300_000_000, total: 512_000_000 }), "300 of 512 MB");
+  assert.equal(downloadText({ downloaded: 100_000_000, total: 3_500_000_000 }), "0.1 of 3.5 GB");
+});
+
+test("needsSetup treats an engine without a ready flag as ready", () => {
+  assert.equal(needsSetup([{ id: "qwen3" }]), false);
+});
