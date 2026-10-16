@@ -47,7 +47,13 @@ export function PlayerProvider({ children }) {
         a.src = src;
         if (autoplay) a.play().catch(() => {});
       },
-      () => {},
+      () => {
+        // Don't leave the previous chapter playing under the new chapter's title; onPause updates `playing`.
+        if (request !== pending.current) return;
+        a.pause();
+        a.removeAttribute("src");
+        a.load();
+      },
     );
   }
 
@@ -85,6 +91,7 @@ export function PlayerProvider({ children }) {
   // Back to the no-book state the app starts in (e.g. the playing book was deleted).
   function clear() {
     const a = audio.current;
+    pending.current++; // a late resolve must not start the cleared book's audio
     a.pause();
     a.removeAttribute("src");
     a.load();
