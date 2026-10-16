@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,8 +15,8 @@ use super::cache::{compute_cache_key, ChunkCache};
 use super::voice::{trim_point, voice_for, MAX_REFERENCE_SECONDS};
 use crate::audio::{concatenate_chunks, export_chapter_mp3, export_mp3, read_wav, AudioError, Tags};
 use crate::db::{Database, DbError};
-use crate::hub::{self, HubCache};
 use crate::engine::{EngineError, EngineInfo, PythonEngine};
+use crate::hub::{self, HubCache};
 use crate::models::{ChapterOutcome, ChapterStatus, Job, JobStatus, TextClip, VoiceProfile};
 use crate::text::{apply_lexicon, chunk_text, EndsWith};
 
@@ -35,22 +35,30 @@ pub struct Paths {
 /// weights it holds) before deleting a model.
 #[derive(Clone, Default)]
 pub struct RunnerControl {
-    unload: Arc<AtomicBool>,
+    requested: Arc<AtomicU64>,
+    done: Arc<AtomicU64>,
 }
 
 impl RunnerControl {
-    /// True once the runner has dropped its worker. Only answered between units of work.
+    /// True once the runner has dropped its worker for this request. Only answered
+    /// between units of work. A timeout leaves the request standing: the runner may still
+    /// unload later, which is harmless.
     pub fn unload_and_wait(&self, timeout: Duration) -> bool {
-        self.unload.store(true, Ordering::SeqCst);
+        let ticket = self.requested.fetch_add(1, Ordering::SeqCst) + 1;
         let deadline = Instant::now() + timeout;
-        while self.unload.load(Ordering::SeqCst) {
+        while self.done.load(Ordering::SeqCst) < ticket {
             if Instant::now() >= deadline {
-                self.unload.store(false, Ordering::SeqCst);
                 return false;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
         true
+    }
+
+    /// Acknowledge outstanding requests without an engine, for tests of callers.
+    #[doc(hidden)]
+    pub fn answer_unload_for_tests(&self) {
+        self.done.fetch_max(self.requested.load(Ordering::SeqCst), Ordering::SeqCst);
     }
 }
 
@@ -94,9 +102,10 @@ impl Runner {
 
     /// Drop the engine worker if the Settings page asked for it.
     pub fn handle_unload(&mut self) {
-        if self.control.unload.load(Ordering::SeqCst) {
+        let requested = self.control.requested.load(Ordering::SeqCst);
+        if requested > self.control.done.load(Ordering::SeqCst) {
             self.engine.shutdown();
-            self.control.unload.store(false, Ordering::SeqCst);
+            self.control.done.store(requested, Ordering::SeqCst);
         }
     }
 
@@ -312,6 +321,10 @@ impl Runner {
         let Some(profile) = self.db.get_voice_profile_by_id(id)? else { return Ok((info, None)) };
         if !info.needs_transcript || !profile.reference_transcript.as_deref().unwrap_or("").trim().is_empty() {
             return Ok((info, Some(profile)));
+        }
+        let whisper = hub::model(hub::TRANSCRIPTION).expect("registry has transcription");
+        if !self.paths.models.is_present(whisper) {
+            return Err(EngineError::Engine(hub::not_downloaded(whisper.label)).into());
         }
         self.transcribe_voice(&profile)?;
         // A worker crash during transcription drops the loaded engine; load is a no-op otherwise.

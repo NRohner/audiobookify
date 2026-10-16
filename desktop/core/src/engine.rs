@@ -178,9 +178,7 @@ impl PythonEngine {
         }
         EngineError::Process(message)
     }
-}
 
-impl PythonEngine {
     /// Close stdin (the worker exits on EOF), give it a moment, then kill. The next request
     /// starts a fresh child.
     pub fn shutdown(&mut self) {
