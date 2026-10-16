@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod db;
+pub mod engine;
 pub mod ingest;
 pub mod models;
 pub mod pystr;

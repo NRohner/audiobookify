@@ -1,9 +1,10 @@
 #![allow(dead_code)] // each test binary uses a different subset
 
 use std::fmt::Debug;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use audiobookify_core::db::{Database, DbError};
+use audiobookify_core::engine::PythonEngine;
 use audiobookify_core::models::*;
 
 pub fn open(dir: &Path) -> Database {
@@ -60,4 +61,14 @@ pub fn voice(db: &Database, dir: &Path, name: &str, transcript: Option<&str>,
         transcript_status,
     })
     .unwrap()
+}
+
+pub fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
+}
+
+/// The real engine_worker child (repo .venv), for the fake engine, with test knobs set.
+pub fn fake_engine(env: &[(&str, &str)]) -> PythonEngine {
+    let repo = repo_root();
+    env.iter().fold(PythonEngine::new(repo.join(".venv/bin/python"), &repo), |e, (k, v)| e.env(*k, *v))
 }
