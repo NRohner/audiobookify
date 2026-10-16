@@ -1,5 +1,6 @@
 pub mod app;
 pub mod audio;
+pub mod datadir;
 pub mod db;
 pub mod engine;
 pub mod ingest;
