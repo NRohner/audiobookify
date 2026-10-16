@@ -99,6 +99,7 @@ fn list_and_delete_voices() {
 #[test]
 fn transcripts_can_be_edited_or_requested_again() {
     let dir = TempDir::new().unwrap();
+    let models = ready_cache(dir.path());
     let (paths, db) = app(dir.path());
     let voice = clone_nova(dir.path(), &paths, &db, None);
 
@@ -107,9 +108,9 @@ fn transcripts_can_be_edited_or_requested_again() {
     assert_eq!(api_err(voices::set_voice_transcript(&db, voice.id, "   ")), "transcript must not be empty");
 
     db.fail_voice_transcription(voice.id, "Whisper broke").unwrap();
-    let requeued = voices::transcribe_voice(&db, voice.id).unwrap();
+    let requeued = voices::transcribe_voice(&db, &models, voice.id).unwrap();
     assert_eq!((requeued.transcript_status.as_deref(), requeued.transcript_error), (Some("pending"), None));
-    assert_eq!(api_err(voices::transcribe_voice(&db, 999)), "voice profile not found");
+    assert_eq!(api_err(voices::transcribe_voice(&db, &models, 999)), "voice profile not found");
 }
 
 // test_a_voice_reports_its_tempo_and_the_pace_of_the_clip_engines_hear
@@ -192,26 +193,28 @@ fn pronunciations_round_trip() {
 #[test]
 fn create_text_clip_queues_it_and_validates() {
     let dir = TempDir::new().unwrap();
+    let models = ready_cache(dir.path());
     let (_paths, db) = app(dir.path());
-    let clip = clips::create_text_clip(&db, "  Hello.  ", None, None, None).unwrap();
+    let clip = clips::create_text_clip(&db, &models, "  Hello.  ", None, None, None).unwrap();
     assert_eq!((clip.text.as_str(), clip.status, clip.engine.as_str(), clip.voice_profile_id),
                ("Hello.", "queued", "chatterbox-turbo", None));
-    assert_eq!(api_err(clips::create_text_clip(&db, "   ", None, None, None)), "text must not be empty");
-    assert_eq!(api_err(clips::create_text_clip(&db, "Hi", Some(999), None, None)), "voice profile not found");
+    assert_eq!(api_err(clips::create_text_clip(&db, &models, "   ", None, None, None)), "text must not be empty");
+    assert_eq!(api_err(clips::create_text_clip(&db, &models, "Hi", Some(999), None, None)), "voice profile not found");
 }
 
 // test_text_clips_store_their_engine, test_a_text_clip_can_carry_a_sample_tempo
 #[test]
 fn text_clips_store_engine_and_tempo() {
     let dir = TempDir::new().unwrap();
+    let models = ready_cache(dir.path());
     let (paths, db) = app(dir.path());
     let voice = clone_nova(dir.path(), &paths, &db, Some("Hi."));
-    let clip = clips::create_text_clip(&db, "Hi", Some(voice.id), Some("qwen3"), Some(0.9)).unwrap();
+    let clip = clips::create_text_clip(&db, &models, "Hi", Some(voice.id), Some("qwen3"), Some(0.9)).unwrap();
     assert_eq!((clip.engine.as_str(), clip.tempo), ("qwen3", Some(0.9)));
-    assert_eq!(api_err(clips::create_text_clip(&db, "Hi", None, Some("qwen3"), None)),
-               "Quality (Qwen3) needs a voice: pick one first");
-    assert_eq!(api_err(clips::create_text_clip(&db, "Hi", None, None, Some(0.9))), "a tempo needs a voice");
-    assert_eq!(api_err(clips::create_text_clip(&db, "Hi", Some(voice.id), None, Some(3.0))),
+    assert_eq!(api_err(clips::create_text_clip(&db, &models, "Hi", None, Some("qwen3"), None)),
+               "Quality engine needs a voice: pick one first");
+    assert_eq!(api_err(clips::create_text_clip(&db, &models, "Hi", None, None, Some(0.9))), "a tempo needs a voice");
+    assert_eq!(api_err(clips::create_text_clip(&db, &models, "Hi", Some(voice.id), None, Some(3.0))),
                "tempo must be a number from 0.75 to 1.25");
 }
 
@@ -220,9 +223,10 @@ fn text_clips_store_engine_and_tempo() {
 #[test]
 fn list_and_get_text_clips() {
     let dir = TempDir::new().unwrap();
+    let models = ready_cache(dir.path());
     let (_paths, db) = app(dir.path());
-    let a = clips::create_text_clip(&db, "A", None, None, None).unwrap();
-    let b = clips::create_text_clip(&db, "B", None, None, None).unwrap();
+    let a = clips::create_text_clip(&db, &models, "A", None, None, None).unwrap();
+    let b = clips::create_text_clip(&db, &models, "B", None, None, None).unwrap();
     assert_eq!(clips::list_text_clips(&db).unwrap().iter().map(|c| c.id).collect::<Vec<_>>(), vec![b.id, a.id]);
     assert_eq!(api_err(clips::get_text_clip(&db, 999)), "text clip not found");
 
@@ -237,8 +241,9 @@ fn list_and_get_text_clips() {
 #[test]
 fn text_clip_audio_save_and_delete() {
     let dir = TempDir::new().unwrap();
+    let models = ready_cache(dir.path());
     let (_paths, db) = app(dir.path());
-    let clip = clips::create_text_clip(&db, "Hi", None, None, None).unwrap();
+    let clip = clips::create_text_clip(&db, &models, "Hi", None, None, None).unwrap();
     assert_eq!(api_err(clips::text_clip_audio_path(&db, clip.id)), "audio not ready");
 
     let mp3 = write_file(dir.path(), "text-clip-1.mp3", "ID3");

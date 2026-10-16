@@ -178,11 +178,11 @@ impl PythonEngine {
         }
         EngineError::Process(message)
     }
-}
 
-impl Drop for PythonEngine {
-    /// Close stdin (the worker exits on EOF), give it a moment, then kill.
-    fn drop(&mut self) {
+    /// Close stdin (the worker exits on EOF), give it a moment, then kill. The next request
+    /// starts a fresh child.
+    pub fn shutdown(&mut self) {
+        self.loaded = None;
         let Some(Proc { mut child, stdin, stdout }) = self.proc.take() else { return };
         drop(stdin);
         drop(stdout);
@@ -195,5 +195,11 @@ impl Drop for PythonEngine {
         }
         let _ = child.kill();
         let _ = child.wait();
+    }
+}
+
+impl Drop for PythonEngine {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }

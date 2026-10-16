@@ -27,11 +27,12 @@ fn finish(db: &Database, chapter_id: i64, mp3: Option<&str>) {
 #[test]
 fn generate_book_queues_each_unfinished_chapter_once() {
     let dir = TempDir::new().unwrap();
+    let models = ready_cache(dir.path());
     let (_p, db, book) = setup(dir.path());
     finish(&db, book.chapters[0].id, Some("/a.mp3"));
 
-    let first = jobs::generate_book(&db, book.id, None).unwrap();
-    let again = jobs::generate_book(&db, book.id, None).unwrap();
+    let first = jobs::generate_book(&db, &models, book.id, None).unwrap();
+    let again = jobs::generate_book(&db, &models, book.id, None).unwrap();
 
     assert_eq!(first.queued_job_ids.len(), 1);
     assert_eq!(db.get_job(first.queued_job_ids[0]).unwrap().chapter_id, book.chapters[1].id);
@@ -43,21 +44,23 @@ fn generate_book_queues_each_unfinished_chapter_once() {
 #[test]
 fn generate_book_rejects_unknown_books_and_bad_engines() {
     let dir = TempDir::new().unwrap();
+    let models = ready_cache(dir.path());
     let (_p, db, book) = setup(dir.path());
-    assert_eq!(api_err(jobs::generate_book(&db, 999, None)), "book not found");
-    assert_eq!(api_err(jobs::generate_book(&db, book.id, Some("nope"))), "unknown engine 'nope'");
-    assert_eq!(api_err(jobs::generate_book(&db, book.id, Some("qwen3"))),
-               "Quality (Qwen3) needs a voice: pick one first");
+    assert_eq!(api_err(jobs::generate_book(&db, &models, 999, None)), "book not found");
+    assert_eq!(api_err(jobs::generate_book(&db, &models, book.id, Some("nope"))), "unknown engine 'nope'");
+    assert_eq!(api_err(jobs::generate_book(&db, &models, book.id, Some("qwen3"))),
+               "Quality engine needs a voice: pick one first");
 }
 
 // test_generating_a_book_stores_the_chosen_engine_for_every_later_job
 #[test]
 fn generate_book_stores_the_engine() {
     let dir = TempDir::new().unwrap();
+    let models = ready_cache(dir.path());
     let (_p, db, book) = setup(dir.path());
     let voice = voice(&db, dir.path(), "Nova", Some("hi"), Some("done"));
     books::assign_voice(&db, book.id, Some(voice.id)).unwrap();
-    jobs::generate_book(&db, book.id, Some("qwen3")).unwrap();
+    jobs::generate_book(&db, &models, book.id, Some("qwen3")).unwrap();
     assert_eq!(db.get_book(book.id).unwrap().engine, "qwen3");
 }
 
@@ -66,16 +69,17 @@ fn generate_book_stores_the_engine() {
 #[test]
 fn generate_chapter_queues_only_that_chapter_once() {
     let dir = TempDir::new().unwrap();
+    let models = ready_cache(dir.path());
     let (_p, db, book) = setup(dir.path());
     let (a, b) = (book.chapters[0].id, book.chapters[1].id);
 
-    let queued = jobs::generate_chapter(&db, book.id, b, None).unwrap();
+    let queued = jobs::generate_chapter(&db, &models, book.id, b, None).unwrap();
     assert_eq!(db.get_job(queued.job_id.unwrap()).unwrap().chapter_id, b);
     assert!(db.latest_job_for_chapter(a).unwrap().is_none());
-    assert_eq!(jobs::generate_chapter(&db, book.id, b, None).unwrap().job_id, None);
+    assert_eq!(jobs::generate_chapter(&db, &models, book.id, b, None).unwrap().job_id, None);
 
     finish(&db, a, Some("/a.mp3"));
-    assert_eq!(jobs::generate_chapter(&db, book.id, a, None).unwrap().job_id, None);
+    assert_eq!(jobs::generate_chapter(&db, &models, book.id, a, None).unwrap().job_id, None);
 }
 
 // test_generate_chapter_endpoint_returns_404_for_unknown_book, ..._for_unknown_chapter,
@@ -83,22 +87,24 @@ fn generate_chapter_queues_only_that_chapter_once() {
 #[test]
 fn generate_chapter_rejects_unknown_and_foreign_chapters() {
     let dir = TempDir::new().unwrap();
+    let models = ready_cache(dir.path());
     let (paths, db, book) = setup(dir.path());
     let src = write_file(dir.path(), "other.md", TWO_CHAPTERS_MD);
     let other = books::create_book(&db, &paths, &src, &path(dir.path(), "out")).unwrap();
-    assert_eq!(api_err(jobs::generate_chapter(&db, 999, book.chapters[0].id, None)), "book not found");
-    assert_eq!(api_err(jobs::generate_chapter(&db, book.id, 999, None)), "chapter not found");
-    assert_eq!(api_err(jobs::generate_chapter(&db, book.id, other.chapters[0].id, None)), "chapter not found");
+    assert_eq!(api_err(jobs::generate_chapter(&db, &models, 999, book.chapters[0].id, None)), "book not found");
+    assert_eq!(api_err(jobs::generate_chapter(&db, &models, book.id, 999, None)), "chapter not found");
+    assert_eq!(api_err(jobs::generate_chapter(&db, &models, book.id, other.chapters[0].id, None)), "chapter not found");
 }
 
 // test_regenerating_one_chapter_with_another_engine_switches_the_book
 #[test]
 fn generating_a_chapter_with_another_engine_switches_the_book() {
     let dir = TempDir::new().unwrap();
+    let models = ready_cache(dir.path());
     let (_p, db, book) = setup(dir.path());
     let voice = voice(&db, dir.path(), "Nova", Some("hi"), Some("done"));
     books::assign_voice(&db, book.id, Some(voice.id)).unwrap();
-    jobs::generate_chapter(&db, book.id, book.chapters[0].id, Some("qwen3")).unwrap();
+    jobs::generate_chapter(&db, &models, book.id, book.chapters[0].id, Some("qwen3")).unwrap();
     assert_eq!(db.get_book(book.id).unwrap().engine, "qwen3");
 }
 
@@ -179,8 +185,9 @@ fn cancel_rejects_unknown_books_and_foreign_chapters() {
 #[test]
 fn cancel_book_cancels_every_active_chapter() {
     let dir = TempDir::new().unwrap();
+    let models = ready_cache(dir.path());
     let (paths, db, book) = setup(dir.path());
-    let ids = jobs::generate_book(&db, book.id, None).unwrap().queued_job_ids;
+    let ids = jobs::generate_book(&db, &models, book.id, None).unwrap().queued_job_ids;
     jobs::cancel_book(&db, &paths, book.id).unwrap();
     for id in ids {
         assert_eq!(db.get_job(id).unwrap().status, JobStatus::Cancelled);

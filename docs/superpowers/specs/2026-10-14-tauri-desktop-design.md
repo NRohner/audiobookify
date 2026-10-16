@@ -4,14 +4,14 @@ Status: approved 2026-10-14 (defaults accepted: personal Macs only, CLI dropped)
 
 ## Goal
 
-Turn the localhost web app into a native macOS desktop app built on Tauri 2. Everything except ML inference moves to Rust. Python stays only for the model runtimes (mlx-audio TTS, Whisper, wav2vec2), because the Rust ports of Qwen3-TTS and Chatterbox Turbo are still experimental (checked 2026-10-14). The engine boundary is a narrow interface, so engines can move to Rust one at a time later. Whisper via whisper-rs is the likely first.
+Turn the localhost web app into a native macOS desktop app built on Tauri 2. Everything except ML inference moves to Rust. Python stays only for the model runtimes (mlx-audio TTS, Whisper), because the Rust ports of Qwen3-TTS and Chatterbox Turbo are still experimental (checked 2026-10-14). The engine boundary is a narrow interface, so engines can move to Rust one at a time later. Whisper via whisper-rs is the likely first.
 
 ## Decisions
 
 | Topic | Decision |
 |---|---|
 | Rust scope | DB, ingest, text pipeline, lexicon, chunking, job queue, synthesis orchestration, audio post-processing, and all API logic (as Tauri commands). |
-| Python scope | One child process, the **engine worker**: loads one engine and answers synthesize / transcribe / extract-phonemes requests. No DB access and no pipeline logic. |
+| Python scope | One child process, the **engine worker**: loads one engine and answers synthesize / transcribe requests. No DB access and no pipeline logic. |
 | Rust↔Python IPC | JSON lines over the child's stdin/stdout. One request in flight at a time. Audio goes through WAV files in a temp dir, not through the pipe. |
 | Data | Same SQLite schema. Rust (`rusqlite`) opens existing databases, so no data migration is needed. Rust takes over the schema migrations in `db.py`. |
 | Frontend | The React app is reused as is. `lib/api.js` switches from `fetch` to `invoke`. |
@@ -31,9 +31,9 @@ Tauri app (Rust)
  │   ├─ text      normalize, lexicon substitution, chunking
  │   ├─ audio     trim / level / concat, WAV I/O, MP3 via ffmpeg, ID3 tags
  │   └─ jobs      queue, pause/cancel, chunk cache, progress
- └─ engine client  trait Engine { synthesize, transcribe, phonemes, ... }
+ └─ engine client  trait Engine { synthesize, transcribe, ... }
         └─ PythonEngine ── stdio JSON ──> python -m audiobookify.engine_worker
-                                            (mlx-audio Qwen3 / Turbo, Whisper, wav2vec2)
+                                            (mlx-audio Qwen3 / Turbo, Whisper)
 ```
 
 The previous design split the API and worker into separate processes so a hanging engine couldn't freeze the API. That isolation is preserved: the crash-prone part (ML) is still its own process. If the child dies, Rust fails the current job, respawns the child on the next job, and the UI keeps working.
@@ -46,7 +46,6 @@ Requests are one JSON object per line, and every request gets exactly one respon
 - `engine_info {}`: returns `max_chunk_chars`, `min_chunk_chars`, `sample_rate`.
 - `synthesize {text, voice: {reference_path, reference_text, trim_end, tempo, params}, out_wav}`: writes a WAV file. Voice handles stay cached inside the worker, keyed by the voice fields.
 - `transcribe {path}`: returns Whisper text and word timings.
-- `phonemes {path}`: returns the wav2vec2 phoneme string.
 - `shutdown {}`
 
 The protocol carries no paths except explicit in/out files, and no DB IDs. Python's stdout is reserved for the protocol, and all logging goes to stderr. The existing `engines/fake.py` gives Rust tests a real child process without model weights.
@@ -58,11 +57,12 @@ The protocol carries no paths except explicit in/out files, and no DB IDs. Pytho
 | `db.py`, `models.py` | Rust `db` | `rusqlite` (bundled SQLite). Port `test_db.py`'s 64 tests. |
 | `ingest/epub.py`, `ingest/markdown.py` | Rust `ingest` | `zip` + `scraper` (html5ever) instead of ebooklib/BeautifulSoup. Whitespace handling is the parity risk. |
 | `normalize/text.py` | Rust `text` | Needs `fancy-regex`: the number regex and the sentence splitter use lookbehind/lookahead. `num2words` crate or a hand port of the English rules; decided by golden-test parity. |
-| `lexicon/substitution.py`, `phoneme/respelling.py` | Rust `text` | Small, pure. |
+| `lexicon/substitution.py` | Rust `text` | Small, pure. |
 | `synth/pipeline.py`, `synth/chunk_cache.py`, `worker.py` (job loop) | Rust `jobs` | Pause/cancel stay checked between chunks, same as today. |
 | `postprocess/audio.py` | Rust `audio` | `hound` for WAV, plain f32 loops for trim/level/concat, `ffmpeg` child process for MP3 (as today), `id3` crate for tags. |
 | `voice/validation.py`, `voice/analysis.py` (pure parts: trim point, WER, cadence, pace), `voice/storage.py` | Rust | Reading audio uses `symphonia` for non-WAV uploads. |
-| `voice/analysis.transcribe`, `phoneme/wav2vec2.py`, `engines/*` | **Stay Python** | Behind the engine worker. |
+| `voice/analysis.transcribe`, `engines/*` | **Stay Python** | Behind the engine worker. |
+| `phoneme/wav2vec2.py` | Deleted in phase 5 | Pronunciation from audio was removed. |
 | `api/app.py` | Deleted | Replaced by Tauri commands. |
 | `cli.py` | Deleted | See open question 2. |
 | `bench.py` | Stays Python | A separate ML benchmarking tool, not part of the app. |
@@ -116,14 +116,13 @@ The page lists the models the app uses, and only those. Each row shows the role,
   - Quality engine (Qwen3): `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16`
   - Speed engine (Turbo): `mlx-community/chatterbox-turbo-fp16`
   - Voice transcription (Whisper): `mlx-community/whisper-large-v3-turbo-asr-fp16`
-  - Pronunciation from audio: `facebook/wav2vec2-lv-60-espeak-cv-ft`
   - Plus any repos those fetch at load time, such as `mlx-community/S3TokenizerV2`. Build the full list by loading each engine against an empty `HF_HOME` and recording what gets downloaded.
 - **The HF cache is shared with other projects** on this machine (on 2026-10-15 it also held Gemma, Surya, F5-TTS and BERT models). The page must never list or delete repos outside the registry.
-- **Sizes and deletion use `huggingface_hub`'s own cache API** (`scan_cache_dir`, `delete_revisions`), not hand-rolled `du`/`rm`. Snapshots are symlinks into blob stores, so naive sizing and deletion get this wrong.
+- **Sizes and deletion use `huggingface_hub`'s own cache API** (`scan_cache_dir`; matched repos are removed by their HF-reported `repo_path`, because `delete_revisions` can map a shared commit hash to a foreign repo), not hand-rolled `du`/`rm`. Snapshots are symlinks into blob stores, so naive sizing and deletion get this wrong.
 - **Downloads run in a separate one-shot Python process** with `HF_HUB_OFFLINE` unset. The engine worker stays offline, so a download never blocks or affects synthesis. That process reports progress as JSON lines on stdout (the same convention as the engine worker), and the page shows it per model. It can be cancelled.
 - **Delete is refused while it would break something:**
-  - when the model is loaded in the engine worker
-  - when a queued or running job needs it
+  - while queued or running work needs the model (Voice transcription: whenever any work exists)
+  - an idle engine that has the model loaded is unloaded first, then deleted
   The confirm dialog shows the size that will be freed.
 
 ### First-run setup
@@ -149,7 +148,7 @@ On launch, if no TTS engine's models are present, the app opens Settings → Mod
 - **num2words parity:** Rust crates may phrase numbers differently ("one hundred and five" vs "one hundred five"). Golden tests catch it, and the fallback is hand-porting the English rules we actually hit.
 - **EPUB HTML whitespace:** html5ever and BeautifulSoup differ on whitespace and nesting edge cases. The `\n\n` paragraph rule from the chunking overhaul has to survive the port.
 - **Locating Python from a `.app` bundle:** dev uses the repo `.venv`. A packaged app needs an embedded Python or a first-run setup (see open question 1).
-- **ffmpeg / espeak-ng:** still external binaries (Homebrew) unless they get bundled.
+- **ffmpeg:** still an external binary (Homebrew) unless they get bundled.
 
 ## Notes from phase 0
 
@@ -177,7 +176,22 @@ On launch, if no TTS engine's models are present, the app opens Settings → Mod
 - `relabel_chapter_mp3` failure handling changed: if retagging fails after the rename, the chapter keeps the renamed file. Python lost track of it.
 - `import_repo_data` refuses to run when the app data dir already has a DB, removes its temporary `audiobookify.db.importing` if it fails, and rewrites rows stored under either the canonical or the as-given spelling of the repo path.
 
+## Notes from phase 5
+
+- wav2vec2 is gone (user decision, 2026-10-16): the weights were deleted from the HF cache, and `phoneme/`, the CLI's `lexicon add-from-audio`, `torch`, `torchaudio`, `phonemizer` and the espeak-ng requirement were removed. The `lexicon_entries.phonemes` column stays for existing rows.
+- Presence is read by Rust from the HF cache layout (`refs/main` -> snapshot -> each `required` file), so generate can be gated without starting Python. Sizes, delete and downloads run `python -m audiobookify.model_store` one-shots on `huggingface_hub`'s cache API.
+- Turbo's registry entry includes `mlx-community/S3TokenizerV2`: mlx-audio fetches it at load, and offline a miss is only a logged warning.
+- Deleting is refused while queued or running work needs the model (Whisper: while anything runs). When the studio is idle, the runner drops its engine worker first, so the weights leave memory too.
+- `model_store delete` runs HF's `delete_revisions` per matched repo on a cache view holding only that repo (`delete_revisions` on the full scan maps a commit hash to the first repo that has it and could delete a non-registry repo sharing a hash). The view keeps `cache_dir`, so huggingface_hub 2.2's cache-wide shared Xet store (`<cache>/blobs/<2-hex>/<hash>`) is swept too: a payload goes only when no other repo's manifest reference remains, and the reply counts only bytes actually freed.
+- The runner tracks which engine its worker has loaded (RunnerControl). A delete unloads first when the model's engine is the loaded one, or always for Voice transcription (deletable only when no work exists). Unload requests are ticket-based so overlapping callers can't misreport.
+- Generating with a missing engine is refused at queue time, and the runner also fails such a job plainly ("<label> isn't downloaded yet. Download it in Settings."); a voice needing a transcript with Voice transcription missing fails the same way.
+- Text clips gained a `duration` column; stats backfill missing chapter and clip durations from the files on first load.
+- One download at a time. Progress is the larger of snapshot_download's two byte bars, captured through a silent `tqdm_class` and reported every 0.25 s when it changes. "Reconstructing" (bytes written) only moves when hf_xet flushes, seconds apart; "Downloading bytes" (network) is smooth but ends ~10% short because Xet compresses.
+- huggingface_hub 2.2 keeps Xet-downloaded weights in a cache-wide shared store (`hub/blobs/<xx>/<sha256>`) that repo blobs symlink into. Deleting a repo folder frees nothing; delete runs HF's `delete_revisions` on a scan filtered to one registry repo at a time, which sweeps the shared payloads no other repo references.
+- Exit check passed on 2026-10-16 against a fresh `HF_HOME`: setup panel on launch, Speed engine downloaded, a chapter rendered, delete freed the reported space, and the real cache's repo list was unchanged. The check found both points above.
+- `make models` is a development shortcut that runs the same `model_store download` the app does (stdin held open on a FIFO, since the download exits on stdin EOF; a `sleep | ...` pipe works but `make` then waits out the sleep).
+
 ## Open questions
 
-1. **Distribution:** personal Macs only (unsigned `.app`, uses the Homebrew ffmpeg/espeak-ng and the repo venv), or a shareable signed `.dmg` (embedded Python via python-build-standalone + uv, bundled ffmpeg, models downloaded on first run, and the phonemizer GPL-3.0 question)? **Default: personal Macs only.** Phase 7 grows if the answer changes.
+1. **Distribution:** personal Macs only (unsigned `.app`, uses the Homebrew ffmpeg and the repo venv), or a shareable signed `.dmg` (embedded Python via python-build-standalone + uv, bundled ffmpeg, models downloaded on first run)? **Default: personal Macs only.** Phase 7 grows if the answer changes.
 2. **CLI:** is the command-line interface still used? **Default: drop it.** A thin Rust CLI over the same core crate can be added later if wanted.

@@ -103,7 +103,8 @@ pub fn set_voice_tempo(db: &Database, voice_id: i64, tempo: f64) -> ApiResult<Vo
 }
 
 /// Queues Whisper again; the runner picks it up within a couple of seconds.
-pub fn transcribe_voice(db: &Database, voice_id: i64) -> ApiResult<VoiceDto> {
+pub fn transcribe_voice(db: &Database, cache: &crate::hub::HubCache, voice_id: i64) -> ApiResult<VoiceDto> {
+    super::models::require_transcription(cache)?;
     existing(db, voice_id)?;
     db.request_voice_transcription(voice_id)?;
     Ok(voice_dto(existing(db, voice_id)?, Vec::new()))

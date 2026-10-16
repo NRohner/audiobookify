@@ -5,11 +5,8 @@ Fully local EPUB/Markdown → audiobook (MP3 per chapter) converter. Requires Ap
 ## Setup
 
 1. Install [ffmpeg](https://ffmpeg.org/) (`brew install ffmpeg` on macOS, or see your platform's docs).
-2. Install [espeak-ng](https://github.com/espeak-ng/espeak-ng) (`brew install espeak-ng` on macOS, or see your platform's docs) — required by the M3 pronunciation-from-audio feature's `phonemizer` dependency (see note below).
-3. `make setup` — creates a Python 3.12 venv and installs the Python package + dev dependencies.
-4. `make models` — downloads and caches the Chatterbox Turbo TTS (MLX) and phoneme-recognition weights (about 6 GB, one-time; cached under your Hugging Face hub cache directory). Re-run any time to verify the cache.
-
-**Note on `phonemizer` (GPL-3.0):** `lexicon add-from-audio` (see M3 below) loads `facebook/wav2vec2-lv-60-espeak-cv-ft` via Hugging Face `transformers`, whose phoneme tokenizer unconditionally requires the `phonemizer` package (and the `espeak-ng` system binary it wraps) just to construct the tokenizer, even though this project only ever calls `decode`, never `encode`. Every other dependency in this project is Apache-2.0/permissive; this is a deliberate, known exception, accepted for `facebook/wav2vec2-lv-60-espeak-cv-ft`'s zero-additional-*Python*-dependency footprint otherwise. If this project is ever distributed in a form where GPL-3.0 is a problem, revisit this before shipping.
+2. `make setup` — creates a Python 3.12 venv and installs the Python package + dev dependencies.
+3. `make models` — a development shortcut that downloads and caches the Chatterbox Turbo TTS (MLX) weights through the same code the app uses (one-time; cached under your Hugging Face hub cache directory). Re-run any time to verify the cache. App users download engines from Settings instead.
 
 ## Desktop app
 
@@ -61,28 +58,16 @@ Register a respelling for any term (a name, an invented word, jargon) so it's re
 
 Only respelling overrides are supported in M2 — IPA/ARPAbet phoneme overrides are deferred until an engine that can actually consume them is added (the installed Chatterbox Turbo engine cannot).
 
-## Audio-sample pronunciation (M3)
-
-Instead of typing a respelling by hand, attach a short clip of the term spoken correctly and let the app derive one:
-
-```bash
-.venv/bin/audiobookify lexicon add-from-audio --term "Cadeyrn" --audio ./cadeyrn.wav
-```
-
-This runs the clip through a local phoneme recognizer (`facebook/wav2vec2-lv-60-espeak-cv-ft`, fetched once via `make models`), derives an ASCII respelling from the extracted phonemes, and creates a lexicon entry with `source: from_audio` — printing both the raw phonemes and the derived respelling so you can judge it immediately. `--book <path>` scopes it to one book, same as `lexicon add`. `--notes "..."` attaches a free-text note, same as `lexicon add`. `--device` picks the compute device for the phoneme model (`auto` detects CUDA, then MPS, then CPU; or name one).
-
-The derived respelling is a starting point, not guaranteed to be right — audit it:
+## Auditing pronunciations
 
 ```bash
 .venv/bin/audiobookify lexicon preview --term "Cadeyrn"
 .venv/bin/audiobookify lexicon edit --term "Cadeyrn" --respell "kah-DAIRN"
 ```
 
-- `lexicon preview` (unchanged from M2) works on any entry regardless of source — hear how the current respelling sounds.
-- `lexicon edit --term NAME --respell NEW_VALUE`: corrects just the respelling in place. Use this instead of `remove` + `add` — it preserves the entry's extracted phonemes, attached clip path, and `source: from_audio` provenance, all of which `remove`+`add` would silently discard. `--book <path>` scopes it to a book-specific entry.
-- `lexicon list` now also shows each entry's `source` (`manual` or `from_audio`) and, when present, its raw extracted phonemes.
-
-Audio-derived entries substitute into text exactly like manual ones — nothing about `generate` changes. The phoneme string is stored for reference/audit only; it is never sent to the TTS engine directly (Chatterbox Turbo still can't consume phoneme input, same constraint as M2).
+- `lexicon preview` works on any entry: hear how the current respelling sounds.
+- `lexicon edit --term NAME --respell NEW_VALUE`: corrects just the respelling in place. Use this instead of `remove` + `add`, which would discard the entry's metadata. `--book <path>` scopes it to a book-specific entry.
+- `lexicon list` shows each entry's `source` and, when present, its stored phonemes (only older entries have them).
 
 ## Voice cloning (M1)
 
@@ -119,6 +104,8 @@ The CLI still shares the same SQLite database format, so `generate`/`voice`/`lex
 work as before; you can run `audiobookify worker --db audiobookify.db` against a database
 of your own.
 
+Settings shows your listening stats and lets you download or delete the engines (Quality engine, Speed engine, Voice transcription). The first launch opens it when nothing is downloaded. `make models` is a development shortcut for the same download.
+
 The app also covers chapter-break editing, voice cloning (with tempo previews), the
 pronunciation list, text clips and a player.
 
@@ -127,5 +114,5 @@ pronunciation list, text clips and a player.
 ```bash
 make setup
 .venv/bin/pytest          # unit tests (fast, no GPU/weights required)
-.venv/bin/pytest -m integration  # real Turbo + wav2vec2 load and run, requires `make models` first
+.venv/bin/pytest -m integration  # real Turbo load and run, requires make models first
 ```

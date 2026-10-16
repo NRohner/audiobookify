@@ -341,10 +341,11 @@ fn validate_output_dir_checks_the_nearest_existing_folder_without_creating_anyth
 // test_engines_endpoint_lists_both_engines_with_labels
 #[test]
 fn engines_lists_both_with_labels() {
-    let engines = list_engines();
+    let dir = TempDir::new().unwrap();
+    let engines = list_engines(&ready_cache(dir.path()));
     assert_eq!(engines.default, "chatterbox-turbo");
-    let ids: Vec<_> = engines.engines.iter().map(|e| (e.id, e.label, e.needs_voice)).collect();
-    assert_eq!(ids, vec![("qwen3", "Quality (Qwen3)", true), ("chatterbox-turbo", "Speed (Turbo)", false)]);
+    let ids: Vec<_> = engines.engines.iter().map(|e| (e.spec.id, e.spec.label, e.spec.needs_voice)).collect();
+    assert_eq!(ids, vec![("qwen3", "Quality engine", true), ("chatterbox-turbo", "Speed engine", false)]);
 }
 
 #[test]

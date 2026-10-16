@@ -6,11 +6,13 @@ export function engineLabel(id, engines) {
   return engines.find((e) => e.id === id)?.label || LEGACY_LABELS[id] || id;
 }
 
-// The engine a request will actually use: one that needs a voice can't run without one.
+// The engine a request will actually use: one that needs a voice can't run without one,
+// and one that isn't downloaded can't run at all.
 export function effectiveEngine(chosen, engines, hasVoice) {
+  const usable = (e) => e.ready !== false && (!e.needs_voice || hasVoice);
   const spec = engines.find((e) => e.id === chosen);
-  if (spec && (!spec.needs_voice || hasVoice)) return chosen;
-  return engines.find((e) => !e.needs_voice)?.id ?? chosen;
+  if (spec && usable(spec)) return chosen;
+  return engines.find(usable)?.id ?? chosen;
 }
 
 // New books (nothing generated yet) start on Quality; otherwise keep the book's engine.

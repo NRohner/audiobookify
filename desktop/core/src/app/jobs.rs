@@ -5,8 +5,10 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::books::active_job;
+use super::models::require_engine;
 use super::{chosen_engine, err, found, ApiResult, AppPaths};
 use crate::db::Database;
+use crate::hub::HubCache;
 use crate::jobs::ChunkCache;
 use crate::models::{Chapter, ChapterOutcome, ChapterStatus, JobStatus};
 
@@ -34,9 +36,11 @@ fn chapter_of(db: &Database, book_id: i64, chapter_id: i64) -> ApiResult<Chapter
     Ok(chapter)
 }
 
-pub fn generate_book(db: &Database, book_id: i64, engine: Option<&str>) -> ApiResult<Queued> {
+pub fn generate_book(db: &Database, cache: &HubCache, book_id: i64, engine: Option<&str>) -> ApiResult<Queued> {
     let book = found(db.get_book(book_id), "book")?;
-    db.update_book_engine(book.id, &chosen_engine(engine, &book.engine, book.voice_profile_id)?)?;
+    let engine = chosen_engine(engine, &book.engine, book.voice_profile_id)?;
+    require_engine(cache, &engine)?;
+    db.update_book_engine(book.id, &engine)?;
     let mut queued_job_ids = Vec::new();
     for chapter in db.list_chapters(book.id)? {
         if chapter.status == ChapterStatus::Done || active_job(db, chapter.id)?.is_some() {
@@ -47,13 +51,15 @@ pub fn generate_book(db: &Database, book_id: i64, engine: Option<&str>) -> ApiRe
     Ok(Queued { queued_job_ids })
 }
 
-pub fn generate_chapter(db: &Database, book_id: i64, chapter_id: i64, engine: Option<&str>) -> ApiResult<QueuedOne> {
+pub fn generate_chapter(db: &Database, cache: &HubCache, book_id: i64, chapter_id: i64,
+                        engine: Option<&str>) -> ApiResult<QueuedOne> {
     let book = found(db.get_book(book_id), "book")?;
     let chapter = chapter_of(db, book_id, chapter_id)?;
     let engine = chosen_engine(engine, &book.engine, book.voice_profile_id)?;
     if chapter.status == ChapterStatus::Done || active_job(db, chapter.id)?.is_some() {
         return Ok(QueuedOne { job_id: None });
     }
+    require_engine(cache, &engine)?;
     db.update_book_engine(book.id, &engine)?; // the book's chapters all use one engine
     Ok(QueuedOne { job_id: Some(db.create_job(chapter.id)?.id) })
 }

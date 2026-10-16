@@ -6,6 +6,8 @@ pub mod books;
 pub mod clips;
 pub mod jobs;
 pub mod lexicon;
+pub mod models;
+pub mod stats;
 pub mod voices;
 
 use std::fmt;
@@ -40,8 +42,8 @@ impl AppPaths {
         Database::open(self.db(), self.voices())
     }
 
-    pub fn runner_paths(&self) -> crate::jobs::Paths {
-        crate::jobs::Paths { cache_root: self.cache(), text_clip_dir: self.text_clips(), backup_dir: self.output() }
+    pub fn runner_paths(&self, models: crate::hub::HubCache) -> crate::jobs::Paths {
+        crate::jobs::Paths { cache_root: self.cache(), text_clip_dir: self.text_clips(), backup_dir: self.output(), models }
     }
 }
 
@@ -104,26 +106,35 @@ pub struct EngineSpec {
 pub const ENGINES: [EngineSpec; 2] = [
     EngineSpec {
         id: "qwen3",
-        label: "Quality (Qwen3)",
+        label: "Quality engine",
         description: "Most natural; needs a voice with a transcript. About 0.85 s per second of audio.",
         needs_voice: true,
     },
     EngineSpec {
         id: "chatterbox-turbo",
-        label: "Speed (Turbo)",
+        label: "Speed engine",
         description: "About twice as fast, slightly less natural.",
         needs_voice: false,
     },
 ];
 
 #[derive(Debug, Serialize)]
-pub struct Engines {
-    pub default: &'static str,
-    pub engines: &'static [EngineSpec],
+pub struct EngineDto {
+    #[serde(flatten)]
+    pub spec: &'static EngineSpec,
+    /// Its weights are downloaded.
+    pub ready: bool,
 }
 
-pub fn list_engines() -> Engines {
-    Engines { default: crate::models::DEFAULT_ENGINE, engines: &ENGINES }
+#[derive(Debug, Serialize)]
+pub struct Engines {
+    pub default: &'static str,
+    pub engines: Vec<EngineDto>,
+}
+
+pub fn list_engines(cache: &crate::hub::HubCache) -> Engines {
+    let engines = ENGINES.iter().map(|spec| EngineDto { spec, ready: cache.engine_ready(spec.id) }).collect();
+    Engines { default: crate::models::DEFAULT_ENGINE, engines }
 }
 
 /// The engine a request asks for (or the stored one), validated.

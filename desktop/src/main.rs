@@ -12,7 +12,8 @@ use audiobookify_core::audio::child_path;
 use audiobookify_core::datadir::import_repo_data;
 use audiobookify_core::db::Database;
 use audiobookify_core::engine::PythonEngine;
-use audiobookify_core::jobs::Runner;
+use audiobookify_core::hub::{self, store::Hub, HubCache};
+use audiobookify_core::jobs::{Runner, RunnerControl};
 use commands::AppState;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
@@ -29,23 +30,28 @@ fn data_dir() -> PathBuf {
     PathBuf::from(home).join("Library/Application Support/com.audiobookify.app")
 }
 
+fn python() -> PathBuf {
+    repo_root().join(".venv/bin/python")
+}
+
 /// Generation, on its own thread with its own DB connection (opened by the caller, so a
 /// failure shows the startup alert). It owns the Python engine worker child, whose stdin
 /// closes when this process exits, however it exits; the worker then finishes its chunk
 /// and quits. A job cut off mid-chapter is requeued by `reset_stale_generating_jobs` on
-/// the next launch.
-fn start_runner(db: Database, paths: &AppPaths) {
-    let repo = repo_root().to_path_buf();
-    let runner_paths = paths.runner_paths();
+/// the next launch. The returned control shares state with the runner.
+fn start_runner(db: Database, paths: &AppPaths, models: HubCache) -> RunnerControl {
+    let engine = PythonEngine::new(python(), repo_root())
+        .env("HF_HUB_OFFLINE", "1")
+        // The exact root Rust gates on, so the worker never reads a different cache.
+        .env("HF_HUB_CACHE", &models.root)
+        .env("PATH", child_path(std::env::var_os("PATH")));
+    let mut runner = Runner::new(db, engine, paths.runner_paths(models));
+    let control = runner.control();
     std::thread::Builder::new()
         .name("job-runner".into())
-        .spawn(move || {
-            let engine = PythonEngine::new(repo.join(".venv/bin/python"), &repo)
-                .env("HF_HUB_OFFLINE", "1")
-                .env("PATH", child_path(std::env::var_os("PATH")));
-            Runner::new(db, engine, runner_paths).run_forever(&AtomicBool::new(false));
-        })
+        .spawn(move || runner.run_forever(&AtomicBool::new(false)))
         .expect("spawn the job runner thread");
+    control
 }
 
 /// Startup failures happen before Tauri runs: an error returned from Tauri's setup hook
@@ -119,8 +125,10 @@ fn main() {
     let open = || {
         paths.open_db().unwrap_or_else(|e| fail(&format!("Could not open the database in {}: {e}", paths.root.display())))
     };
-    start_runner(open(), &paths);
-    let state = AppState { db: Mutex::new(open()), paths: paths.clone() };
+    let models = HubCache::new(hub::default_cache_dir());
+    let runner = start_runner(open(), &paths, models.clone());
+    let hub = Hub::new(models, python(), repo_root()).env("PATH", child_path(std::env::var_os("PATH")));
+    let state = AppState { db: Mutex::new(open()), paths: paths.clone(), hub, runner };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -160,6 +168,12 @@ fn main() {
             commands::delete_text_clip,
             commands::text_clip_audio_path,
             commands::save_text_clip,
+            commands::list_models,
+            commands::model_progress,
+            commands::download_model,
+            commands::cancel_model_download,
+            commands::delete_model,
+            commands::get_stats,
         ])
         .setup(|app| {
             // Dev: Tauri points App at the Vite dev server (devUrl). Release: the bundled frontend/dist.

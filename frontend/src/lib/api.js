@@ -56,4 +56,11 @@ export const api = {
   deleteTextClip: (id) => call("delete_text_clip", { clipId: id }),
   textClipAudioSrc: (id) => audioSrc("text_clip_audio_path", { clipId: id }),
   saveTextClip: (id, dest) => call("save_text_clip", { clipId: id, dest }),
+
+  listModels: () => call("list_models"),
+  modelProgress: () => call("model_progress"),
+  downloadModel: (model) => call("download_model", { model }),
+  cancelModelDownload: (model) => call("cancel_model_download", { model }),
+  deleteModel: (model) => call("delete_model", { model }),
+  getStats: () => call("get_stats"),
 };

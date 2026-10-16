@@ -87,5 +87,6 @@ CREATE TABLE IF NOT EXISTS text_clips (
     error TEXT,
     used_fallback INTEGER NOT NULL DEFAULT 0,
     engine TEXT NOT NULL DEFAULT 'chatterbox-turbo',
-    tempo REAL
+    tempo REAL,
+    duration REAL
 );

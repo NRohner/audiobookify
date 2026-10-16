@@ -100,6 +100,11 @@ impl Database {
         self.get_text_clip(self.conn.last_insert_rowid())
     }
 
+    pub fn set_text_clip_duration(&self, clip_id: i64, seconds: f64) -> Result<()> {
+        self.conn.execute("UPDATE text_clips SET duration = ?1 WHERE id = ?2", params![seconds, clip_id])?;
+        Ok(())
+    }
+
     pub fn get_text_clip(&self, clip_id: i64) -> Result<TextClip> {
         self.query_opt("SELECT * FROM text_clips WHERE id = ?1", [clip_id], clip_from_row)?
             .ok_or_else(|| missing_clip(clip_id))

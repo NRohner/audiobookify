@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { effectiveEngine, engineMismatchWarning, initialBookEngine, transcriptState } from "./engines.js";
 
 const ENGINES = [
-  { id: "qwen3", label: "Quality (Qwen3)", needs_voice: true },
-  { id: "chatterbox-turbo", label: "Speed (Turbo)", needs_voice: false },
+  { id: "qwen3", label: "Quality engine", needs_voice: true },
+  { id: "chatterbox-turbo", label: "Speed engine", needs_voice: false },
 ];
 
 test("effectiveEngine keeps the choice when it can run", () => {
@@ -32,8 +32,8 @@ test("engineMismatchWarning is silent when every finished chapter used the chose
 
 test("engineMismatchWarning names the engines when chapters would not match", () => {
   const book = { mixed_engines: false, chapters: [{ status: "done", engine: "qwen3" }, { status: "pending" }] };
-  assert.match(engineMismatchWarning(book, "chatterbox-turbo", ENGINES), /Quality \(Qwen3\)/);
-  assert.match(engineMismatchWarning(book, "chatterbox-turbo", ENGINES), /Speed \(Turbo\)/);
+  assert.match(engineMismatchWarning(book, "chatterbox-turbo", ENGINES), /Quality engine/);
+  assert.match(engineMismatchWarning(book, "chatterbox-turbo", ENGINES), /Speed engine/);
 });
 
 test("engineMismatchWarning reports a book that already mixes engines, including legacy audio", () => {
@@ -57,4 +57,12 @@ test("transcriptState explains when only part of the clip is used", () => {
   const voice = { transcript_status: "done", reference_transcript: "Hi", reference_trim_end: 15.06, reference_seconds: 36.1 };
   assert.equal(transcriptState(voice).note, "Uses the first 15.1 s of the 36.1 s clip. The transcript covers that part.");
   assert.equal(transcriptState({ ...voice, reference_trim_end: null }).note, null);
+});
+
+test("effectiveEngine skips an engine that isn't downloaded", () => {
+  const engines = [
+    { id: "qwen3", needs_voice: true, ready: true },
+    { id: "chatterbox-turbo", needs_voice: false, ready: false },
+  ];
+  assert.equal(effectiveEngine("chatterbox-turbo", engines, true), "qwen3");
 });
