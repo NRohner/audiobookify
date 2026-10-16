@@ -166,6 +166,12 @@ pub fn voice_audio_path(app: AppHandle, state: State<'_, AppState>, voice_id: i6
     playable(&app, path)
 }
 
+/// The `keep` ranges (seconds) of `source` as a mono WAV or MP3 at `dest`; the editor's save.
+#[tauri::command(async)]
+pub fn export_mono_clip(source: PathBuf, dest: PathBuf, keep: Vec<(f64, f64)>) -> ApiResult<PathBuf> {
+    audiobookify_core::voice_audio::export_mono_clip(&source, &dest, &keep).map_err(ApiError)
+}
+
 #[tauri::command(async)]
 pub fn list_pronunciations(state: State<'_, AppState>) -> ApiResult<Vec<LexiconDto>> {
     lexicon::list_pronunciations(&state.db())

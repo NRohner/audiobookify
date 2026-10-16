@@ -162,3 +162,38 @@ pub fn reference_clip(reference: &Path, trim_end: Option<f64>, tempo: f64) -> Re
     }
     Ok(out)
 }
+
+/// Seconds to a sample index, clamped to the clip.
+fn index(len: usize, sample_rate: u32, seconds: f64) -> usize {
+    ((seconds * sample_rate as f64).round().max(0.0) as usize).min(len)
+}
+
+/// The part of `mono` from `start` to `end` seconds. Out-of-range times clamp to the clip.
+pub fn trim(mono: &[f32], sample_rate: u32, start: f64, end: f64) -> Vec<f32> {
+    let (a, b) = (index(mono.len(), sample_rate, start), index(mono.len(), sample_rate, end));
+    mono[a..b.max(a)].to_vec()
+}
+
+/// `mono` without the part from `start` to `end` seconds.
+pub fn cut(mono: &[f32], sample_rate: u32, start: f64, end: f64) -> Vec<f32> {
+    let (a, b) = (index(mono.len(), sample_rate, start), index(mono.len(), sample_rate, end));
+    [&mono[..a], &mono[b.max(a)..]].concat()
+}
+
+/// Writes the `keep` ranges (source seconds, in order) of `source`, down-mixed to mono, to
+/// `dest`: 16-bit WAV for `.wav`, ffmpeg MP3 for `.mp3`. Keeps the source sample rate.
+pub fn export_mono_clip(source: &Path, dest: &Path, keep: &[(f64, f64)]) -> Result<PathBuf, String> {
+    let ext = dest.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+    if ext != "wav" && ext != "mp3" {
+        return Err(format!("can't export a clip as '.{ext}'; use .wav or .mp3"));
+    }
+    let d = media::decode(source).map_err(|e| format!("could not read '{}': {e}", source.display()))?;
+    let mono = d.mono();
+    let clip: Vec<f32> = keep.iter().flat_map(|&(start, end)| trim(&mono, d.sample_rate, start, end)).collect();
+    if ext == "wav" {
+        write_pcm16(dest, &clip, d.sample_rate, 1)?;
+    } else {
+        crate::audio::export_mp3(&clip, d.sample_rate, dest, &Default::default(), None).map_err(|e| e.to_string())?;
+    }
+    Ok(dest.to_path_buf())
+}
