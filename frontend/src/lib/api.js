@@ -2,11 +2,12 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { numericIds } from "./ids.js";
 
 // Commands reject with the Rust error's message as a plain string; callers show e.message.
+// A few (recording) reject with {kind, message}; e.kind lets the caller branch.
 async function call(command, args) {
   try {
     return await invoke(command, numericIds(args));
   } catch (e) {
-    throw new Error(typeof e === "string" ? e : e?.message ?? String(e));
+    throw Object.assign(new Error(typeof e === "string" ? e : e?.message ?? String(e)), e?.kind ? { kind: e.kind } : {});
   }
 }
 
@@ -66,4 +67,9 @@ export const api = {
   getSettings: () => call("get_settings"),
   // null moves the library back to the default folder.
   setVoicesDir: (path) => call("set_voices_dir", { path }),
+
+  // System audio to a temp WAV. Rejects with e.kind "permission_denied" when macOS
+  // Screen Recording access is off. stopRecording resolves to the WAV's path.
+  startRecording: () => call("start_recording"),
+  stopRecording: () => call("stop_recording"),
 };

@@ -14,6 +14,7 @@ use audiobookify_core::db::Database;
 use audiobookify_core::engine::PythonEngine;
 use audiobookify_core::hub::{self, store::Hub, HubCache};
 use audiobookify_core::jobs::{Runner, RunnerControl};
+use audiobookify_core::recorder::{system_capture, Recorder};
 use commands::AppState;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
@@ -128,7 +129,7 @@ fn main() {
     let models = HubCache::new(hub::default_cache_dir());
     let runner = start_runner(open(), &paths, models.clone());
     let hub = Hub::new(models, python(), repo_root()).env("PATH", child_path(std::env::var_os("PATH")));
-    let state = AppState { db: Mutex::new(open()), paths: RwLock::new(paths.clone()), hub, runner };
+    let state = AppState { db: Mutex::new(open()), paths: RwLock::new(paths.clone()), hub, runner, recorder: Mutex::new(Recorder::new(system_capture())) };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -176,6 +177,8 @@ fn main() {
             commands::get_stats,
             commands::get_settings,
             commands::set_voices_dir,
+            commands::start_recording,
+            commands::stop_recording,
         ])
         .setup(|app| {
             // Dev: Tauri points App at the Vite dev server (devUrl). Release: the bundled frontend/dist.
