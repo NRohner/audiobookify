@@ -106,3 +106,30 @@ pub fn silent_mp3(path: &Path, seconds: f64) {
         .unwrap();
     assert!(status.success());
 }
+
+use audiobookify_core::app::{ApiResult, AppPaths};
+
+/// test_chapter_breaks.py's THREE: (title, text).
+pub const THREE: [(&str, &str); 3] = [("One", "a\n\nb"), ("Two", "c\n\nd\n\ne"), ("Three", "f")];
+
+pub const TWO_CHAPTERS_MD: &str = "# Chapter One\nFirst chapter body.\n\n# Chapter Two\nSecond chapter body.\n";
+
+/// The app's data under `<dir>/data`, and a connection to its DB.
+pub fn app(dir: &Path) -> (AppPaths, Database) {
+    let paths = AppPaths::new(dir.join("data"));
+    let db = paths.open_db().unwrap();
+    (paths, db)
+}
+
+pub fn write_file(dir: &Path, name: &str, body: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+pub fn api_err<T: Debug>(result: ApiResult<T>) -> String {
+    match result {
+        Err(e) => e.0,
+        Ok(v) => panic!("expected an error, got {v:?}"),
+    }
+}

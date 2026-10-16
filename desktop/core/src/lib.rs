@@ -1,3 +1,4 @@
+pub mod app;
 pub mod audio;
 pub mod db;
 pub mod engine;

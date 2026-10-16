@@ -1,0 +1,1 @@
+//! Text-clip endpoints.
