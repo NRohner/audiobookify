@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use audiobookify_core::db::Database;
+use audiobookify_core::hub::HubCache;
 use audiobookify_core::jobs::{Paths, Runner};
 use audiobookify_core::models::*;
 use common::*;
@@ -16,12 +17,16 @@ const LONG: &str = "She looked out over the water for a long time before she fin
 /// A runner on a temp DB and temp paths, driving the real engine worker in fake mode.
 /// Every synthesized chunk's text is logged to <dir>/log.jsonl.
 fn runner(dir: &Path, env: &[(&str, &str)]) -> Runner {
+    runner_with(dir, env, ready_cache(dir))
+}
+
+fn runner_with(dir: &Path, env: &[(&str, &str)], models: HubCache) -> Runner {
     let log = dir.join("log.jsonl");
     let mut env = env.to_vec();
     let log_str = log.to_string_lossy().into_owned();
     env.push(("AUDIOBOOKIFY_FAKE_LOG", &log_str));
     Runner::new(open(dir), fake_engine(&env), Paths {
-        cache_root: dir.join("cache"), text_clip_dir: dir.join("clips"), backup_dir: dir.join("backup"),
+        cache_root: dir.join("cache"), text_clip_dir: dir.join("clips"), backup_dir: dir.join("backup"), models,
     })
 }
 
@@ -340,4 +345,42 @@ fn run_forever_resets_stale_jobs_works_the_queue_and_stops_on_the_flag() {
     }
     stop.store(true, Ordering::Relaxed);
     handle.join().unwrap();
+}
+
+#[test]
+fn unload_drops_the_engine_child_and_the_next_job_respawns_it() {
+    let dir = TempDir::new().unwrap();
+    let mut r = runner(dir.path(), &[]);
+    r.db.create_text_clip(LONG, None, "fake", None).unwrap();
+    assert!(r.run_once().unwrap());
+    assert!(r.engine_pid().is_some());
+
+    let control = r.control();
+    let waiter = std::thread::spawn(move || control.unload_and_wait(Duration::from_secs(5)));
+    std::thread::sleep(Duration::from_millis(100));
+    r.handle_unload();
+    assert!(waiter.join().unwrap());
+    assert_eq!(r.engine_pid(), None);
+
+    r.db.create_text_clip(LONG, None, "fake", None).unwrap();
+    assert!(r.run_once().unwrap());
+    assert!(r.engine_pid().is_some());
+}
+
+#[test]
+fn unload_and_wait_times_out_when_nobody_answers() {
+    let dir = TempDir::new().unwrap();
+    let r = runner(dir.path(), &[]);
+    assert!(!r.control().unload_and_wait(Duration::from_millis(200)));
+}
+
+#[test]
+fn a_job_for_an_engine_that_is_not_downloaded_fails_plainly() {
+    let dir = TempDir::new().unwrap();
+    let mut r = runner_with(dir.path(), &[], HubCache::new(dir.path().join("empty")));
+    let clip = r.db.create_text_clip("Hello.", None, "chatterbox-turbo", None).unwrap();
+    assert!(r.run_once().unwrap());
+    let clip = r.db.get_text_clip(clip.id).unwrap();
+    assert_eq!(clip.error.as_deref(), Some("Speed engine isn't downloaded yet. Download it in Settings."));
+    assert_eq!(r.engine_pid(), None);
 }

@@ -82,6 +82,11 @@ pub static REGISTRY: [ModelSpec; 3] = [
     },
 ];
 
+/// What generating with a missing model says, from the gate and from the runner.
+pub fn not_downloaded(label: &str) -> String {
+    format!("{label} isn't downloaded yet. Download it in Settings.")
+}
+
 pub fn model(id: &str) -> Option<&'static ModelSpec> {
     REGISTRY.iter().find(|m| m.id == id)
 }

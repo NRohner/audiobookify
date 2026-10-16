@@ -6,7 +6,8 @@ use std::io;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
@@ -14,6 +15,7 @@ use super::cache::{compute_cache_key, ChunkCache};
 use super::voice::{trim_point, voice_for, MAX_REFERENCE_SECONDS};
 use crate::audio::{concatenate_chunks, export_chapter_mp3, export_mp3, read_wav, AudioError, Tags};
 use crate::db::{Database, DbError};
+use crate::hub::{self, HubCache};
 use crate::engine::{EngineError, EngineInfo, PythonEngine};
 use crate::models::{ChapterOutcome, ChapterStatus, Job, JobStatus, TextClip, VoiceProfile};
 use crate::text::{apply_lexicon, chunk_text, EndsWith};
@@ -25,6 +27,31 @@ pub struct Paths {
     pub text_clip_dir: PathBuf,
     /// Where MP3s go when the chosen output dir can't be written (`output`).
     pub backup_dir: PathBuf,
+    /// Where the engines' weights must be; a job for a missing engine fails without loading it.
+    pub models: HubCache,
+}
+
+/// Lets the Settings page ask the runner thread to drop its engine worker (and the
+/// weights it holds) before deleting a model.
+#[derive(Clone, Default)]
+pub struct RunnerControl {
+    unload: Arc<AtomicBool>,
+}
+
+impl RunnerControl {
+    /// True once the runner has dropped its worker. Only answered between units of work.
+    pub fn unload_and_wait(&self, timeout: Duration) -> bool {
+        self.unload.store(true, Ordering::SeqCst);
+        let deadline = Instant::now() + timeout;
+        while self.unload.load(Ordering::SeqCst) {
+            if Instant::now() >= deadline {
+                self.unload.store(false, Ordering::SeqCst);
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        true
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -49,11 +76,28 @@ pub struct Runner {
     engine: PythonEngine,
     cache: ChunkCache,
     paths: Paths,
+    control: RunnerControl,
 }
 
 impl Runner {
     pub fn new(db: Database, engine: PythonEngine, paths: Paths) -> Self {
-        Self { db, engine, cache: ChunkCache::new(&paths.cache_root), paths }
+        Self { db, engine, cache: ChunkCache::new(&paths.cache_root), paths, control: RunnerControl::default() }
+    }
+
+    pub fn control(&self) -> RunnerControl {
+        self.control.clone()
+    }
+
+    pub fn engine_pid(&self) -> Option<u32> {
+        self.engine.child_pid()
+    }
+
+    /// Drop the engine worker if the Settings page asked for it.
+    pub fn handle_unload(&mut self) {
+        if self.control.unload.load(Ordering::SeqCst) {
+            self.engine.shutdown();
+            self.control.unload.store(false, Ordering::SeqCst);
+        }
     }
 
     /// One unit of work, if any; false when paused or idle. Transcriptions go
@@ -78,6 +122,7 @@ impl Runner {
             eprintln!("Error: could not reset stale jobs: {e}");
         }
         while !stop.load(Ordering::Relaxed) {
+            self.handle_unload();
             let did_work = match std::panic::catch_unwind(AssertUnwindSafe(|| self.run_once())) {
                 Ok(Ok(did_work)) => did_work,
                 Ok(Err(e)) => {
@@ -94,6 +139,7 @@ impl Runner {
                     if stop.load(Ordering::Relaxed) {
                         return;
                     }
+                    self.handle_unload();
                     std::thread::sleep(Duration::from_millis(100));
                 }
             }
@@ -109,6 +155,11 @@ impl Runner {
     /// One Whisper pass: transcript, word timings, and the reference trim. A failure
     /// is recorded on the voice, so it isn't retried forever.
     fn transcribe_voice(&mut self, profile: &VoiceProfile) -> Result<(), JobError> {
+        let whisper = hub::model(hub::TRANSCRIPTION).expect("registry has transcription");
+        if !self.paths.models.is_present(whisper) {
+            self.db.fail_voice_transcription(profile.id, &hub::not_downloaded(whisper.label))?;
+            return Ok(());
+        }
         match self.engine.transcribe(Path::new(&profile.reference_audio_path)) {
             Ok(t) => {
                 let (trim_end, text) = match trim_point(&t.words, MAX_REFERENCE_SECONDS) {
@@ -252,6 +303,10 @@ impl Runner {
     /// transcripts existed).
     fn engine_and_voice(&mut self, engine: &str, voice_profile_id: Option<i64>)
                         -> Result<(EngineInfo, Option<VoiceProfile>), JobError> {
+        if !self.paths.models.engine_ready(engine) {
+            let label = hub::model_for_engine(engine).map_or(engine, |m| m.label);
+            return Err(EngineError::Engine(hub::not_downloaded(label)).into());
+        }
         let info = self.engine.load(engine)?;
         let Some(id) = voice_profile_id else { return Ok((info, None)) };
         let Some(profile) = self.db.get_voice_profile_by_id(id)? else { return Ok((info, None)) };

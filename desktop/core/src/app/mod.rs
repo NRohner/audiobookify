@@ -40,8 +40,8 @@ impl AppPaths {
         Database::open(self.db(), self.voices())
     }
 
-    pub fn runner_paths(&self) -> crate::jobs::Paths {
-        crate::jobs::Paths { cache_root: self.cache(), text_clip_dir: self.text_clips(), backup_dir: self.output() }
+    pub fn runner_paths(&self, models: crate::hub::HubCache) -> crate::jobs::Paths {
+        crate::jobs::Paths { cache_root: self.cache(), text_clip_dir: self.text_clips(), backup_dir: self.output(), models }
     }
 }
 
