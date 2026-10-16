@@ -14,7 +14,7 @@ static SENTENCE_END_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"[.!?…
 
 /// (end_seconds, transcript_of_kept_words) for a clip longer than max_seconds, cut at a
 /// word boundary (a sentence end if one is near the limit); None if the clip already fits.
-/// Port of voice/analysis.py's trim_point.
+/// Ported from the former Python trim_point.
 pub fn trim_point(words: &[Word], max_seconds: f64) -> Option<(f64, String)> {
     if words.last()?.end <= max_seconds {
         return None;

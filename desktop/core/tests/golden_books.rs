@@ -1,5 +1,5 @@
 //! End-to-end parity with the Python pipeline: ingest -> lexicon -> chunk_text over
-//! real ingest output. The goldens come from tests/fixtures/text/generate.py.
+//! real ingest output. The goldens were generated from the Python pipeline, which is gone; they are frozen.
 
 mod fixture;
 
@@ -64,13 +64,13 @@ fn goldens_in(dir: &Path) -> Vec<std::path::PathBuf> {
 #[test]
 fn committed_fixtures_match_python() {
     let paths = goldens_in(&fixtures().join("golden"));
-    assert!(!paths.is_empty(), "no goldens: run generate.py");
+    assert!(!paths.is_empty(), "no goldens in tests/fixtures/text/golden");
     for path in paths {
         check(&path);
     }
 }
 
-/// Copyrighted books from uploads/ (see generate.py --local). Their goldens are
+/// Copyrighted books from uploads/ (generated before the Python pipeline was deleted). Their goldens are
 /// git-ignored, so this passes with a note when there are none.
 #[test]
 fn local_books_match_python() {

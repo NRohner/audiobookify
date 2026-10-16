@@ -109,3 +109,33 @@ def test_synthesize_leaves_only_the_finished_wav_in_the_out_dir(tmp_path):
                    {"op": "synthesize", "text": "Hello there.", "voice": {}, "out_wav": str(out_dir / "a.wav")}])
     assert "ok" in out[1], out
     assert [p.name for p in out_dir.iterdir()] == ["a.wav"]
+
+
+class _Recording(FakeEngine):
+    def __init__(self, name, log):
+        super().__init__()
+        self.name, self.log = name, log
+
+    def load(self, device="auto"):
+        self.log.append(("load", self.name))
+
+    def teardown(self):
+        self.log.append(("teardown", self.name))
+
+
+def test_engine_slot_holds_one_engine_and_tears_it_down_before_loading_another():
+    from audiobookify.engine_worker import EngineSlot
+
+    log = []
+    slot = EngineSlot(lambda name: _Recording(name, log))
+
+    a = slot.get("chatterbox-turbo")
+    assert slot.get("chatterbox-turbo") is a  # reused, not reloaded
+    slot.profile_cache["key"] = "stale"
+    b = slot.get("qwen3")
+    slot.teardown()
+
+    assert b.name == "qwen3"
+    assert log == [("load", "chatterbox-turbo"), ("teardown", "chatterbox-turbo"),
+                   ("load", "qwen3"), ("teardown", "qwen3")]
+    assert slot.profile_cache == {}  # handles belong to the engine that made them

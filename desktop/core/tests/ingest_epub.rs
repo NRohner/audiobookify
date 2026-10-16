@@ -1,6 +1,6 @@
 //! Port of tests/test_ingest_epub.py. The Python tests build their EPUBs with
-//! ebooklib at test time; here the same books are committed fixtures written by
-//! tests/fixtures/text/generate.py (epub/basic.epub, blocks.epub, ...).
+//! ebooklib at test time; here the same books are committed fixtures
+//! (tests/fixtures/text/epub/basic.epub, blocks.epub, ...).
 
 mod fixture;
 

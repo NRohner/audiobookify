@@ -63,9 +63,9 @@ The protocol carries no paths except explicit in/out files, and no DB IDs. Pytho
 | `voice/validation.py`, `voice/analysis.py` (pure parts: trim point, WER, cadence, pace), `voice/storage.py` | Rust | Reading audio uses `symphonia` for non-WAV uploads. |
 | `voice/analysis.transcribe`, `engines/*` | **Stay Python** | Behind the engine worker. |
 | `phoneme/wav2vec2.py` | Deleted in phase 5 | Pronunciation from audio was removed. |
-| `api/app.py` | Deleted | Replaced by Tauri commands. |
-| `cli.py` | Deleted | See open question 2. |
-| `bench.py` | Stays Python | A separate ML benchmarking tool, not part of the app. |
+| `api/app.py` | Deleted in phase 6 | Replaced by Tauri commands. |
+| `cli.py` | Deleted in phase 6 | CLI dropped (open question 2). |
+| `bench.py` | Deleted in phase 6 | It kept Python copies of the pipeline alive (user decision, 2026-10-16). |
 
 ## Frontend changes
 
@@ -191,7 +191,19 @@ On launch, if no TTS engine's models are present, the app opens Settings → Mod
 - Exit check passed on 2026-10-16 against a fresh `HF_HOME`: setup panel on launch, Speed engine downloaded, a chapter rendered, delete freed the reported space, and the real cache's repo list was unchanged. The check found both points above.
 - `make models` is a development shortcut that runs the same `model_store download` the app does (stdin held open on a FIFO, since the download exits on stdin EOF; a `sleep | ...` pipe works but `make` then waits out the sleep).
 
+## Notes from phase 6
+
+- Python now holds only `engine_worker.py`, `model_store.py`, `engines/` (base, fake, mlx_util, qwen3, turbo) and `voice/analysis.py` (`transcribe`, `reference_clip`). `engine_worker` and `voice.analysis` no longer import deleted modules.
+- Deleted: `api/`, `cli.py`, `db.py`, `models.py`, `worker.py`, `bench.py`, `synth/`, `ingest/`, `lexicon/`, `normalize/`, `postprocess/`, `voice/storage.py`, `voice/validation.py`, and their tests.
+- The CLI is dropped (open question 2 resolved). The first-launch import of the repo's `audiobookify.db` stays; it is Rust and reads the repo files read-only.
+- `bench.py` was deleted (user decision, 2026-10-16) because it kept Python copies of the pipeline alive. `bench/` is gitignored; the `bench/out` results stay on local disk only.
+- The golden fixtures under `desktop/core/tests/fixtures/` are now frozen: the Python reference implementation is gone, so `fixtures/text/generate.py` and `fixtures/audio/generate.py` were deleted. The committed golden JSON stays and the Rust tests still check against it.
+- Python dependencies: `soundfile`, `numpy`, `mlx-audio==0.5.9`, `huggingface_hub>=2.2`, `tqdm>=4.66`, `transformers>=5.14`. Dev: `pytest`.
+- `.claude/launch.json` lost its `api-preview` entry (the FastAPI server is gone).
+- Tests: `.venv/bin/pytest` (engine worker, model store, engines), `cd desktop && cargo test -p audiobookify-core`, `cd frontend && npm test`.
+- Exit check passed on 2026-10-16 after a `make clean setup` rebuild of `.venv`: in `make dev` the user generated a chapter with each engine, generated a text clip, and added a voice without a transcript (Whisper ran).
+
 ## Open questions
 
 1. **Distribution:** personal Macs only (unsigned `.app`, uses the Homebrew ffmpeg and the repo venv), or a shareable signed `.dmg` (embedded Python via python-build-standalone + uv, bundled ffmpeg, models downloaded on first run)? **Default: personal Macs only.** Phase 7 grows if the answer changes.
-2. **CLI:** is the command-line interface still used? **Default: drop it.** A thin Rust CLI over the same core crate can be added later if wanted.
+2. **CLI:** is the command-line interface still used? **Resolved: dropped in phase 6.** (Default was to drop it.) A thin Rust CLI over the same core crate can be added later if wanted.

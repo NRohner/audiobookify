@@ -1,6 +1,6 @@
 // Reference-pace display logic for the Voices page, kept out of the components so it is testable.
 
-export const TEMPO_MIN = 0.75; // matches TEMPO_RANGE in voice/analysis.py
+export const TEMPO_MIN = 0.75; // matches TEMPO_RANGE in desktop/core/src/voice_audio.rs
 export const TEMPO_MAX = 1.25;
 // The user's favourite narration came from a reference at about this pace.
 export const SWEET_SPOT = { overall: 174, speaking: 188 };

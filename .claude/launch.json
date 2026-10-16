@@ -15,19 +15,6 @@
         "--strictPort"
       ],
       "port": 5173
-    },
-    {
-      "name": "api-preview",
-      "runtimeExecutable": ".venv/bin/uvicorn",
-      "runtimeArgs": [
-        "audiobookify.api.app:create_app",
-        "--factory",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "8001"
-      ],
-      "port": 8001
     }
   ]
 }
