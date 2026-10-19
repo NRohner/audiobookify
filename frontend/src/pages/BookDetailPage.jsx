@@ -174,6 +174,7 @@ export default function BookDetailPage() {
   }
 
   useEffect(() => {
+    api.retagBook(bookId).catch(() => {}); // bring older renders up to the current tag pattern
     Promise.all([refresh(), api.listVoices().then(setVoices), api.listEngines().then((r) => setEngines(r.engines))])
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));

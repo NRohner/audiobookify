@@ -107,15 +107,16 @@ fn reference_clip_of_a_missing_file_is_an_error() {
 #[test]
 fn relabel_chapter_mp3_renames_and_retags() {
     let dir = TempDir::new().unwrap();
-    let (path, _) = export_chapter_mp3(&vec![0.0; 2205], 22050, dir.path(), 0, "Old", "Book", "N", None).unwrap();
+    let (path, _) = export_chapter_mp3(&vec![0.0; 2205], 22050, dir.path(), 0, "Old", "Book", Some("N"), None).unwrap();
 
-    let new_path = relabel_chapter_mp3(&path, 4, "New").unwrap();
+    let new_path = relabel_chapter_mp3(&path, 4, "New", "Book 2", Some("Jane")).unwrap();
 
     assert_eq!(new_path, dir.path().join(chapter_filename(4, "New")));
     assert!(!dir.path().join(chapter_filename(0, "Old")).exists());
     use id3::TagLike;
     let tag = id3::Tag::read_from_path(&new_path).unwrap();
-    assert_eq!((tag.title(), tag.track(), tag.album()), (Some("New"), Some(5), Some("Book")));
+    assert_eq!((tag.title(), tag.track(), tag.album(), tag.artist()),
+               (Some("05 - New"), Some(5), Some("Book 2"), Some("Jane")));
 }
 
 #[test]

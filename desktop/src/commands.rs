@@ -93,6 +93,11 @@ pub fn save_chapter_breaks(state: State<'_, AppState>, book_id: i64, chapters: V
 }
 
 #[tauri::command(async)]
+pub fn retag_book(state: State<'_, AppState>, book_id: i64) -> ApiResult<()> {
+    books::retag_book(&state.db(), book_id)
+}
+
+#[tauri::command(async)]
 pub fn assign_voice(state: State<'_, AppState>, book_id: i64, voice_profile_id: Option<i64>) -> ApiResult<()> {
     books::assign_voice(&state.db(), book_id, voice_profile_id)
 }

@@ -143,6 +143,7 @@ fn main() {
             commands::delete_book,
             commands::get_book_text,
             commands::save_chapter_breaks,
+            commands::retag_book,
             commands::assign_voice,
             commands::generate_book,
             commands::generate_chapter,

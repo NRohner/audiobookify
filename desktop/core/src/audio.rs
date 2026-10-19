@@ -158,6 +158,11 @@ pub fn chapter_filename(order_index: i64, title: &str) -> String {
     format!("{:02} - {}.mp3", order_index + 1, sanitize_filename(title))
 }
 
+/// The ID3 title: number and name, so players that sort or show by title keep chapter order.
+pub fn chapter_title_tag(order_index: i64, title: &str) -> String {
+    format!("{:02} - {title}", order_index + 1)
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Tags<'a> {
     pub title: Option<&'a str>,
@@ -204,7 +209,10 @@ fn write_tags(path: &Path, tags: &Tags) -> Result<(), AudioError> {
     if let Some(t) = tags.title { tag.set_title(t); }
     if let Some(a) = tags.album { tag.set_album(a); }
     if let Some(n) = tags.track { tag.set_track(n); }
-    if let Some(a) = tags.artist { tag.set_artist(a); }
+    match tags.artist {
+        Some(a) => tag.set_artist(a),
+        None => { tag.remove_artist(); }
+    }
     tag.write_to_path(path, Version::Id3v24).map_err(|e| AudioError::Tag(e.to_string()))
 }
 
@@ -226,19 +234,28 @@ pub fn export_mp3(audio: &[f32], sample_rate: u32, output_path: &Path, tags: &Ta
 
 #[allow(clippy::too_many_arguments)]
 pub fn export_chapter_mp3(audio: &[f32], sample_rate: u32, output_dir: &Path, order_index: i64, chapter_title: &str,
-                          book_title: &str, narrator: &str, fallback_dir: Option<&Path>)
+                          book_title: &str, author: Option<&str>, fallback_dir: Option<&Path>)
                           -> Result<(PathBuf, bool), AudioError> {
-    let tags = Tags { title: Some(chapter_title), album: Some(book_title), track: Some((order_index + 1) as u32),
-                      artist: Some(narrator) };
+    let title = chapter_title_tag(order_index, chapter_title);
+    let tags = Tags { title: Some(&title), album: Some(book_title), track: Some((order_index + 1) as u32),
+                      artist: author };
     export_mp3(audio, sample_rate, &output_dir.join(chapter_filename(order_index, chapter_title)), &tags, fallback_dir)
 }
 
-/// Moves a finished chapter's MP3 to its new name (same folder) and fixes its title and
-/// track tags; album and artist stay. Port of postprocess/audio.py's relabel_chapter_mp3.
-pub fn relabel_chapter_mp3(path: &Path, order_index: i64, chapter_title: &str) -> Result<PathBuf, AudioError> {
+/// Rewrites a chapter MP3's tags in place: title `NN - name`, album = book, artist = author.
+pub fn retag_chapter_mp3(path: &Path, order_index: i64, chapter_title: &str, book_title: &str,
+                         author: Option<&str>) -> Result<(), AudioError> {
+    let title = chapter_title_tag(order_index, chapter_title);
+    let tags = Tags { title: Some(&title), album: Some(book_title), track: Some((order_index + 1) as u32),
+                      artist: author };
+    write_tags(path, &tags)
+}
+
+/// Moves a finished chapter's MP3 to its new name (same folder) and retags it.
+pub fn relabel_chapter_mp3(path: &Path, order_index: i64, chapter_title: &str, book_title: &str,
+                           author: Option<&str>) -> Result<PathBuf, AudioError> {
     let new_path = path.with_file_name(chapter_filename(order_index, chapter_title));
     std::fs::rename(path, &new_path)?;
-    let tags = Tags { title: Some(chapter_title), track: Some((order_index + 1) as u32), ..Default::default() };
-    write_tags(&new_path, &tags)?;
+    retag_chapter_mp3(&new_path, order_index, chapter_title, book_title, author)?;
     Ok(new_path)
 }

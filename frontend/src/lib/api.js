@@ -27,6 +27,7 @@ export const api = {
   generateChapter: (bookId, chapterId, engine) => call("generate_chapter", { bookId, chapterId, engine }),
   cancelChapter: (bookId, chapterId) => call("cancel_chapter", { bookId, chapterId }),
   cancelBook: (bookId) => call("cancel_book", { bookId }),
+  retagBook: (bookId) => call("retag_book", { bookId }),
   assignVoice: (bookId, voiceProfileId) => call("assign_voice", { bookId, voiceProfileId }),
   chapterAudioSrc: (bookId, chapterId) => audioSrc("chapter_audio_path", { bookId, chapterId }),
 

@@ -263,7 +263,7 @@ fn chapter_breaks_renumber_kept_audio() {
     let id = three(&db, dir.path());
     let out = dir.path().join("out");
     for ch in db.list_chapters(id).unwrap().into_iter().skip(1) {
-        let (mp3, _) = export_chapter_mp3(&vec![0.0; 2205], 22050, &out, ch.order_index, &ch.title, "B", "N", None).unwrap();
+        let (mp3, _) = export_chapter_mp3(&vec![0.0; 2205], 22050, &out, ch.order_index, &ch.title, "B", Some("N"), None).unwrap();
         db.update_chapter_status(ch.id, ChapterStatus::Done,
             ChapterOutcome { output_mp3_path: Some(&mp3.to_string_lossy()), ..Default::default() }).unwrap();
     }
@@ -352,4 +352,24 @@ fn engines_lists_both_with_labels() {
 fn api_errors_serialize_as_their_message() {
     let e = audiobookify_core::app::ApiError("book not found".into());
     assert_eq!(serde_json::to_string(&e).unwrap(), "\"book not found\"");
+}
+
+#[test]
+fn retag_book_rewrites_tags_of_rendered_chapters_in_place() {
+    use id3::TagLike;
+    let dir = TempDir::new().unwrap();
+    let (_paths, db) = app(dir.path());
+    let id = three(&db, dir.path());
+    let book = db.get_book(id).unwrap();
+    let one = db.list_chapters(id).unwrap().remove(0);
+    let (mp3, _) = export_chapter_mp3(&vec![0.0; 2205], 22050, &dir.path().join("out"), 0, "One", "Old Album",
+                                       Some("Old Narrator"), None).unwrap();
+    db.update_chapter_status(one.id, ChapterStatus::Done,
+        ChapterOutcome { output_mp3_path: Some(&mp3.to_string_lossy()), ..Default::default() }).unwrap();
+
+    books::retag_book(&db, id).unwrap();
+
+    let tag = id3::Tag::read_from_path(&mp3).unwrap();
+    assert_eq!((tag.title(), tag.album(), tag.artist(), tag.track()),
+               (Some("01 - One"), Some(book.title.as_str()), None, Some(1)));
 }

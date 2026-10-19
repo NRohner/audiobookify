@@ -280,7 +280,6 @@ impl Runner {
         let book = self.db.get_book(chapter.book_id)?;
         let (info, profile) = self.engine_and_voice(&book.engine, book.voice_profile_id)?;
         let voice = voice_for(profile.as_ref(), None);
-        let narrator = profile.as_ref().map_or("default", |p| p.name.as_str()).to_string();
         let entries = self.db.list_lexicon_entries(Some(book.id))?;
         self.db.update_chapter_status(chapter.id, ChapterStatus::Generating, ChapterOutcome::default())?;
 
@@ -314,7 +313,7 @@ impl Runner {
         let fallback = self.paths.backup_dir.join(book.id.to_string());
         let (mp3, used_fallback) = export_chapter_mp3(
             &combined, info.sample_rate, Path::new(&book.output_dir), chapter.order_index, &chapter.title,
-            &book.title, &narrator, Some(&fallback))?;
+            &book.title, book.author.as_deref(), Some(&fallback))?;
         let mp3 = mp3.to_string_lossy();
         self.db.update_chapter_status(chapter.id, ChapterStatus::Done, ChapterOutcome {
             output_mp3_path: Some(&mp3),

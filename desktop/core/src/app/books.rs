@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::{err, found, ApiResult, AppPaths};
-use crate::audio::{chapter_filename, relabel_chapter_mp3};
+use crate::audio::{chapter_filename, relabel_chapter_mp3, retag_chapter_mp3};
 use crate::db::{book_paragraphs, Database};
 use crate::ingest::ingest_by_path;
 use crate::jobs::ChunkCache;
@@ -238,13 +238,24 @@ pub fn save_chapter_breaks(db: &mut Database, paths: &AppPaths, book_id: i64, br
         parked.push((chapter, tmp));
     }
     for (chapter, tmp) in parked {
-        let path = relabel_chapter_mp3(&tmp, chapter.order_index, &chapter.title).unwrap_or_else(|_| {
+        let path = relabel_chapter_mp3(&tmp, chapter.order_index, &chapter.title, &book.title, book.author.as_deref()).unwrap_or_else(|_| {
             // Keep the audio playable wherever it ended up rather than lose track of it.
             if tmp.is_file() { tmp.clone() } else { tmp.with_file_name(chapter_filename(chapter.order_index, &chapter.title)) }
         });
         db.set_chapter_audio_path(chapter.id, &path.to_string_lossy())?;
     }
     book_dto(db, &book)
+}
+
+/// Rewrites the tags of every rendered chapter to the current book title, author and chapter
+/// numbering, so books rendered under an older tag pattern catch up. Unreadable files are skipped.
+pub fn retag_book(db: &Database, book_id: i64) -> ApiResult<()> {
+    let book = found(db.get_book(book_id), "book")?;
+    for c in db.list_chapters(book_id)? {
+        let Some(mp3) = c.output_mp3_path.as_deref().map(Path::new).filter(|p| p.is_file()) else { continue };
+        let _ = retag_chapter_mp3(mp3, c.order_index, &c.title, &book.title, book.author.as_deref());
+    }
+    Ok(())
 }
 
 pub fn assign_voice(db: &Database, book_id: i64, voice_profile_id: Option<i64>) -> ApiResult<()> {

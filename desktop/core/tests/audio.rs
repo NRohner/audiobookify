@@ -191,13 +191,13 @@ fn chapter_filename_zero_pads_and_strips_illegal_characters() {
 fn export_chapter_mp3_writes_a_tagged_file() {
     let dir = TempDir::new().unwrap();
     let (path, used_fallback) = export_chapter_mp3(&tone(22050), 22050, dir.path(), 0, "Chapter One", "My Book",
-                                                    "Chatterbox Default", None).unwrap();
+                                                    Some("Jane Author"), None).unwrap();
     assert!(!used_fallback);
     assert_eq!(path, dir.path().join("01 - Chapter One.mp3"));
     let tag = id3::Tag::read_from_path(&path).unwrap();
     use id3::TagLike;
     assert_eq!((tag.title(), tag.album(), tag.track(), tag.artist()),
-               (Some("Chapter One"), Some("My Book"), Some(1), Some("Chatterbox Default")));
+               (Some("01 - Chapter One"), Some("My Book"), Some(1), Some("Jane Author")));
     assert!(!dir.path().join("01 - Chapter One.tmp.wav").exists(), "temp WAV left behind");
 }
 
@@ -219,7 +219,7 @@ fn export_chapter_mp3_falls_back_when_the_output_dir_is_unwritable() {
     let locked = Locked::new(dir.path());
     let fallback = dir.path().join("fallback");
     let (path, used_fallback) = export_chapter_mp3(&tone(22050), 22050, &locked.0, 0, "Chapter One", "My Book",
-                                                    "Narrator", Some(&fallback)).unwrap();
+                                                    None, Some(&fallback)).unwrap();
     assert!(used_fallback);
     assert_eq!(path, fallback.join("01 - Chapter One.mp3"));
     assert!(path.is_file());
@@ -229,7 +229,7 @@ fn export_chapter_mp3_falls_back_when_the_output_dir_is_unwritable() {
 fn export_chapter_mp3_errors_when_unwritable_and_no_fallback_given() {
     let dir = TempDir::new().unwrap();
     let locked = Locked::new(dir.path());
-    let err = export_chapter_mp3(&tone(22050), 22050, &locked.0, 0, "Chapter One", "My Book", "N", None).unwrap_err();
+    let err = export_chapter_mp3(&tone(22050), 22050, &locked.0, 0, "Chapter One", "My Book", None, None).unwrap_err();
     assert!(matches!(err, AudioError::Io(_)), "{err:?}");
 }
 
@@ -243,4 +243,12 @@ fn export_mp3_falls_back_to_the_same_file_name() {
     assert!(used_fallback);
     assert_eq!(path, fallback.join("clip.mp3"));
     assert!(path.is_file());
+}
+
+#[test]
+fn export_chapter_mp3_leaves_artist_empty_without_an_author() {
+    let dir = TempDir::new().unwrap();
+    let (path, _) = export_chapter_mp3(&tone(22050), 22050, dir.path(), 0, "Chapter One", "My Book", None, None).unwrap();
+    use id3::TagLike;
+    assert_eq!(id3::Tag::read_from_path(&path).unwrap().artist(), None);
 }
